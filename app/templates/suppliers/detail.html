@@ -29,14 +29,14 @@
     <div class="card-body">
       <form method="post" action="{{ url_for('suppliers.add_product', supplier_id=supplier.id) }}">
         <div class="form-group" style="margin-bottom:10px">
-          <label style="font-size:12px">Product / Sub-product</label>
-          <select name="product_id" id="productSel" onchange="updateSubId(this)" style="width:100%">
+          <label style="font-size:12px">Product</label>
+          <select name="product_id" style="width:100%">
             <option value="">— select —</option>
             {% for c in choices %}
-            <option value="{{ c.id }}" data-sub="{{ c.sub_id or '' }}">{{ c.label }}</option>
+            <option value="{{ c.id }}">{{ c.label }}</option>
             {% endfor %}
           </select>
-          <input type="hidden" name="sub_product_id" id="subIdHidden" value="">
+          <small class="muted">If the product has sub-products, all will be added automatically.</small>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
           <div class="form-group" style="margin:0">
@@ -82,12 +82,4 @@
   <div class="empty-state" style="padding:30px"><p>No products linked yet.</p></div>
   {% endif %}
 </div>
-{% endblock %}
-{% block scripts %}
-<script>
-function updateSubId(sel) {
-  const opt = sel.options[sel.selectedIndex];
-  document.getElementById('subIdHidden').value = opt ? (opt.dataset.sub || '') : '';
-}
-</script>
 {% endblock %}

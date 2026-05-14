@@ -5,6 +5,30 @@ from ..services import invoice_service, client_service, product_service
 bp = Blueprint("invoices", __name__, url_prefix="/invoices")
 
 
+def _build_product_choices():
+    choices = []
+    for p in product_service.get_all_products(active_only=True):
+        subs = product_service.get_sub_products(p["id"])
+        if subs:
+            for s in subs:
+                if not s["is_active"]:
+                    continue
+                choices.append({
+                    "id":         f"sub_{s['id']}",
+                    "name":       f"{p['name']} — {s['name']}",
+                    "unit_price": p["unit_price"] if s["use_parent_price"] else s["unit_price"],
+                    "tax_rate":   p["tax_rate"],
+                })
+        else:
+            choices.append({
+                "id":         str(p["id"]),
+                "name":       p["name"],
+                "unit_price": p["unit_price"],
+                "tax_rate":   p["tax_rate"],
+            })
+    return choices
+
+
 def _parse_items(form):
     # Collect all indices present in the form — handles non-sequential indices
     # caused by the user deleting rows before adding new ones.
@@ -36,8 +60,8 @@ def list_invoices():
 
 @bp.route("/new", methods=["GET", "POST"])
 def new_invoice():
-    clients = client_service.get_all_clients()
-    products = product_service.get_all_products(active_only=True)
+    clients  = client_service.get_all_clients()
+    products = _build_product_choices()
     if request.method == "POST":
         data = request.form.to_dict()
         items = _parse_items(request.form)
@@ -70,15 +94,19 @@ def edit_invoice(invoice_id):
     if not invoice:
         flash("Invoice not found.", "error")
         return redirect(url_for("invoices.list_invoices"))
-    clients = client_service.get_all_clients()
-    products = product_service.get_all_products(active_only=True)
+    clients  = client_service.get_all_clients()
+    products = _build_product_choices()
     if request.method == "POST":
         data = request.form.to_dict()
         items = _parse_items(request.form)
+        if not data.get("client_id"):
+            flash("Please select a client.", "error")
+            existing_items = invoice_service.get_invoice_items(invoice_id)
+            return render_template("invoices/form.html", invoice=data, items=existing_items, clients=clients, products=products, action="edit", invoice_id=invoice_id)
         if not items:
             flash("Add at least one line item.", "error")
             existing_items = invoice_service.get_invoice_items(invoice_id)
-            return render_template("invoices/form.html", invoice=dict(invoice), items=existing_items, clients=clients, products=products, action="edit", invoice_id=invoice_id)
+            return render_template("invoices/form.html", invoice=data, items=existing_items, clients=clients, products=products, action="edit", invoice_id=invoice_id)
         invoice_service.update_invoice(invoice_id, data, items)
         flash("Invoice updated.", "success")
         return redirect(url_for("invoices.detail", invoice_id=invoice_id))

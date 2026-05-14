@@ -66,7 +66,7 @@
         <select id="productPicker" style="width:220px" onchange="addFromProduct(this)">
           <option value="">+ Add from catalog…</option>
           {% for p in products %}
-          <option value="{{ p.id }}" data-name="{{ p.name }}" data-price="{{ p.unit_price }}" data-tax="{{ p.tax_rate }}">{{ p.name }} — {{ p.unit_price|inr }}</option>
+          <option value="{{ p.id }}" data-name="{{ p.name }}" data-price="{{ p.unit_price or 0 }}" data-tax="{{ p.tax_rate or 0 }}">{{ p.name }} — {{ p.unit_price|inr }}</option>
           {% endfor %}
         </select>
         <button type="button" class="btn btn-secondary" onclick="addRow()">+ Add row</button>

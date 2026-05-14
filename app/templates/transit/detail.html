@@ -3,9 +3,7 @@
 {% block page_title %}{{ dispatch.name }}{% endblock %}
 {% block topbar_actions %}
   {% if dispatch.status != 'received' %}
-  <form method="post" action="{{ url_for('transit.receive', dispatch_id=dispatch.id) }}" id="receiveForm">
-    <button class="btn btn-primary" onclick="fillAll()">Receive All</button>
-  </form>
+  <button class="btn btn-primary" onclick="fillAll(); document.getElementById('receiveForm').submit()">Receive All</button>
   {% endif %}
   <form method="post" action="{{ url_for('transit.delete_dispatch', dispatch_id=dispatch.id) }}" style="display:inline"
         onsubmit="return confirm('Delete {{ dispatch.name }}? Unreceived quantities will be reversed.')">

@@ -161,6 +161,10 @@ def new_sub_product(product_id):
         if not data.get("name"):
             flash("Sub-product name is required.", "error")
             return render_template("products/sub_form.html", sub=data, action="new", product=product)
+        if data.get("sku_has_prefix") and product.get("sku") and data.get("sku_suffix"):
+            data["sku"] = f"{product['sku']}-{data['sku_suffix'].strip()}"
+        elif data.get("sku_has_prefix") and product.get("sku"):
+            data["sku"] = None
         product_service.create_sub_product(data)
         flash("Sub-product created.", "success")
         return redirect(url_for("products.product_detail", product_id=product_id))
@@ -251,24 +255,26 @@ def api_list():
     products = product_service.get_all_products(active_only=True)
     result = []
     for p in products:
-        result.append({
-            "id":         p["id"],
-            "name":       p["name"],
-            "sku":        p["sku"],
-            "unit_price": p["unit_price"],
-            "tax_rate":   p["tax_rate"],
-            "type":       "product",
-        })
         subs = product_service.get_sub_products(p["id"])
-        for s in subs:
-            if not s["is_active"]:
-                continue
+        if subs:
+            for s in subs:
+                if not s["is_active"]:
+                    continue
+                result.append({
+                    "id":         f"sub_{s['id']}",
+                    "name":       f"{p['name']} — {s['name']}",
+                    "sku":        s["sku"],
+                    "unit_price": p["unit_price"] if s["use_parent_price"] else s["unit_price"],
+                    "tax_rate":   p["tax_rate"],
+                    "type":       "sub_product",
+                })
+        else:
             result.append({
-                "id":         f"sub_{s['id']}",
-                "name":       f"{p['name']} — {s['name']}",
-                "sku":        s["sku"],
-                "unit_price": p["unit_price"] if s["use_parent_price"] else s["unit_price"],
-                "tax_rate":   s["tax_rate"] if s["tax_rate"] else p["tax_rate"],
-                "type":       "sub_product",
+                "id":         p["id"],
+                "name":       p["name"],
+                "sku":        p["sku"],
+                "unit_price": p["unit_price"],
+                "tax_rate":   p["tax_rate"],
+                "type":       "product",
             })
     return jsonify(result)

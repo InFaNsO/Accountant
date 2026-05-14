@@ -85,7 +85,7 @@ def create_product(data):
             data.get("category_id") or None,
             data["name"], data.get("sku"), data.get("description"),
             _to_float(data.get("unit_price")),
-            _to_float(data.get("tax_rate")),
+            _to_float(data.get("tax_rate"), 18.0),
             1,  # always track inventory
             _to_float(data.get("stock_qty")),
             _to_float(data.get("min_quantity")),
@@ -97,6 +97,7 @@ def create_product(data):
 
 def update_product(product_id, data):
     db = get_db()
+    new_tax = _to_float(data.get("tax_rate"), 18.0)
     db.execute(
         """UPDATE products SET category_id=?, name=?, sku=?, description=?,
                unit_price=?, tax_rate=?, track_inventory=1,
@@ -105,12 +106,14 @@ def update_product(product_id, data):
             data.get("category_id") or None,
             data["name"], data.get("sku"), data.get("description"),
             _to_float(data.get("unit_price")),
-            _to_float(data.get("tax_rate")),
+            new_tax,
             _to_float(data.get("min_quantity")),
             1 if data.get("is_active", True) else 0,
             product_id,
         ),
     )
+    # Keep sub-product tax rates in sync with parent
+    db.execute("UPDATE sub_products SET tax_rate=? WHERE product_id=?", (new_tax, product_id))
     db.commit()
 
 
@@ -147,6 +150,8 @@ def get_sub_product(sub_id):
 def create_sub_product(data):
     db = get_db()
     use_parent = 1 if data.get("use_parent_price") else 0
+    parent = get_product(data["product_id"])
+    parent_tax = _to_float(parent["tax_rate"], 18.0) if parent else 18.0
     cur = db.execute(
         """INSERT INTO sub_products
                (product_id, name, sku, description, use_parent_price, unit_price,
@@ -156,7 +161,7 @@ def create_sub_product(data):
             data["product_id"], data["name"], data.get("sku"), data.get("description"),
             use_parent,
             _to_float(data.get("unit_price")),
-            _to_float(data.get("tax_rate")),
+            parent_tax,
             _to_float(data.get("stock_qty")),
             _to_float(data.get("min_quantity")),
         ),
@@ -168,13 +173,16 @@ def create_sub_product(data):
 def update_sub_product(sub_id, data):
     db = get_db()
     use_parent = 1 if data.get("use_parent_price") else 0
+    sub_row = get_db().execute("SELECT product_id FROM sub_products WHERE id=?", (sub_id,)).fetchone()
+    parent = get_product(sub_row["product_id"]) if sub_row else None
+    parent_tax = _to_float(parent["tax_rate"], 18.0) if parent else 18.0
     db.execute(
         """UPDATE sub_products SET name=?, sku=?, description=?, use_parent_price=?,
                unit_price=?, tax_rate=?, min_quantity=?, is_active=? WHERE id=?""",
         (
             data["name"], data.get("sku"), data.get("description"),
             use_parent, _to_float(data.get("unit_price")),
-            _to_float(data.get("tax_rate")),
+            parent_tax,
             _to_float(data.get("min_quantity")),
             1 if data.get("is_active", True) else 0,
             sub_id,

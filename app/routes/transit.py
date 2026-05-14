@@ -106,16 +106,19 @@ def delete_dispatch(dispatch_id):
 def _build_product_choices():
     choices = []
     for p in product_service.get_all_products(active_only=False):
-        choices.append({
-            "product_id": p["id"], "sub_product_id": None,
-            "label": p["name"] + (f" [{p['sku']}]" if p["sku"] else ""),
-            "production_qty": p["production_qty"],
-        })
-        for s in product_service.get_sub_products(p["id"]):
+        subs = product_service.get_sub_products(p["id"])
+        if subs:
+            for s in subs:
+                choices.append({
+                    "product_id":     p["id"],
+                    "sub_product_id": s["id"],
+                    "label": f"{p['name']} — {s['name']}" + (f" [{s['sku']}]" if s["sku"] else ""),
+                    "production_qty": s["production_qty"] or 0,
+                })
+        else:
             choices.append({
-                "product_id":     p["id"],
-                "sub_product_id": s["id"],
-                "label": f"{p['name']} — {s['name']}" + (f" [{s['sku']}]" if s["sku"] else ""),
-                "production_qty": s["production_qty"],
+                "product_id": p["id"], "sub_product_id": None,
+                "label": p["name"] + (f" [{p['sku']}]" if p["sku"] else ""),
+                "production_qty": p["production_qty"] or 0,
             })
     return choices

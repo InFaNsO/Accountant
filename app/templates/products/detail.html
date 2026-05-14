@@ -199,6 +199,22 @@ function discardEdit(subId) {
   row.querySelector('.edit-actions').style.display = 'none';
 }
 
+function showRowError(row, msg) {
+  let err = row.querySelector('.inline-error');
+  if (!err) {
+    err = document.createElement('td');
+    err.className = 'inline-error';
+    err.colSpan = 7;
+    err.style.cssText = 'color:var(--danger);font-size:12px;padding:4px 12px';
+    const errRow = document.createElement('tr');
+    errRow.appendChild(err);
+    row.after(errRow);
+  }
+  err.textContent = msg;
+  // auto-clear after 4s
+  setTimeout(() => err.closest('tr').remove(), 4000);
+}
+
 async function saveEdit(subId) {
   const row = document.getElementById('sub-row-' + subId);
   const productId = row.dataset.productId;
@@ -206,7 +222,7 @@ async function saveEdit(subId) {
   const priceVal = row.querySelector('.ef-price').value;
   const taxVal = row.querySelector('.ef-tax').value;
 
-  if (!name) { alert('Name is required'); return; }
+  if (!name) { showRowError(row, 'Name is required.'); return; }
 
   const payload = {
     name,
@@ -221,9 +237,8 @@ async function saveEdit(subId) {
     body: JSON.stringify(payload),
   });
   const json = await res.json();
-  if (!json.ok) { alert(json.error || 'Save failed'); return; }
+  if (!json.ok) { showRowError(row, json.error || 'Save failed.'); return; }
 
-  // Reload the page to reflect updated values
   location.reload();
 }
 </script>

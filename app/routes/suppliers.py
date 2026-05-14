@@ -31,15 +31,9 @@ def detail(supplier_id):
         return redirect(url_for("suppliers.list_suppliers"))
     sp_list  = supplier_service.get_supplier_products(supplier_id)
     products = product_service.get_all_products(active_only=False)
-    # Build flat list: products + sub-products for the add-product dropdown
-    choices = []
-    for p in products:
-        choices.append({"id": p["id"], "sub_id": None,
-                        "label": p["name"] + (f" [{p['sku']}]" if p["sku"] else "")})
-        for s in product_service.get_sub_products(p["id"]):
-            choices.append({"id": p["id"], "sub_id": s["id"],
-                            "label": f"{p['name']} — {s['name']}" +
-                                     (f" [{s['sku']}]" if s["sku"] else "")})
+    # Only show parent products — selecting one auto-expands to its sub-products on submit
+    choices = [{"id": p["id"], "label": p["name"] + (f" [{p['sku']}]" if p["sku"] else "")}
+               for p in products]
     return render_template("suppliers/detail.html",
                            supplier=supplier, sp_list=sp_list, choices=choices)
 
@@ -73,8 +67,23 @@ def delete_supplier(supplier_id):
 @bp.route("/<int:supplier_id>/products/add", methods=["POST"])
 def add_product(supplier_id):
     data = request.form.to_dict()
-    supplier_service.add_supplier_product(supplier_id, data)
-    flash("Product added to supplier.", "success")
+    pid  = data.get("product_id")
+    if not pid:
+        flash("Select a product.", "error")
+        return redirect(url_for("suppliers.detail", supplier_id=supplier_id))
+    subs = product_service.get_sub_products(int(pid))
+    if subs:
+        for s in subs:
+            supplier_service.add_supplier_product(supplier_id, {
+                "product_id":     pid,
+                "sub_product_id": str(s["id"]),
+                "price":          data.get("price") or None,
+                "notes":          data.get("notes"),
+            })
+        flash(f"Added {len(subs)} sub-products to supplier.", "success")
+    else:
+        supplier_service.add_supplier_product(supplier_id, data)
+        flash("Product added to supplier.", "success")
     return redirect(url_for("suppliers.detail", supplier_id=supplier_id))
 
 

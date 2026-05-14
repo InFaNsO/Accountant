@@ -109,14 +109,17 @@ def delete_purchase(po_id):
 def _build_product_choices():
     choices = []
     for p in product_service.get_all_products(active_only=False):
-        choices.append({"product_id": p["id"], "sub_product_id": None,
-                        "label": p["name"] + (f" [{p['sku']}]" if p["sku"] else ""),
-                        "price": p["unit_price"]})
-        for s in product_service.get_sub_products(p["id"]):
-            choices.append({
-                "product_id":     p["id"],
-                "sub_product_id": s["id"],
-                "label": f"{p['name']} — {s['name']}" + (f" [{s['sku']}]" if s["sku"] else ""),
-                "price": p["unit_price"] if s["use_parent_price"] else s["unit_price"],
-            })
+        subs = product_service.get_sub_products(p["id"])
+        if subs:
+            for s in subs:
+                choices.append({
+                    "product_id":     p["id"],
+                    "sub_product_id": s["id"],
+                    "label": f"{p['name']} — {s['name']}" + (f" [{s['sku']}]" if s["sku"] else ""),
+                    "price": p["unit_price"] if s["use_parent_price"] else s["unit_price"],
+                })
+        else:
+            choices.append({"product_id": p["id"], "sub_product_id": None,
+                            "label": p["name"] + (f" [{p['sku']}]" if p["sku"] else ""),
+                            "price": p["unit_price"]})
     return choices
