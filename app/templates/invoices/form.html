@@ -1,0 +1,201 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit Invoice' if action == 'edit' else 'New Invoice' }}{% endblock %}
+{% block page_title %}{{ 'Edit Invoice' if action == 'edit' else 'New Invoice' }}{% endblock %}
+{% block topbar_actions %}
+  <a href="{{ url_for('invoices.list_invoices') }}" class="btn btn-secondary">Cancel</a>
+{% endblock %}
+
+{% block content %}
+<form method="post" action="{{ url_for('invoices.edit_invoice', invoice_id=invoice_id) if action == 'edit' else url_for('invoices.new_invoice') }}" id="invoiceForm">
+
+  <!-- Header info -->
+  <div class="card" style="margin-bottom:18px">
+    <div class="card-header"><span class="card-title">Invoice Details</span></div>
+    <div class="card-body">
+      <div class="form-grid form-grid-3">
+
+        <div class="form-group">
+          <label for="client_id">Client *</label>
+          <select id="client_id" name="client_id" required>
+            <option value="">— Select client —</option>
+            {% for c in clients %}
+            <option value="{{ c.id }}" {{ 'selected' if invoice.get('client_id')|string == c.id|string }}>{{ c.name }}{% if c.company %} — {{ c.company }}{% endif %}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="issue_date">Issue Date *</label>
+          <input type="date" id="issue_date" name="issue_date" value="{{ invoice.get('issue_date', '') or today }}" required>
+        </div>
+
+        <div class="form-group">
+          <label for="due_date">Due Date</label>
+          <input type="date" id="due_date" name="due_date" value="{{ invoice.get('due_date', '') }}">
+        </div>
+
+        <div class="form-group">
+          <label for="status">Status</label>
+          <select id="status" name="status">
+            <option value="draft"   {{ 'selected' if invoice.get('status','draft') == 'draft' }}>Draft</option>
+            <option value="sent"    {{ 'selected' if invoice.get('status') == 'sent' }}>Sent</option>
+            <option value="paid"    {{ 'selected' if invoice.get('status') == 'paid' }}>Paid</option>
+            <option value="cancelled" {{ 'selected' if invoice.get('status') == 'cancelled' }}>Cancelled</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="discount_amount">Discount (₹)</label>
+          <input type="number" id="discount_amount" name="discount_amount" value="{{ invoice.get('discount_amount', 0) }}" step="0.01" min="0" oninput="recalcTotals()">
+        </div>
+
+        <div class="form-group span-3">
+          <label for="notes">Notes / Terms</label>
+          <textarea id="notes" name="notes" placeholder="Payment terms, bank details, thank-you message…">{{ invoice.get('notes','') }}</textarea>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- Line items -->
+  <div class="card" style="margin-bottom:18px">
+    <div class="card-header">
+      <span class="card-title">Line Items</span>
+      <div style="display:flex;gap:8px">
+        <select id="productPicker" style="width:220px" onchange="addFromProduct(this)">
+          <option value="">+ Add from catalog…</option>
+          {% for p in products %}
+          <option value="{{ p.id }}" data-name="{{ p.name }}" data-price="{{ p.unit_price }}" data-tax="{{ p.tax_rate }}">{{ p.name }} — {{ p.unit_price|inr }}</option>
+          {% endfor %}
+        </select>
+        <button type="button" class="btn btn-secondary" onclick="addRow()">+ Add row</button>
+      </div>
+    </div>
+    <div class="card-body" style="padding:16px">
+      <div class="table-wrap">
+        <table class="line-items">
+          <thead>
+            <tr>
+              <th class="col-desc">Description</th>
+              <th class="col-qty">Qty</th>
+              <th class="col-price">Unit Price</th>
+              <th class="col-tax">Tax %</th>
+              <th class="col-total">Line Total</th>
+              <th class="col-del"></th>
+            </tr>
+          </thead>
+          <tbody id="lineItems">
+            {% for item in items %}
+            <tr>
+              <td class="col-desc">
+                <input type="hidden" name="items[{{ loop.index0 }}][product_id]" value="{{ item.get('product_id','') }}">
+                <input type="text" name="items[{{ loop.index0 }}][description]" value="{{ item.get('description','') }}" placeholder="Description" oninput="recalcRow(this)" required>
+              </td>
+              <td class="col-qty"><input type="number" name="items[{{ loop.index0 }}][quantity]" value="{{ item.get('quantity',1) }}" min="0.01" step="any" oninput="recalcRow(this)"></td>
+              <td class="col-price"><input type="number" name="items[{{ loop.index0 }}][unit_price]" value="{{ item.get('unit_price',0) }}" min="0" step="0.01" oninput="recalcRow(this)"></td>
+              <td class="col-tax"><input type="number" name="items[{{ loop.index0 }}][tax_rate]" value="{{ item.get('tax_rate',0) }}" min="0" max="100" step="0.01" oninput="recalcRow(this)"></td>
+              <td class="col-total"><div class="line-total-readonly" id="lt-{{ loop.index0 }}">₹0.00</div></td>
+              <td class="col-del"><button type="button" class="btn btn-danger btn-sm" onclick="removeRow(this)">✕</button></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Totals -->
+      <div class="invoice-totals">
+        <div class="total-row"><span>Subtotal</span><span id="subtotal">₹0.00</span></div>
+        <div class="total-row"><span>Tax</span><span id="taxTotal">₹0.00</span></div>
+        <div class="total-row"><span>Discount</span><span id="discountDisplay">₹0.00</span></div>
+        <div class="total-grand"><span>Total</span><span id="grandTotal">₹0.00</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">{{ 'Save Invoice' if action == 'edit' else 'Create Invoice' }}</button>
+    <a href="{{ url_for('invoices.list_invoices') }}" class="btn btn-secondary">Cancel</a>
+  </div>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let rowCount = {{ items|length }};
+
+function addRow(desc='', qty=1, price=0, tax=0, productId='') {
+  const idx = rowCount++;
+  const tbody = document.getElementById('lineItems');
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td class="col-desc">
+      <input type="hidden" name="items[${idx}][product_id]" value="${productId}">
+      <input type="text" name="items[${idx}][description]" value="${desc}" placeholder="Description" oninput="recalcRow(this)" required>
+    </td>
+    <td class="col-qty"><input type="number" name="items[${idx}][quantity]" value="${qty}" min="0.01" step="any" oninput="recalcRow(this)"></td>
+    <td class="col-price"><input type="number" name="items[${idx}][unit_price]" value="${price}" min="0" step="0.01" oninput="recalcRow(this)"></td>
+    <td class="col-tax"><input type="number" name="items[${idx}][tax_rate]" value="${tax}" min="0" max="100" step="0.01" oninput="recalcRow(this)"></td>
+    <td class="col-total"><div class="line-total-readonly" id="lt-${idx}">₹0.00</div></td>
+    <td class="col-del"><button type="button" class="btn btn-danger btn-sm" onclick="removeRow(this)">✕</button></td>
+  `;
+  tbody.appendChild(tr);
+  recalcTotals();
+}
+
+function addFromProduct(sel) {
+  const opt = sel.options[sel.selectedIndex];
+  if (!opt.value) return;
+  addRow(opt.dataset.name, 1, parseFloat(opt.dataset.price), parseFloat(opt.dataset.tax), opt.value);
+  sel.selectedIndex = 0;
+}
+
+function removeRow(btn) {
+  btn.closest('tr').remove();
+  renumberRows();
+  recalcTotals();
+}
+
+function renumberRows() {
+  document.querySelectorAll('#lineItems tr').forEach((tr, i) => {
+    tr.querySelectorAll('input[name]').forEach(input => {
+      input.name = input.name.replace(/items\[\d+\]/, `items[${i}]`);
+    });
+    const lt = tr.querySelector('[id^="lt-"]');
+    if (lt) lt.id = `lt-${i}`;
+  });
+  rowCount = document.querySelectorAll('#lineItems tr').length;
+}
+
+function recalcRow(input) { recalcTotals(); }
+
+function recalcTotals() {
+  let subtotal = 0, taxTotal = 0;
+  document.querySelectorAll('#lineItems tr').forEach((tr, i) => {
+    const qty   = parseFloat(tr.querySelector('[name$="[quantity]"]')?.value) || 0;
+    const price = parseFloat(tr.querySelector('[name$="[unit_price]"]')?.value) || 0;
+    const tax   = parseFloat(tr.querySelector('[name$="[tax_rate]"]')?.value) || 0;
+    const lineTotal = qty * price;
+    const lineTax   = lineTotal * tax / 100;
+    subtotal += lineTotal;
+    taxTotal += lineTax;
+    const ltEl = tr.querySelector('[id^="lt-"]');
+    if (ltEl) ltEl.textContent = formatINR(lineTotal);
+  });
+  const discount = parseFloat(document.getElementById('discount_amount')?.value) || 0;
+  const grand = subtotal + taxTotal - discount;
+  document.getElementById('subtotal').textContent       = formatINR(subtotal);
+  document.getElementById('taxTotal').textContent       = formatINR(taxTotal);
+  document.getElementById('discountDisplay').textContent= formatINR(discount);
+  document.getElementById('grandTotal').textContent     = formatINR(grand);
+}
+
+// Set today's date default and recalc on load
+document.addEventListener('DOMContentLoaded', () => {
+  const issueDate = document.getElementById('issue_date');
+  if (!issueDate.value) issueDate.value = new Date().toISOString().slice(0,10);
+  if ({{ items|length }} === 0) addRow();
+  recalcTotals();
+});
+</script>
+{% endblock %}

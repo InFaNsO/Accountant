@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}{{ supplier.name }}{% endblock %}
+{% block page_title %}{{ supplier.name }}{% endblock %}
+{% block topbar_actions %}
+  <a href="{{ url_for('suppliers.edit_supplier', supplier_id=supplier.id) }}" class="btn btn-secondary">Edit</a>
+  <a href="{{ url_for('suppliers.list_suppliers') }}" class="btn btn-secondary">Back</a>
+{% endblock %}
+{% block content %}
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px">
+  <div class="card">
+    <div class="card-header"><span class="card-title">Details</span></div>
+    <div class="card-body" style="padding:0">
+      <table style="width:100%;border-collapse:collapse">
+        {% macro row(l,v) %}<tr><td style="padding:10px 20px;color:var(--text-muted);font-size:13px;width:38%;border-bottom:1px solid var(--border)">{{ l }}</td><td style="padding:10px 20px;font-weight:600;border-bottom:1px solid var(--border)">{{ v or '—' }}</td></tr>{% endmacro %}
+        {{ row('Company', supplier.company) }}
+        {{ row('Email',   supplier.email) }}
+        {{ row('Phone',   supplier.phone) }}
+        {{ row('Address', supplier.address) }}
+        {% if supplier.notes %}
+        <tr><td style="padding:10px 20px;color:var(--text-muted);font-size:13px">Notes</td><td style="padding:10px 20px">{{ supplier.notes }}</td></tr>
+        {% endif %}
+      </table>
+    </div>
+  </div>
+
+  <!-- Add product to supplier -->
+  <div class="card">
+    <div class="card-header"><span class="card-title">Add Product to Price List</span></div>
+    <div class="card-body">
+      <form method="post" action="{{ url_for('suppliers.add_product', supplier_id=supplier.id) }}">
+        <div class="form-group" style="margin-bottom:10px">
+          <label style="font-size:12px">Product / Sub-product</label>
+          <select name="product_id" id="productSel" onchange="updateSubId(this)" style="width:100%">
+            <option value="">— select —</option>
+            {% for c in choices %}
+            <option value="{{ c.id }}" data-sub="{{ c.sub_id or '' }}">{{ c.label }}</option>
+            {% endfor %}
+          </select>
+          <input type="hidden" name="sub_product_id" id="subIdHidden" value="">
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+          <div class="form-group" style="margin:0">
+            <label style="font-size:12px">Price (₹, optional)</label>
+            <input type="number" name="price" step="0.01" min="0" placeholder="0.00">
+          </div>
+          <div class="form-group" style="margin:0">
+            <label style="font-size:12px">Notes</label>
+            <input type="text" name="notes" placeholder="e.g. MOQ 100">
+          </div>
+        </div>
+        <button class="btn btn-primary btn-sm" style="width:100%">Add to Price List</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Price list -->
+<div class="card">
+  <div class="card-header"><span class="card-title">Price List ({{ sp_list|length }})</span></div>
+  {% if sp_list %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Product</th><th style="text-align:right">Price</th><th>Notes</th><th></th></tr></thead>
+      <tbody>
+        {% for sp in sp_list %}
+        <tr>
+          <td class="fw-700">{{ sp.display_name }}</td>
+          <td style="text-align:right">{% if sp.price %}{{ sp.price|inr }}{% else %}<span class="muted">—</span>{% endif %}</td>
+          <td class="muted">{{ sp.notes or '—' }}</td>
+          <td style="text-align:right">
+            <form method="post" action="{{ url_for('suppliers.remove_product', supplier_id=supplier.id, sp_id=sp.id) }}"
+                  style="display:inline" onsubmit="return confirm('Remove from price list?')">
+              <button class="btn btn-danger btn-sm">Remove</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state" style="padding:30px"><p>No products linked yet.</p></div>
+  {% endif %}
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+function updateSubId(sel) {
+  const opt = sel.options[sel.selectedIndex];
+  document.getElementById('subIdHidden').value = opt ? (opt.dataset.sub || '') : '';
+}
+</script>
+{% endblock %}

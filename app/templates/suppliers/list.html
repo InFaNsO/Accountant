@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Suppliers{% endblock %}
+{% block page_title %}Suppliers{% endblock %}
+{% block topbar_actions %}
+  <a href="{{ url_for('suppliers.new_supplier') }}" class="btn btn-primary">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    New Supplier
+  </a>
+{% endblock %}
+{% block content %}
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">All Suppliers ({{ suppliers|length }})</span>
+    <input type="search" placeholder="Search…" style="width:200px" oninput="filterTable(this.value,'suppTable')">
+  </div>
+  {% if suppliers %}
+  <div class="table-wrap">
+    <table id="suppTable">
+      <thead><tr><th>Name</th><th>Company</th><th>Email</th><th>Phone</th><th></th></tr></thead>
+      <tbody>
+        {% for s in suppliers %}
+        <tr>
+          <td class="fw-700"><a href="{{ url_for('suppliers.detail', supplier_id=s.id) }}" style="color:var(--accent);text-decoration:none">{{ s.name }}</a></td>
+          <td class="muted">{{ s.company or '—' }}</td>
+          <td class="muted">{{ s.email or '—' }}</td>
+          <td class="muted">{{ s.phone or '—' }}</td>
+          <td style="text-align:right;white-space:nowrap">
+            <a href="{{ url_for('suppliers.detail', supplier_id=s.id) }}" class="btn btn-secondary btn-sm">View</a>
+            <a href="{{ url_for('suppliers.edit_supplier', supplier_id=s.id) }}" class="btn btn-secondary btn-sm">Edit</a>
+            <form method="post" action="{{ url_for('suppliers.delete_supplier', supplier_id=s.id) }}" style="display:inline"
+                  onsubmit="return confirm('Delete {{ s.name }}?')">
+              <button class="btn btn-danger btn-sm">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <h3>No suppliers yet</h3>
+    <p>Add suppliers to link them to purchase orders and dispatches.</p>
+    <a href="{{ url_for('suppliers.new_supplier') }}" class="btn btn-primary">Add First Supplier</a>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

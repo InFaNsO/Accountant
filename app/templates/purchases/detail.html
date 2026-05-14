@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}{{ po.name }}{% endblock %}
+{% block page_title %}{{ po.name }}{% endblock %}
+{% block topbar_actions %}
+  {% if po.status == 'open' %}
+  <form method="post" action="{{ url_for('purchases.close_purchase', po_id=po.id) }}" style="display:inline">
+    <button class="btn btn-secondary" onclick="return confirm('Mark this order as closed?')">Mark Closed</button>
+  </form>
+  <a href="{{ url_for('purchases.edit_purchase', po_id=po.id) }}" class="btn btn-secondary">Edit</a>
+  {% endif %}
+  <form method="post" action="{{ url_for('purchases.delete_purchase', po_id=po.id) }}" style="display:inline"
+        onsubmit="return confirm('Delete {{ po.name }}? Production quantities will be reversed.')">
+    <button class="btn btn-danger">Delete</button>
+  </form>
+  <a href="{{ url_for('purchases.list_purchases') }}" class="btn btn-secondary">Back</a>
+{% endblock %}
+{% block content %}
+
+<!-- Header -->
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px">
+  <div class="card">
+    <div class="card-header"><span class="card-title">Order Info</span></div>
+    <div class="card-body" style="padding:0">
+      <table style="width:100%;border-collapse:collapse">
+        {% macro row(l,v) %}<tr><td style="padding:10px 20px;color:var(--text-muted);font-size:13px;width:40%;border-bottom:1px solid var(--border)">{{ l }}</td><td style="padding:10px 20px;font-weight:600;border-bottom:1px solid var(--border)">{{ v or '—' }}</td></tr>{% endmacro %}
+        {{ row('Supplier', po.supplier_name) }}
+        {{ row('Status', po.status|capitalize) }}
+        {{ row('Expected Completion', po.expected_completion) }}
+        {{ row('Created', po.created_at[:10] if po.created_at else '—') }}
+        {% if po.notes %}{{ row('Notes', po.notes) }}{% endif %}
+      </table>
+    </div>
+  </div>
+
+  <!-- Summary tiles -->
+  <div class="card">
+    <div class="card-header"><span class="card-title">Summary</span></div>
+    <div class="card-body">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div style="text-align:center;padding:16px;background:var(--bg-alt);border-radius:var(--radius-sm)">
+          <div style="font-size:26px;font-weight:700;color:var(--primary)">{{ items|length }}</div>
+          <div style="font-size:12px;color:var(--text-muted);margin-top:2px">Product Lines</div>
+        </div>
+        <div style="text-align:center;padding:16px;background:var(--bg-alt);border-radius:var(--radius-sm)">
+          {% set pct = ((items|sum(attribute='qty_dispatched') / items|sum(attribute='quantity') * 100) if items|sum(attribute='quantity') > 0 else 0)|round(0)|int %}
+          <div style="font-size:26px;font-weight:700;color:var(--warning)">{{ pct }}%</div>
+          <div style="font-size:12px;color:var(--text-muted);margin-top:2px">Dispatched</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Items table -->
+<div class="card">
+  <div class="card-header"><span class="card-title">Order Items</span></div>
+  {% if items %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Product</th>
+          <th style="text-align:right">Ordered Qty</th>
+          <th style="text-align:right">Dispatched</th>
+          <th style="text-align:right">Remaining</th>
+          <th style="text-align:right">Unit Price</th>
+          <th>Progress</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for it in items %}
+        {% set remaining = it.quantity - (it.qty_dispatched or 0) %}
+        {% set pct = ((it.qty_dispatched or 0) / it.quantity * 100)|round(0)|int if it.quantity > 0 else 0 %}
+        <tr>
+          <td class="fw-700">{{ it.display_name }}</td>
+          <td style="text-align:right">{{ it.quantity }}</td>
+          <td style="text-align:right;color:var(--warning)">{{ it.qty_dispatched or 0 }}</td>
+          <td style="text-align:right;font-weight:700;color:{% if remaining <= 0 %}var(--success){% else %}var(--text){% endif %}">
+            {{ remaining|round(2) }}
+          </td>
+          <td style="text-align:right">{% if it.price %}{{ it.price|inr }}{% else %}<span class="muted">—</span>{% endif %}</td>
+          <td style="min-width:120px">
+            <div style="background:var(--border);border-radius:4px;height:6px;overflow:hidden">
+              <div style="background:var(--primary);height:100%;width:{{ pct }}%;transition:width .3s"></div>
+            </div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:2px">{{ pct }}%</div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state" style="padding:30px"><p>No items on this order.</p></div>
+  {% endif %}
+</div>
+{% endblock %}

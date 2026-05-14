@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Categories{% endblock %}
+{% block page_title %}Product Categories{% endblock %}
+{% block topbar_actions %}
+  <a href="{{ url_for('products.list_products') }}" class="btn btn-secondary">Back to Products</a>
+  <a href="{{ url_for('products.new_category') }}" class="btn btn-primary">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    New Category
+  </a>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">Categories ({{ categories|length }})</span>
+  </div>
+  {% if categories %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Description</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for cat in categories %}
+        <tr>
+          <td class="fw-700">{{ cat.name }}</td>
+          <td class="muted">{{ cat.description or '—' }}</td>
+          <td style="text-align:right;white-space:nowrap">
+            <a href="{{ url_for('products.edit_category', cat_id=cat.id) }}" class="btn btn-secondary btn-sm">Edit</a>
+            <form method="post" action="{{ url_for('products.delete_category', cat_id=cat.id) }}"
+                  style="display:inline" onsubmit="return confirm('Delete category {{ cat.name }}? Products in this category will become uncategorised.')">
+              <button class="btn btn-danger btn-sm">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <h3>No categories yet</h3>
+    <p>Categories help organise your products (e.g. Raw Materials, Finished Goods, Services).</p>
+    <a href="{{ url_for('products.new_category') }}" class="btn btn-primary">Add First Category</a>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

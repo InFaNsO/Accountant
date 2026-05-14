@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Clients{% endblock %}
+{% block page_title %}Clients{% endblock %}
+{% block topbar_actions %}
+  <a href="{{ url_for('clients.new_client') }}" class="btn btn-primary">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    New Client
+  </a>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">All Clients ({{ clients|length }})</span>
+    <input type="search" id="clientSearch" placeholder="Search clients…" style="width:220px" oninput="filterTable(this.value,'clientTable')">
+  </div>
+  {% if clients %}
+  <div class="table-wrap">
+    <table id="clientTable">
+      <thead>
+        <tr>
+          <th>Name / Company</th>
+          <th style="text-align:right">Balance</th>
+          <th style="text-align:right">Purchases (60d)</th>
+          <th style="text-align:right">Payments (60d)</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in clients %}
+        {% set ob_debt = (c.opening_balance or 0)|abs %}
+        {% set ob_paid = c.ob_paid or 0 %}
+        {% set ob_remaining = [ob_debt - ob_paid, 0]|max %}
+        {% set ob_excess = [ob_paid - ob_debt, 0]|max %}
+        {% set balance = -(ob_remaining + (c.invoice_balance or 0)) + ob_excess %}
+        <tr>
+          <td>
+            <a href="{{ url_for('clients.detail', client_id=c.id) }}"
+               style="font-weight:600;color:var(--accent);text-decoration:none;">{{ c.name }}</a>
+            {% if c.company %}<div style="font-size:12px;color:var(--text-muted)">{{ c.company }}</div>{% endif %}
+          </td>
+          <td style="text-align:right">
+            {% if balance < 0 %}
+              <span style="color:var(--danger);font-weight:700;">{{ balance|inr }}</span>
+              <div style="font-size:11px;color:var(--text-muted)">outstanding</div>
+            {% elif balance > 0 %}
+              <span style="color:var(--success);font-weight:700;">{{ balance|inr }}</span>
+              <div style="font-size:11px;color:var(--text-muted)">credit</div>
+            {% else %}
+              <span style="color:var(--warning);font-weight:700;">{{ balance|inr }}</span>
+              <div style="font-size:11px;color:var(--text-muted)">settled</div>
+            {% endif %}
+          </td>
+          <td style="text-align:right;font-weight:600;">
+            {{ c.purchases_60d|inr }}
+          </td>
+          <td style="text-align:right;font-weight:600;color:var(--success)">
+            {{ c.payments_60d|inr }}
+          </td>
+          <td style="text-align:right">
+            <a href="{{ url_for('clients.detail', client_id=c.id) }}" class="btn btn-secondary btn-sm">View</a>
+            <a href="{{ url_for('clients.edit_client', client_id=c.id) }}" class="btn btn-secondary btn-sm">Edit</a>
+            <form class="confirm-inline" method="post" action="{{ url_for('clients.delete_client', client_id=c.id) }}"
+                  onsubmit="return confirm('Delete {{ c.name }}? This cannot be undone.')">
+              <button class="btn btn-danger btn-sm">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+      <circle cx="9" cy="7" r="4"/>
+      <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>
+    </svg>
+    <h3>No clients yet</h3>
+    <p>Add your first client to get started.</p>
+    <a href="{{ url_for('clients.new_client') }}" class="btn btn-primary">Add Client</a>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

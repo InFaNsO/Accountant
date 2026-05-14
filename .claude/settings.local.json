@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c ' *)",
+      "Bash(start python *)",
+      "Bash(ping -n 3 127.0.0.1)",
+      "Bash(curl -s -o nul -w \"%{http_code}\" http://127.0.0.1:5000/)",
+      "Bash(grep -n '\\\\${{' D:\\\\Code\\\\Claude\\\\Accountant\\\\app\\\\templates\\\\dashboard.html D:\\\\Code\\\\Claude\\\\Accountant\\\\app\\\\templates\\\\clients\\\\detail.html D:\\\\Code\\\\Claude\\\\Accountant\\\\app\\\\templates\\\\clients\\\\form.html D:\\\\Code\\\\Claude\\\\Accountant\\\\app\\\\templates\\\\products\\\\list.html D:\\\\Code\\\\Claude\\\\Accountant\\\\app\\\\templates\\\\invoices\\\\list.html D:\\\\Code\\\\Claude\\\\Accountant\\\\app\\\\templates\\\\invoices\\\\detail.html D:\\\\Code\\\\Claude\\\\Accountant\\\\app\\\\templates\\\\invoices\\\\form.html D:\\\\Code\\\\Claude\\\\Accountant\\\\app\\\\templates\\\\payments\\\\list.html D:\\\\Code\\\\Claude\\\\Accountant\\\\app\\\\templates\\\\payments\\\\form.html)",
+      "Bash(pip install *)",
+      "Bash(python smoke_test.py)",
+      "Bash(exist smoke_test.py del smoke_test.py)"
+    ]
+  }
+}

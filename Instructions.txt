@@ -1,0 +1,3 @@
+1. open terminal here
+2. conda activate base
+3. python run.py

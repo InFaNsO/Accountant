@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if action == 'edit' else 'New' }} Sub-Product{% endblock %}
+{% block page_title %}{{ 'Edit Sub-Product' if action == 'edit' else 'New Sub-Product' }}{% endblock %}
+{% block topbar_actions %}
+  <a href="{{ url_for('products.product_detail', product_id=product.id) }}" class="btn btn-secondary">Cancel</a>
+{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width:680px">
+  <div class="card-header">
+    <span class="card-title">{{ 'Edit Sub-Product' if action == 'edit' else 'New Sub-Product' }}</span>
+    <span style="font-size:12px;color:var(--text-muted)">Parent: <strong>{{ product.name }}</strong></span>
+  </div>
+  <div class="card-body">
+    <form method="post" action="{{ url_for('products.edit_sub_product', product_id=product.id, sub_id=sub_id) if action == 'edit' else url_for('products.new_sub_product', product_id=product.id) }}">
+      <div class="form-grid form-grid-2">
+
+        <div class="form-group span-2">
+          <label for="name">Sub-Product Name *</label>
+          <input type="text" id="name" name="name" value="{{ sub.get('name','') }}" required
+                 placeholder="e.g. 50kg Bag, Grade A, 12mm">
+        </div>
+
+        <div class="form-group">
+          <label for="sku">SKU / Code</label>
+          <input type="text" id="sku" name="sku" value="{{ sub.get('sku','') }}" placeholder="CEM-53-50KG-A">
+        </div>
+
+        <div class="form-group">
+          <label for="tax_rate">Tax Rate (%)</label>
+          <input type="number" id="tax_rate" name="tax_rate"
+                 value="{{ sub.get('tax_rate', 0) }}" step="0.01" min="0" max="100" placeholder="18">
+        </div>
+
+        <div class="form-group span-2" style="flex-direction:row;align-items:center;gap:10px">
+          <input type="checkbox" id="use_parent_price" name="use_parent_price" value="1" style="width:auto"
+                 onchange="togglePrice(this.checked)"
+                 {{ 'checked' if sub.get('use_parent_price') }}>
+          <label for="use_parent_price" style="margin:0;cursor:pointer">
+            Use parent price ({{ product.unit_price|inr }})
+          </label>
+        </div>
+
+        <div class="form-group" id="priceGroup" style="{{ 'display:none' if sub.get('use_parent_price') else '' }}">
+          <label for="unit_price">Unit Price (₹)</label>
+          <input type="number" id="unit_price" name="unit_price"
+                 value="{{ sub.get('unit_price', '') }}" step="0.01" min="0" placeholder="0.00">
+        </div>
+
+        <div class="form-group">
+          <label for="min_quantity">Min Stock Quantity</label>
+          <input type="number" id="min_quantity" name="min_quantity"
+                 value="{{ sub.get('min_quantity', 0) }}" step="0.01" min="0" placeholder="0">
+          <small class="muted">0 = use parent's minimum ({{ product.min_quantity }})</small>
+        </div>
+
+        <div class="form-group">
+          <label for="stock_qty">Opening Stock</label>
+          <input type="number" id="stock_qty" name="stock_qty"
+                 value="{{ sub.get('stock_qty', 0) }}" step="0.01" min="0" placeholder="0">
+        </div>
+
+        <div class="form-group span-2">
+          <label for="description">Description</label>
+          <textarea id="description" name="description"
+                    placeholder="Optional description…">{{ sub.get('description','') }}</textarea>
+        </div>
+
+        {% if action == 'edit' %}
+        <div class="form-group span-2" style="flex-direction:row;align-items:center;gap:10px">
+          <input type="checkbox" id="is_active" name="is_active" value="1" style="width:auto"
+                 {{ 'checked' if sub.get('is_active', 1) }}>
+          <label for="is_active" style="margin:0;cursor:pointer">Active</label>
+        </div>
+        {% endif %}
+
+      </div>
+      <div class="form-actions mt-16">
+        <button type="submit" class="btn btn-primary">{{ 'Save Changes' if action == 'edit' else 'Create Sub-Product' }}</button>
+        <a href="{{ url_for('products.product_detail', product_id=product.id) }}" class="btn btn-secondary">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% block scripts %}
+<script>
+function togglePrice(useParent) {
+  document.getElementById('priceGroup').style.display = useParent ? 'none' : '';
+}
+</script>
+{% endblock %}
+{% endblock %}

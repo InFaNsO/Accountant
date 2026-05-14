@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% block title %}{{ invoice.invoice_number }}{% endblock %}
+{% block page_title %}{{ invoice.invoice_number }}{% endblock %}
+{% block topbar_actions %}
+  <a href="{{ url_for('payments.new_payment') }}?invoice_id={{ invoice.id }}" class="btn btn-primary">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    Record Payment
+  </a>
+  <a href="{{ url_for('invoices.edit_invoice', invoice_id=invoice.id) }}" class="btn btn-secondary">Edit</a>
+  <form class="confirm-inline" method="post" action="{{ url_for('invoices.delete_invoice', invoice_id=invoice.id) }}" onsubmit="return confirm('Delete this invoice?')">
+    <button class="btn btn-danger">Delete</button>
+  </form>
+{% endblock %}
+
+{% block content %}
+
+<!-- Status bar -->
+<div class="card" style="margin-bottom:18px">
+  <div class="card-body" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+    <div style="display:flex;align-items:center;gap:12px">
+      <span class="badge badge-{{ invoice.status }}" style="font-size:13px;padding:5px 14px">{{ invoice.status|upper }}</span>
+      {% set balance = invoice.total - invoice.amount_paid %}
+      <span style="font-size:14px;color:var(--text-secondary)">
+        {{ invoice.amount_paid|inr }} paid of {{ invoice.total|inr }}
+        {% if balance > 0 %} — <strong style="color:var(--danger)">{{ balance|inr }} remaining</strong>{% endif %}
+      </span>
+    </div>
+    <div class="progress-bar-wrap" style="width:220px">
+      {% set pct = [(invoice.amount_paid / invoice.total * 100) if invoice.total > 0 else 0, 100]|min %}
+      <div class="progress-bar-fill" style="width:{{ pct }}%"></div>
+    </div>
+    <!-- Quick status change -->
+    <form method="post" action="{{ url_for('invoices.update_status', invoice_id=invoice.id) }}" style="display:flex;gap:6px;align-items:center">
+      <select name="status" style="width:130px;padding:6px 10px;font-size:13px">
+        <option value="draft"     {{ 'selected' if invoice.status=='draft' }}>Draft</option>
+        <option value="sent"      {{ 'selected' if invoice.status=='sent' }}>Sent</option>
+        <option value="paid"      {{ 'selected' if invoice.status=='paid' }}>Paid</option>
+        <option value="cancelled" {{ 'selected' if invoice.status=='cancelled' }}>Cancelled</option>
+      </select>
+      <button class="btn btn-secondary btn-sm">Update status</button>
+    </form>
+  </div>
+</div>
+
+<!-- Main detail grid -->
+<div class="invoice-header-box">
+  <!-- Client info -->
+  <div class="card">
+    <div class="card-header"><span class="card-title">Bill To</span></div>
+    <div class="card-body">
+      <div class="info-list">
+        <div class="info-row"><span class="info-label">Client</span><a href="{{ url_for('clients.detail', client_id=invoice.client_id) }}" style="font-weight:700;color:var(--accent);text-decoration:none">{{ invoice.client_name }}</a></div>
+        {% if invoice.client_company %}<div class="info-row"><span class="info-label">Company</span><span class="info-value">{{ invoice.client_company }}</span></div>{% endif %}
+        {% if invoice.client_email %}<div class="info-row"><span class="info-label">Email</span><span class="info-value">{{ invoice.client_email }}</span></div>{% endif %}
+        {% if invoice.client_address %}<div class="info-row"><span class="info-label">Address</span><span class="info-value">{{ invoice.client_address }}{% if invoice.client_city %}, {{ invoice.client_city }}{% endif %}</span></div>{% endif %}
+        {% if invoice.client_tax_id %}<div class="info-row"><span class="info-label">Tax ID</span><span class="info-value font-mono">{{ invoice.client_tax_id }}</span></div>{% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Invoice meta -->
+  <div class="card">
+    <div class="card-header"><span class="card-title">Invoice Info</span></div>
+    <div class="card-body">
+      <div class="info-list">
+        <div class="info-row"><span class="info-label">Number</span><span class="info-value fw-700 font-mono">{{ invoice.invoice_number }}</span></div>
+        <div class="info-row"><span class="info-label">Issued</span><span class="info-value">{{ invoice.issue_date }}</span></div>
+        <div class="info-row"><span class="info-label">Due</span><span class="info-value">{{ invoice.due_date or '—' }}</span></div>
+        <div class="info-row"><span class="info-label">Created</span><span class="info-value muted">{{ invoice.created_at[:10] }}</span></div>
+        {% if invoice.notes %}<div class="info-row"><span class="info-label">Notes</span><span class="info-value muted" style="font-size:13px">{{ invoice.notes }}</span></div>{% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Line items -->
+<div class="card" style="margin-bottom:18px">
+  <div class="card-header"><span class="card-title">Line Items</span></div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:45%">Description</th>
+          <th>Qty</th>
+          <th>Unit Price</th>
+          <th>Tax %</th>
+          <th style="text-align:right">Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in items %}
+        <tr>
+          <td class="fw-700">{{ item.description }}</td>
+          <td class="muted">{{ item.quantity }}</td>
+          <td>{{ item.unit_price|inr }}</td>
+          <td class="muted">{{ item.tax_rate }}%</td>
+          <td class="text-right fw-700">{{ item.line_total|inr }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="card-body" style="padding:16px 22px">
+    <div class="invoice-totals">
+      <div class="total-row"><span>Subtotal</span><span>{{ invoice.subtotal|inr }}</span></div>
+      <div class="total-row"><span>Tax</span><span>{{ invoice.tax_total|inr }}</span></div>
+      {% if invoice.discount_amount %}<div class="total-row"><span>Discount</span><span>–{{ invoice.discount_amount|inr }}</span></div>{% endif %}
+      <div class="total-grand"><span>Total</span><span>{{ invoice.total|inr }}</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- Payments -->
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">Payment History</span>
+    <a href="{{ url_for('payments.new_payment') }}?invoice_id={{ invoice.id }}" class="btn btn-success btn-sm">+ Record Payment</a>
+  </div>
+  {% if payments %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Date</th><th>Method</th><th>Reference</th><th>Notes</th><th style="text-align:right">Amount</th><th></th></tr></thead>
+      <tbody>
+        {% for p in payments %}
+        <tr>
+          <td>{{ p.payment_date }}</td>
+          <td><span class="badge badge-sent" style="text-transform:capitalize">{{ p.method.replace('_',' ') }}</span></td>
+          <td class="muted font-mono">{{ p.reference or '—' }}</td>
+          <td class="muted">{{ p.notes or '—' }}</td>
+          <td class="text-right fw-700" style="color:var(--success)">{{ p.amount|inr }}</td>
+          <td>
+            <form class="confirm-inline" method="post" action="{{ url_for('payments.delete_payment', payment_id=p.id) }}" onsubmit="return confirm('Delete this payment?')">
+              <button class="btn btn-danger btn-sm">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state" style="padding:28px">
+    <p>No payments recorded yet.</p>
+    <a href="{{ url_for('payments.new_payment') }}?invoice_id={{ invoice.id }}" class="btn btn-primary btn-sm">Record first payment</a>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

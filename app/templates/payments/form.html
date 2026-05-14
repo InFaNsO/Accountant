@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+{% block title %}Record Payment{% endblock %}
+{% block page_title %}Record Payment{% endblock %}
+{% block topbar_actions %}
+  <a href="{{ url_for('payments.import_payments') }}" class="btn btn-secondary">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:15px;height:15px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+    Import from Statement
+  </a>
+  <a href="{{ url_for('payments.list_payments') }}" class="btn btn-secondary">Cancel</a>
+{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width:680px">
+  <div class="card-header">
+    <span class="card-title">Payment Details</span>
+    <span style="font-size:12px;color:var(--text-muted)">Payment auto-allocates: opening balance first, then oldest invoices</span>
+  </div>
+  <div class="card-body">
+    <form method="post" action="{{ url_for('payments.new_payment') }}">
+      <div class="form-grid form-grid-2">
+
+        <div class="form-group span-2">
+          <label for="client_id">Client *</label>
+          <select id="client_id" name="client_id" required onchange="loadClientInvoices(this.value)">
+            <option value="">— Select client —</option>
+            {% for c in clients %}
+            <option value="{{ c.id }}" {{ 'selected' if prefill.get('client_id')|string == c.id|string }}>
+              {{ c.name }}{% if c.company %} — {{ c.company }}{% endif %}
+            </option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="form-group span-2">
+          <label for="invoice_id">Apply to Invoice <span style="font-weight:400;color:var(--text-muted)">(optional — leave blank to auto-allocate)</span></label>
+          <select id="invoice_id" name="invoice_id">
+            <option value="">Auto-allocate (oldest unpaid first)</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="amount">Amount (₹) *</label>
+          <input type="number" id="amount" name="amount"
+                 value="{{ prefill.get('amount','') }}"
+                 step="0.01" min="0.01" required placeholder="0.00">
+        </div>
+
+        <div class="form-group">
+          <label for="payment_date">Payment Date *</label>
+          <input type="date" id="payment_date" name="payment_date"
+                 value="{{ prefill.get('payment_date','') }}" required>
+        </div>
+
+        <div class="form-group">
+          <label for="method">Payment Method</label>
+          <select id="method" name="method">
+            <option value="cash"          {{ 'selected' if prefill.get('method','cash')=='cash' }}>Cash</option>
+            <option value="bank_transfer" {{ 'selected' if prefill.get('method')=='bank_transfer' }}>Bank Transfer</option>
+            <option value="card"          {{ 'selected' if prefill.get('method')=='card' }}>Card</option>
+            <option value="cheque"        {{ 'selected' if prefill.get('method')=='cheque' }}>Cheque</option>
+            <option value="other"         {{ 'selected' if prefill.get('method')=='other' }}>Other</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="reference">Reference / Transaction ID</label>
+          <input type="text" id="reference" name="reference"
+                 value="{{ prefill.get('reference','') }}" placeholder="TXN-123456">
+        </div>
+
+        <div class="form-group span-2">
+          <label for="notes">Notes</label>
+          <textarea id="notes" name="notes" placeholder="Optional notes…">{{ prefill.get('notes','') }}</textarea>
+        </div>
+
+        <!-- Allocation preview -->
+        <div class="form-group span-2" id="allocationPreview" style="display:none">
+          <div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px">
+            <div style="font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Auto-allocation preview</div>
+            <div id="allocationList"></div>
+          </div>
+        </div>
+
+      </div>
+      <div class="form-actions mt-16">
+        <button type="submit" class="btn btn-primary">Record Payment</button>
+        <a href="{{ url_for('payments.list_payments') }}" class="btn btn-secondary">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const prefillClientId  = "{{ prefill.get('client_id','') }}";
+const prefillInvoiceId = "{{ prefill.get('invoice_id','') }}";
+
+document.addEventListener('DOMContentLoaded', () => {
+  const dateInput = document.getElementById('payment_date');
+  if (!dateInput.value) dateInput.value = new Date().toISOString().slice(0,10);
+  if (prefillClientId) loadClientInvoices(prefillClientId);
+  document.getElementById('amount').addEventListener('input', updatePreview);
+});
+
+async function loadClientInvoices(clientId) {
+  const sel = document.getElementById('invoice_id');
+  sel.innerHTML = '<option value="">Auto-allocate (oldest unpaid first)</option>';
+  if (!clientId) return;
+  const res  = await fetch(`/payments/api/client-invoices/${clientId}`);
+  const invs = await res.json();
+  invs.forEach(inv => {
+    const opt = document.createElement('option');
+    opt.value = inv.id;
+    opt.textContent = `${inv.invoice_number} — ${formatINR(inv.remaining)} remaining`;
+    if (prefillInvoiceId && String(inv.id) === String(prefillInvoiceId)) {
+      opt.selected = true;
+      document.getElementById('amount').value = inv.remaining.toFixed(2);
+    }
+    sel.appendChild(opt);
+  });
+  window._clientInvoices = invs;
+  updatePreview();
+}
+
+function updatePreview() {
+  const amount = parseFloat(document.getElementById('amount').value) || 0;
+  const invoiceId = document.getElementById('invoice_id').value;
+  const preview = document.getElementById('allocationPreview');
+  const list    = document.getElementById('allocationList');
+  if (!amount || invoiceId) { preview.style.display = 'none'; return; }
+  const invs = window._clientInvoices || [];
+  if (!invs.length) { preview.style.display = 'none'; return; }
+
+  let remaining = amount;
+  const lines = [];
+  invs.forEach(inv => {
+    if (remaining <= 0) return;
+    const apply = Math.min(inv.remaining, remaining);
+    lines.push(`<div style="display:flex;justify-content:space-between;font-size:13px;padding:3px 0;border-bottom:1px solid var(--border)">
+      <span>${inv.invoice_number}</span><span style="font-weight:600;color:var(--success)">${formatINR(apply)}</span></div>`);
+    remaining -= apply;
+  });
+  if (remaining > 0.01) {
+    lines.push(`<div style="display:flex;justify-content:space-between;font-size:13px;padding:3px 0;color:var(--text-muted)">
+      <span>Unallocated / credit</span><span>${formatINR(remaining)}</span></div>`);
+  }
+  list.innerHTML = lines.join('');
+  preview.style.display = '';
+}
+
+document.getElementById('invoice_id').addEventListener('change', updatePreview);
+document.getElementById('amount').addEventListener('input', updatePreview);
+</script>
+{% endblock %}

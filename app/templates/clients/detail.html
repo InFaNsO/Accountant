@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}{{ client.name }}{% endblock %}
+{% block page_title %}{{ client.name }}{% endblock %}
+{% block topbar_actions %}
+  <a href="{{ url_for('invoices.new_invoice') }}?client_id={{ client.id }}" class="btn btn-primary">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    New Invoice
+  </a>
+  <a href="{{ url_for('clients.edit_client', client_id=client.id) }}" class="btn btn-secondary">Edit</a>
+  <form class="confirm-inline" method="post" action="{{ url_for('clients.delete_client', client_id=client.id) }}" onsubmit="return confirm('Delete this client?')">
+    <button class="btn btn-danger">Delete</button>
+  </form>
+{% endblock %}
+
+{% block content %}
+<div class="detail-grid">
+  <!-- Left: info + invoices -->
+  <div style="display:flex;flex-direction:column;gap:22px">
+
+    <div class="card">
+      <div class="card-header"><span class="card-title">Contact Details</span></div>
+      <div class="card-body">
+        <div class="info-list">
+          {% if client.company %}<div class="info-row"><span class="info-label">Company</span><span class="info-value fw-700">{{ client.company }}</span></div>{% endif %}
+          {% if client.email %}<div class="info-row"><span class="info-label">Email</span><span class="info-value"><a href="mailto:{{ client.email }}" style="color:var(--accent)">{{ client.email }}</a></span></div>{% endif %}
+          {% if client.phone %}<div class="info-row"><span class="info-label">Phone</span><span class="info-value">{{ client.phone }}</span></div>{% endif %}
+          {% if client.address or client.city %}<div class="info-row"><span class="info-label">Address</span><span class="info-value">{{ [client.address, client.city, client.country]|select|join(', ') }}</span></div>{% endif %}
+          {% if client.tax_id %}<div class="info-row"><span class="info-label">Tax ID</span><span class="info-value font-mono">{{ client.tax_id }}</span></div>{% endif %}
+          {% if client.notes %}<div class="info-row"><span class="info-label">Notes</span><span class="info-value text-muted">{{ client.notes }}</span></div>{% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><span class="card-title">Invoices ({{ invoices|length }})</span></div>
+      {% if invoices %}
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Invoice</th><th>Date</th><th>Due</th><th>Total</th><th>Paid</th><th>Status</th><th></th></tr></thead>
+          <tbody>
+            {% for inv in invoices %}
+            <tr>
+              <td><a href="{{ url_for('invoices.detail', invoice_id=inv.id) }}" style="font-weight:600;color:var(--accent);text-decoration:none">{{ inv.invoice_number }}</a></td>
+              <td class="muted">{{ inv.issue_date }}</td>
+              <td class="muted">{{ inv.due_date or '—' }}</td>
+              <td class="fw-700">{{ inv.total|inr }}</td>
+              <td>{{ inv.amount_paid|inr }}</td>
+              <td><span class="badge badge-{{ inv.status }}">{{ inv.status }}</span></td>
+              <td><a href="{{ url_for('invoices.detail', invoice_id=inv.id) }}" class="btn btn-ghost btn-sm">View</a></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="empty-state" style="padding:30px">
+        <p>No invoices for this client yet.</p>
+      </div>
+      {% endif %}
+    </div>
+
+  </div>
+
+  <!-- Right: balance -->
+  <div style="display:flex;flex-direction:column;gap:22px">
+    <div class="card">
+      <div class="card-header"><span class="card-title">Balance</span></div>
+      <div class="card-body">
+        <div class="stat-value" style="font-size:32px;color:{% if balance < 0 %}var(--danger){% elif balance > 0 %}var(--success){% else %}var(--warning){% endif %}">
+          {{ balance|inr }}
+        </div>
+        <div class="stat-sub mt-4">{% if balance < 0 %}Outstanding balance{% elif balance > 0 %}Overpaid — credit available{% else %}Settled{% endif %}</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><span class="card-title">Summary</span></div>
+      <div class="card-body">
+        <div class="info-list">
+          <div class="info-row"><span class="info-label">Invoices</span><span class="info-value fw-700">{{ invoices|length }}</span></div>
+          <div class="info-row"><span class="info-label">Paid</span><span class="info-value" style="color:var(--success)">{{ invoices|selectattr('status','eq','paid')|list|length }}</span></div>
+          <div class="info-row"><span class="info-label">Pending</span><span class="info-value" style="color:var(--warning)">{{ invoices|selectattr('status','in',['sent','partial'])|list|length }}</span></div>
+          {% if client.opening_balance %}
+          <div class="info-row"><span class="info-label">Opening bal.</span><span class="info-value" style="color:var(--text-secondary)">{{ client.opening_balance|inr }}</span></div>
+          {% endif %}
+          <div class="info-row"><span class="info-label">Client since</span><span class="info-value muted">{{ client.created_at[:10] }}</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

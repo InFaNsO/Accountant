@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% block title %}New Purchase Order{% endblock %}
+{% block page_title %}New Purchase Order{% endblock %}
+{% block topbar_actions %}
+  <a href="{{ url_for('purchases.list_purchases') }}" class="btn btn-secondary">Cancel</a>
+{% endblock %}
+{% block content %}
+<div class="card">
+  <div class="card-header"><span class="card-title">Order Details</span></div>
+  <div class="card-body">
+    <form method="post" action="{{ url_for('purchases.new_purchase') }}">
+      <div class="form-grid form-grid-2" style="margin-bottom:24px">
+        <div class="form-group">
+          <label>Order Name *</label>
+          <input type="text" name="name" value="{{ po.get('name','') }}" required placeholder="e.g. PO-2026-001">
+        </div>
+        <div class="form-group">
+          <label>Supplier</label>
+          <select name="supplier_id">
+            <option value="">— None —</option>
+            {% for s in suppliers %}
+            <option value="{{ s.id }}" {{ 'selected' if po.get('supplier_id')|string == s.id|string }}>{{ s.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Expected Production Completion</label>
+          <input type="date" name="expected_completion" value="{{ po.get('expected_completion','') }}">
+        </div>
+        <div class="form-group">
+          <label>Notes</label>
+          <input type="text" name="notes" value="{{ po.get('notes','') }}" placeholder="Optional notes…">
+        </div>
+      </div>
+
+      <!-- Line items -->
+      <div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);margin-bottom:10px">Products</div>
+      <div class="table-wrap" style="margin-bottom:12px">
+        <table id="itemsTable" style="table-layout:fixed;width:100%">
+          <colgroup>
+            <col style="width:38%"><col style="width:14%"><col style="width:14%"><col style="width:14%"><col style="width:36px">
+          </colgroup>
+          <thead>
+            <tr>
+              <th>Product / Sub-product</th>
+              <th>Quantity *</th>
+              <th>Price (₹)</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="itemsBody">
+            <tr id="row_0">
+              <td>
+                <select name="product_id_0" onchange="syncSubId(this,0)" style="width:100%">
+                  <option value="">— select product —</option>
+                  {% for p in products %}
+                  <option value="{{ p.product_id }}" data-sub="{{ p.sub_product_id or '' }}" data-price="{{ p.price }}">{{ p.label }}</option>
+                  {% endfor %}
+                </select>
+                <input type="hidden" name="sub_product_id_0" id="sub_0" value="">
+              </td>
+              <td><input type="number" name="quantity_0" step="0.01" min="0.01" placeholder="0" style="width:100%"></td>
+              <td><input type="number" name="price_0" step="0.01" min="0" placeholder="optional" style="width:100%"></td>
+              <td><button type="button" onclick="removeRow(0)" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:18px;padding:0 6px">×</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <button type="button" class="btn btn-secondary btn-sm" onclick="addRow()" style="margin-bottom:24px">+ Add Product</button>
+
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Create Purchase Order</button>
+        <a href="{{ url_for('purchases.list_purchases') }}" class="btn btn-secondary">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const PRODUCTS = {{ products | tojson }};
+let rowCount = 1;
+
+function syncSubId(sel, idx) {
+  const opt = sel.options[sel.selectedIndex];
+  document.getElementById('sub_' + idx).value = opt ? (opt.dataset.sub || '') : '';
+  const priceInput = sel.closest('tr').querySelector('input[name^="price_"]');
+  if (priceInput && opt && opt.dataset.price && !priceInput.value) {
+    priceInput.value = opt.dataset.price;
+  }
+}
+
+function addRow() {
+  const i = rowCount++;
+  const opts = PRODUCTS.map(p =>
+    `<option value="${p.product_id}" data-sub="${p.sub_product_id||''}" data-price="${p.price||''}">${p.label}</option>`
+  ).join('');
+  const row = document.createElement('tr');
+  row.id = 'row_' + i;
+  row.innerHTML = `
+    <td>
+      <select name="product_id_${i}" onchange="syncSubId(this,${i})" style="width:100%">
+        <option value="">— select product —</option>${opts}
+      </select>
+      <input type="hidden" name="sub_product_id_${i}" id="sub_${i}" value="">
+    </td>
+    <td><input type="number" name="quantity_${i}" step="0.01" min="0.01" placeholder="0" style="width:100%"></td>
+    <td><input type="number" name="price_${i}" step="0.01" min="0" placeholder="optional" style="width:100%"></td>
+    <td><button type="button" onclick="removeRow(${i})" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:18px;padding:0 6px">×</button></td>`;
+  document.getElementById('itemsBody').appendChild(row);
+}
+
+function removeRow(i) {
+  const row = document.getElementById('row_' + i);
+  if (row && document.getElementById('itemsBody').children.length > 1) row.remove();
+}
+</script>
+{% endblock %}

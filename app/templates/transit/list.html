@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Transit{% endblock %}
+{% block page_title %}Transit / Dispatches{% endblock %}
+{% block topbar_actions %}
+  <a href="{{ url_for('transit.new_dispatch') }}" class="btn btn-primary">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    New Dispatch
+  </a>
+{% endblock %}
+{% block content %}
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">All Dispatches ({{ dispatches|length }})</span>
+    <input type="search" placeholder="Search…" style="width:200px" oninput="filterTable(this.value,'dispTable')">
+  </div>
+  {% if dispatches %}
+  <div class="table-wrap">
+    <table id="dispTable">
+      <thead>
+        <tr>
+          <th>Dispatch Name</th>
+          <th>Supplier</th>
+          <th>Dispatch Date</th>
+          <th>Expected Arrival</th>
+          <th style="text-align:center">Items</th>
+          <th>Status</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for d in dispatches %}
+        <tr>
+          <td class="fw-700">
+            <a href="{{ url_for('transit.detail', dispatch_id=d.id) }}" style="color:var(--accent);text-decoration:none">{{ d.name }}</a>
+          </td>
+          <td class="muted">{{ d.supplier_name or '—' }}</td>
+          <td class="muted">{{ d.dispatch_date or '—' }}</td>
+          <td>
+            {% if d.expected_arrival %}
+              <span style="font-weight:600">{{ d.expected_arrival }}</span>
+            {% else %}—{% endif %}
+          </td>
+          <td style="text-align:center" class="muted">{{ d.item_count }}</td>
+          <td>
+            {% if d.status == 'in_transit' %}
+              <span class="badge" style="background:rgba(99,102,241,.15);color:#6366f1">In Transit</span>
+            {% elif d.status == 'partially_received' %}
+              <span class="badge" style="background:rgba(245,158,11,.15);color:#d97706">Partial</span>
+            {% elif d.status == 'received' %}
+              <span class="badge badge-active">Received</span>
+            {% else %}
+              <span class="badge badge-inactive">{{ d.status }}</span>
+            {% endif %}
+          </td>
+          <td style="text-align:right;white-space:nowrap">
+            <a href="{{ url_for('transit.detail', dispatch_id=d.id) }}" class="btn btn-secondary btn-sm">View</a>
+            <form method="post" action="{{ url_for('transit.delete_dispatch', dispatch_id=d.id) }}" style="display:inline"
+                  onsubmit="return confirm('Delete {{ d.name }}? Quantities will be reversed.')">
+              <button class="btn btn-danger btn-sm">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <h3>No dispatches yet</h3>
+    <p>Create a dispatch when goods leave the supplier and are in transit to the warehouse.</p>
+    <a href="{{ url_for('transit.new_dispatch') }}" class="btn btn-primary">Create First Dispatch</a>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

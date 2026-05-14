@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block title %}{{ dispatch.name }}{% endblock %}
+{% block page_title %}{{ dispatch.name }}{% endblock %}
+{% block topbar_actions %}
+  {% if dispatch.status != 'received' %}
+  <form method="post" action="{{ url_for('transit.receive', dispatch_id=dispatch.id) }}" id="receiveForm">
+    <button class="btn btn-primary" onclick="fillAll()">Receive All</button>
+  </form>
+  {% endif %}
+  <form method="post" action="{{ url_for('transit.delete_dispatch', dispatch_id=dispatch.id) }}" style="display:inline"
+        onsubmit="return confirm('Delete {{ dispatch.name }}? Unreceived quantities will be reversed.')">
+    <button class="btn btn-danger">Delete</button>
+  </form>
+  <a href="{{ url_for('transit.list_transit') }}" class="btn btn-secondary">Back</a>
+{% endblock %}
+{% block content %}
+
+<!-- Header -->
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px">
+  <div class="card">
+    <div class="card-header"><span class="card-title">Dispatch Info</span></div>
+    <div class="card-body" style="padding:0">
+      <table style="width:100%;border-collapse:collapse">
+        {% macro row(l,v) %}<tr><td style="padding:10px 20px;color:var(--text-muted);font-size:13px;width:40%;border-bottom:1px solid var(--border)">{{ l }}</td><td style="padding:10px 20px;font-weight:600;border-bottom:1px solid var(--border)">{{ v or '—' }}</td></tr>{% endmacro %}
+        {{ row('Supplier', dispatch.supplier_name) }}
+        {{ row('Dispatch Date', dispatch.dispatch_date) }}
+        {{ row('Expected Arrival', dispatch.expected_arrival) }}
+        {{ row('Created', dispatch.created_at[:10] if dispatch.created_at else '—') }}
+        {% if dispatch.notes %}{{ row('Notes', dispatch.notes) }}{% endif %}
+        <tr>
+          <td style="padding:10px 20px;color:var(--text-muted);font-size:13px;border-bottom:1px solid var(--border)">Status</td>
+          <td style="padding:10px 20px;border-bottom:1px solid var(--border)">
+            {% if dispatch.status == 'in_transit' %}
+              <span class="badge" style="background:rgba(99,102,241,.15);color:#6366f1">In Transit</span>
+            {% elif dispatch.status == 'partially_received' %}
+              <span class="badge" style="background:rgba(245,158,11,.15);color:#d97706">Partially Received</span>
+            {% elif dispatch.status == 'received' %}
+              <span class="badge badge-active">Fully Received</span>
+            {% else %}
+              <span class="badge badge-inactive">{{ dispatch.status }}</span>
+            {% endif %}
+          </td>
+        </tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><span class="card-title">Summary</span></div>
+    <div class="card-body">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+        <div style="text-align:center;padding:16px;background:var(--bg-alt);border-radius:var(--radius-sm)">
+          <div style="font-size:26px;font-weight:700;color:var(--primary)">{{ items|length }}</div>
+          <div style="font-size:12px;color:var(--text-muted);margin-top:2px">Product Lines</div>
+        </div>
+        {% set total_qty = items|sum(attribute='quantity') %}
+        {% set total_recv = items|sum(attribute='qty_received') %}
+        <div style="text-align:center;padding:16px;background:var(--bg-alt);border-radius:var(--radius-sm)">
+          <div style="font-size:26px;font-weight:700;color:var(--success)">{{ total_recv|round(2) }}</div>
+          <div style="font-size:12px;color:var(--text-muted);margin-top:2px">Received</div>
+        </div>
+        <div style="text-align:center;padding:16px;background:var(--bg-alt);border-radius:var(--radius-sm)">
+          {% set pct = ((total_recv / total_qty * 100) if total_qty > 0 else 0)|round(0)|int %}
+          <div style="font-size:26px;font-weight:700;color:var(--warning)">{{ pct }}%</div>
+          <div style="font-size:12px;color:var(--text-muted);margin-top:2px">Complete</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Items -->
+<div class="card">
+  <div class="card-header"><span class="card-title">Dispatch Items</span></div>
+  {% if items %}
+  <form method="post" action="{{ url_for('transit.receive', dispatch_id=dispatch.id) }}" id="receiveForm">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Product</th>
+          <th style="text-align:right">Dispatched Qty</th>
+          <th style="text-align:right">Received</th>
+          <th style="text-align:right">Remaining</th>
+          <th style="text-align:right">Price (₹)</th>
+          <th style="text-align:right">CBM</th>
+          <th style="text-align:right">Gross Wt (kg)</th>
+          {% if dispatch.status != 'received' %}<th style="text-align:center;min-width:140px">Receive Qty</th>{% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for it in items %}
+        {% set remaining = it.quantity - (it.qty_received or 0) %}
+        {% set pct = ((it.qty_received or 0) / it.quantity * 100)|round(0)|int if it.quantity > 0 else 0 %}
+        <tr>
+          <td class="fw-700">{{ it.display_name }}</td>
+          <td style="text-align:right">{{ it.quantity }}</td>
+          <td style="text-align:right;color:var(--success);font-weight:600">{{ it.qty_received or 0 }}</td>
+          <td style="text-align:right;font-weight:700;color:{% if remaining <= 0 %}var(--success){% else %}var(--text){% endif %}">
+            {{ remaining|round(2) }}
+          </td>
+          <td style="text-align:right">{% if it.price %}{{ it.price|inr }}{% else %}<span class="muted">—</span>{% endif %}</td>
+          <td style="text-align:right">{% if it.cbm %}{{ it.cbm }}{% else %}<span class="muted">—</span>{% endif %}</td>
+          <td style="text-align:right">{% if it.gross_weight %}{{ it.gross_weight }}{% else %}<span class="muted">—</span>{% endif %}</td>
+          {% if dispatch.status != 'received' %}
+          <td style="text-align:center">
+            {% if remaining > 0 %}
+            <input type="number" name="recv_{{ it.id }}" id="recv_{{ it.id }}"
+                   step="0.01" min="0" max="{{ remaining }}" placeholder="0"
+                   data-max="{{ remaining }}"
+                   style="width:80px;text-align:right;display:inline-block">
+            {% else %}
+            <span class="muted" style="font-size:12px">Done</span>
+            {% endif %}
+          </td>
+          {% endif %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if dispatch.status != 'received' %}
+  <div style="padding:16px 20px;display:flex;gap:10px;border-top:1px solid var(--border)">
+    <button type="submit" class="btn btn-primary">Save Received Quantities</button>
+    <button type="button" class="btn btn-secondary" onclick="fillAll()">Fill All Remaining</button>
+  </div>
+  {% endif %}
+  </form>
+  {% else %}
+  <div class="empty-state" style="padding:30px"><p>No items on this dispatch.</p></div>
+  {% endif %}
+</div>
+
+{% if warnings %}
+<div class="card" style="margin-top:18px;border-left:3px solid var(--warning)">
+  <div class="card-body" style="padding:14px 20px">
+    <strong style="color:var(--warning)">Allocation Warnings</strong>
+    <ul style="margin:6px 0 0 16px;padding:0">
+      {% for w in warnings %}<li style="font-size:13px;color:var(--text-muted)">{{ w }}</li>{% endfor %}
+    </ul>
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}
+{% block scripts %}
+<script>
+function fillAll() {
+  document.querySelectorAll('input[data-max]').forEach(inp => {
+    inp.value = inp.dataset.max;
+  });
+}
+</script>
+{% endblock %}

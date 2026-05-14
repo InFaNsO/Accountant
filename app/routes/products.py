@@ -1,0 +1,274 @@
+from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
+from ..services import product_service
+
+bp = Blueprint("products", __name__, url_prefix="/products")
+
+
+# ── Categories ────────────────────────────────────────────────────────────────
+
+@bp.route("/categories")
+def list_categories():
+    categories = product_service.get_all_categories()
+    return render_template("products/categories.html", categories=categories)
+
+
+@bp.route("/categories/new", methods=["GET", "POST"])
+def new_category():
+    if request.method == "POST":
+        data = request.form.to_dict()
+        if not data.get("name"):
+            flash("Category name is required.", "error")
+            return render_template("products/category_form.html", category=data, action="new")
+        product_service.create_category(data)
+        flash("Category created.", "success")
+        return redirect(url_for("products.list_categories"))
+    return render_template("products/category_form.html", category={}, action="new")
+
+
+@bp.route("/categories/<int:cat_id>/edit", methods=["GET", "POST"])
+def edit_category(cat_id):
+    cat = product_service.get_category(cat_id)
+    if not cat:
+        flash("Category not found.", "error")
+        return redirect(url_for("products.list_categories"))
+    if request.method == "POST":
+        data = request.form.to_dict()
+        if not data.get("name"):
+            flash("Category name is required.", "error")
+            return render_template("products/category_form.html", category=data, action="edit", cat_id=cat_id)
+        product_service.update_category(cat_id, data)
+        flash("Category updated.", "success")
+        return redirect(url_for("products.list_categories"))
+    return render_template("products/category_form.html", category=dict(cat), action="edit", cat_id=cat_id)
+
+
+@bp.route("/categories/<int:cat_id>/delete", methods=["POST"])
+def delete_category(cat_id):
+    product_service.delete_category(cat_id)
+    flash("Category deleted.", "success")
+    return redirect(url_for("products.list_categories"))
+
+
+# ── Products ──────────────────────────────────────────────────────────────────
+
+@bp.route("/")
+def list_products():
+    groups = product_service.get_products_with_subs()
+    categories = product_service.get_all_categories()
+    return render_template("products/list.html", groups=groups, categories=categories)
+
+
+@bp.route("/new", methods=["GET", "POST"])
+def new_product():
+    categories = product_service.get_all_categories()
+    if request.method == "POST":
+        data = request.form.to_dict()
+        if not data.get("name"):
+            flash("Product name is required.", "error")
+            return render_template("products/form.html", product=data, action="new", categories=categories)
+        pid = product_service.create_product(data)
+        flash("Product created.", "success")
+        return redirect(url_for("products.product_detail", product_id=pid))
+    return render_template("products/form.html", product={}, action="new", categories=categories)
+
+
+@bp.route("/<int:product_id>")
+def product_detail(product_id):
+    product = product_service.get_product(product_id)
+    if not product:
+        flash("Product not found.", "error")
+        return redirect(url_for("products.list_products"))
+    subs = product_service.get_sub_products(product_id)
+    movements = product_service.get_stock_movements(product_id=product_id, limit=30)
+    return render_template("products/detail.html", product=product, subs=subs, movements=movements)
+
+
+@bp.route("/<int:product_id>/edit", methods=["GET", "POST"])
+def edit_product(product_id):
+    product = product_service.get_product(product_id)
+    if not product:
+        flash("Product not found.", "error")
+        return redirect(url_for("products.list_products"))
+    categories = product_service.get_all_categories()
+    if request.method == "POST":
+        data = request.form.to_dict()
+        if not data.get("name"):
+            flash("Product name is required.", "error")
+            return render_template("products/form.html", product=data, action="edit",
+                                   product_id=product_id, categories=categories)
+        product_service.update_product(product_id, data)
+        flash("Product updated.", "success")
+        return redirect(url_for("products.product_detail", product_id=product_id))
+    return render_template("products/form.html", product=dict(product), action="edit",
+                           product_id=product_id, categories=categories)
+
+
+@bp.route("/<int:product_id>/delete", methods=["POST"])
+def delete_product(product_id):
+    product_service.delete_product(product_id)
+    flash("Product deleted.", "success")
+    return redirect(url_for("products.list_products"))
+
+
+# ── Stock movement (product level) ────────────────────────────────────────────
+
+@bp.route("/<int:product_id>/stock", methods=["POST"])
+def stock_action(product_id):
+    movement = request.form.get("movement_type")
+    qty_raw  = request.form.get("qty", "0")
+    notes    = request.form.get("notes", "")
+    try:
+        qty = float(qty_raw)
+        if qty <= 0:
+            raise ValueError
+    except ValueError:
+        flash("Enter a valid positive quantity.", "error")
+        return redirect(url_for("products.product_detail", product_id=product_id))
+
+    try:
+        if movement == "add":
+            product_service.add_stock(product_id, None, qty, notes)
+            flash(f"Added {qty} units to stock.", "success")
+        elif movement == "production":
+            product_service.send_to_production(product_id, None, qty, notes)
+            flash(f"Moved {qty} units to production.", "success")
+        elif movement == "dispatch":
+            expected = request.form.get("expected_arrival", "")
+            product_service.dispatch_from_production(product_id, None, qty, expected, notes)
+            flash(f"Dispatched {qty} units (in transit).", "success")
+        elif movement == "arrival":
+            product_service.mark_arrived(product_id, None, qty, notes)
+            flash(f"{qty} units marked as arrived.", "success")
+        else:
+            flash("Unknown movement type.", "error")
+    except Exception as e:
+        flash(f"Error: {e}", "error")
+
+    return redirect(url_for("products.product_detail", product_id=product_id))
+
+
+# ── Sub-products ──────────────────────────────────────────────────────────────
+
+@bp.route("/<int:product_id>/sub/new", methods=["GET", "POST"])
+def new_sub_product(product_id):
+    product = product_service.get_product(product_id)
+    if not product:
+        flash("Product not found.", "error")
+        return redirect(url_for("products.list_products"))
+    if request.method == "POST":
+        data = request.form.to_dict()
+        data["product_id"] = product_id
+        if not data.get("name"):
+            flash("Sub-product name is required.", "error")
+            return render_template("products/sub_form.html", sub=data, action="new", product=product)
+        product_service.create_sub_product(data)
+        flash("Sub-product created.", "success")
+        return redirect(url_for("products.product_detail", product_id=product_id))
+    return render_template("products/sub_form.html", sub={}, action="new", product=product)
+
+
+@bp.route("/<int:product_id>/sub/<int:sub_id>/edit", methods=["GET", "POST"])
+def edit_sub_product(product_id, sub_id):
+    product = product_service.get_product(product_id)
+    sub     = product_service.get_sub_product(sub_id)
+    if not product or not sub:
+        flash("Not found.", "error")
+        return redirect(url_for("products.list_products"))
+    if request.method == "POST":
+        data = request.form.to_dict()
+        data["product_id"] = product_id
+        if not data.get("name"):
+            flash("Sub-product name is required.", "error")
+            return render_template("products/sub_form.html", sub=data, action="edit",
+                                   product=product, sub_id=sub_id)
+        product_service.update_sub_product(sub_id, data)
+        flash("Sub-product updated.", "success")
+        return redirect(url_for("products.product_detail", product_id=product_id))
+    return render_template("products/sub_form.html", sub=dict(sub), action="edit",
+                           product=product, sub_id=sub_id)
+
+
+@bp.route("/<int:product_id>/sub/<int:sub_id>/delete", methods=["POST"])
+def delete_sub_product(product_id, sub_id):
+    product_service.delete_sub_product(sub_id)
+    flash("Sub-product deleted.", "success")
+    return redirect(url_for("products.product_detail", product_id=product_id))
+
+
+@bp.route("/<int:product_id>/sub/<int:sub_id>/stock", methods=["POST"])
+def sub_stock_action(product_id, sub_id):
+    movement = request.form.get("movement_type")
+    qty_raw  = request.form.get("qty", "0")
+    notes    = request.form.get("notes", "")
+    try:
+        qty = float(qty_raw)
+        if qty <= 0:
+            raise ValueError
+    except ValueError:
+        flash("Enter a valid positive quantity.", "error")
+        return redirect(url_for("products.product_detail", product_id=product_id))
+
+    try:
+        if movement == "add":
+            product_service.add_stock(product_id, sub_id, qty, notes)
+            flash(f"Added {qty} units to stock.", "success")
+        elif movement == "production":
+            product_service.send_to_production(product_id, sub_id, qty, notes)
+            flash(f"Moved {qty} units to production.", "success")
+        elif movement == "dispatch":
+            expected = request.form.get("expected_arrival", "")
+            product_service.dispatch_from_production(product_id, sub_id, qty, expected, notes)
+            flash(f"Dispatched {qty} units (in transit).", "success")
+        elif movement == "arrival":
+            product_service.mark_arrived(product_id, sub_id, qty, notes)
+            flash(f"{qty} units marked as arrived.", "success")
+        else:
+            flash("Unknown movement type.", "error")
+    except Exception as e:
+        flash(f"Error: {e}", "error")
+
+    return redirect(url_for("products.product_detail", product_id=product_id))
+
+
+# ── Inline sub-product save ───────────────────────────────────────────────────
+
+@bp.route("/<int:product_id>/sub/<int:sub_id>/inline", methods=["POST"])
+def inline_sub_save(product_id, sub_id):
+    data = request.get_json(silent=True) or {}
+    allowed = {"name", "unit_price", "tax_rate", "min_quantity", "use_parent_price"}
+    update = {k: v for k, v in data.items() if k in allowed}
+    if not update.get("name"):
+        return jsonify({"ok": False, "error": "Name is required"}), 400
+    product_service.update_sub_product(sub_id, update)
+    sub = product_service.get_sub_product(sub_id)
+    return jsonify({"ok": True, "sub": dict(sub)})
+
+
+# ── JSON API for invoice builder ──────────────────────────────────────────────
+
+@bp.route("/api/list")
+def api_list():
+    products = product_service.get_all_products(active_only=True)
+    result = []
+    for p in products:
+        result.append({
+            "id":         p["id"],
+            "name":       p["name"],
+            "sku":        p["sku"],
+            "unit_price": p["unit_price"],
+            "tax_rate":   p["tax_rate"],
+            "type":       "product",
+        })
+        subs = product_service.get_sub_products(p["id"])
+        for s in subs:
+            if not s["is_active"]:
+                continue
+            result.append({
+                "id":         f"sub_{s['id']}",
+                "name":       f"{p['name']} — {s['name']}",
+                "sku":        s["sku"],
+                "unit_price": p["unit_price"] if s["use_parent_price"] else s["unit_price"],
+                "tax_rate":   s["tax_rate"] if s["tax_rate"] else p["tax_rate"],
+                "type":       "sub_product",
+            })
+    return jsonify(result)

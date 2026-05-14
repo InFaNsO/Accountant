@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if action == 'edit' else 'New' }} Product{% endblock %}
+{% block page_title %}{{ 'Edit Product' if action == 'edit' else 'New Product' }}{% endblock %}
+{% block topbar_actions %}
+  {% if action == 'edit' %}
+  <a href="{{ url_for('products.product_detail', product_id=product_id) }}" class="btn btn-secondary">Cancel</a>
+  {% else %}
+  <a href="{{ url_for('products.list_products') }}" class="btn btn-secondary">Cancel</a>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width:680px">
+  <div class="card-header"><span class="card-title">Product Details</span></div>
+  <div class="card-body">
+    <form method="post" action="{{ url_for('products.edit_product', product_id=product_id) if action == 'edit' else url_for('products.new_product') }}">
+      <div class="form-grid form-grid-2">
+
+        <div class="form-group span-2">
+          <label for="name">Product / Service Name *</label>
+          <input type="text" id="name" name="name" value="{{ product.get('name','') }}" required
+                 placeholder="e.g. Cement 53 Grade, Steel Rod 12mm">
+        </div>
+
+        <div class="form-group">
+          <label for="category_id">Category</label>
+          <select id="category_id" name="category_id">
+            <option value="">— Uncategorised —</option>
+            {% for cat in categories %}
+            <option value="{{ cat.id }}" {{ 'selected' if product.get('category_id')|string == cat.id|string }}>
+              {{ cat.name }}
+            </option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="sku">SKU / Code</label>
+          <input type="text" id="sku" name="sku" value="{{ product.get('sku','') }}" placeholder="CEM-53-50KG">
+        </div>
+
+        <div class="form-group">
+          <label for="unit_price">Unit Price (₹) *</label>
+          <input type="number" id="unit_price" name="unit_price"
+                 value="{{ product.get('unit_price', '') }}" step="0.01" min="0" required placeholder="0.00">
+        </div>
+
+        <div class="form-group">
+          <label for="tax_rate">Tax Rate (%)</label>
+          <input type="number" id="tax_rate" name="tax_rate"
+                 value="{{ product.get('tax_rate', 0) }}" step="0.01" min="0" max="100" placeholder="18">
+        </div>
+
+        <div class="form-group">
+          <label for="min_quantity">Min Stock Quantity</label>
+          <input type="number" id="min_quantity" name="min_quantity"
+                 value="{{ product.get('min_quantity', 0) }}" step="0.01" min="0" placeholder="0">
+          <small class="muted">Alert when stock falls below this</small>
+        </div>
+
+        <div class="form-group">
+          <label for="stock_qty">Opening Stock</label>
+          <input type="number" id="stock_qty" name="stock_qty"
+                 value="{{ product.get('stock_qty', 0) }}" step="0.01" min="0" placeholder="0">
+        </div>
+
+        <div class="form-group span-2">
+          <label for="description">Description</label>
+          <textarea id="description" name="description"
+                    placeholder="Optional description shown on invoices…">{{ product.get('description','') }}</textarea>
+        </div>
+
+        {% if action == 'edit' %}
+        <div class="form-group span-2" style="flex-direction:row;align-items:center;gap:10px">
+          <input type="checkbox" id="is_active" name="is_active" value="1" style="width:auto"
+                 {{ 'checked' if product.get('is_active', 1) }}>
+          <label for="is_active" style="margin:0;cursor:pointer">Active (appears in invoice builder)</label>
+        </div>
+        {% endif %}
+
+      </div>
+      <div class="form-actions mt-16">
+        <button type="submit" class="btn btn-primary">{{ 'Save Changes' if action == 'edit' else 'Create Product' }}</button>
+        {% if action == 'edit' %}
+        <a href="{{ url_for('products.product_detail', product_id=product_id) }}" class="btn btn-secondary">Cancel</a>
+        {% else %}
+        <a href="{{ url_for('products.list_products') }}" class="btn btn-secondary">Cancel</a>
+        {% endif %}
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if action == 'edit' else 'New' }} Client{% endblock %}
+{% block page_title %}{{ 'Edit Client' if action == 'edit' else 'New Client' }}{% endblock %}
+{% block topbar_actions %}
+  <a href="{{ url_for('clients.list_clients') }}" class="btn btn-secondary">Cancel</a>
+{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width:760px">
+  <div class="card-header">
+    <span class="card-title">Client Information</span>
+  </div>
+  <div class="card-body">
+    <form method="post" action="{{ url_for('clients.edit_client', client_id=client_id) if action == 'edit' else url_for('clients.new_client') }}">
+      <div class="form-grid form-grid-2">
+
+        <div class="form-group">
+          <label for="name">Full Name *</label>
+          <input type="text" id="name" name="name" value="{{ client.get('name','') }}" required placeholder="Jane Smith">
+        </div>
+
+        <div class="form-group">
+          <label for="company">Company</label>
+          <input type="text" id="company" name="company" value="{{ client.get('company','') }}" placeholder="Acme Corp">
+        </div>
+
+        <div class="form-group">
+          <label for="email">Email</label>
+          <input type="email" id="email" name="email" value="{{ client.get('email','') }}" placeholder="jane@example.com">
+        </div>
+
+        <div class="form-group">
+          <label for="phone">Phone</label>
+          <input type="tel" id="phone" name="phone" value="{{ client.get('phone','') }}" placeholder="+1 555 000 0000">
+        </div>
+
+        <div class="form-group span-2">
+          <label for="address">Street Address</label>
+          <input type="text" id="address" name="address" value="{{ client.get('address','') }}" placeholder="123 Main St">
+        </div>
+
+        <div class="form-group">
+          <label for="city">City</label>
+          <input type="text" id="city" name="city" value="{{ client.get('city','') }}" placeholder="New York">
+        </div>
+
+        <div class="form-group">
+          <label for="country">Country</label>
+          <input type="text" id="country" name="country" value="{{ client.get('country','') }}" placeholder="United States">
+        </div>
+
+        <div class="form-group">
+          <label for="tax_id">Tax ID / VAT Number</label>
+          <input type="text" id="tax_id" name="tax_id" value="{{ client.get('tax_id','') }}" placeholder="US-123456789">
+        </div>
+
+        <div class="form-group">
+          <label for="opening_balance">Opening Balance (₹)</label>
+          <input type="number" id="opening_balance" name="opening_balance"
+                 value="{{ client.get('opening_balance', 0) }}"
+                 step="0.01" placeholder="0.00"
+                 title="Any amount this client owed before you started using Ledger">
+        </div>
+
+        <div class="form-group span-2">
+          <label for="notes">Notes</label>
+          <textarea id="notes" name="notes" placeholder="Any relevant notes about this client…">{{ client.get('notes','') }}</textarea>
+        </div>
+
+      </div>
+      <div class="form-actions mt-16">
+        <button type="submit" class="btn btn-primary">{{ 'Save Changes' if action == 'edit' else 'Create Client' }}</button>
+        <a href="{{ url_for('clients.list_clients') }}" class="btn btn-secondary">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

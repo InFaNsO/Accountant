@@ -1,0 +1,230 @@
+{% extends "base.html" %}
+{% block title %}{{ product.name }}{% endblock %}
+{% block page_title %}{{ product.name }}{% endblock %}
+{% block topbar_actions %}
+  <a href="{{ url_for('products.new_sub_product', product_id=product.id) }}" class="btn btn-secondary">+ Sub-Product</a>
+  <a href="{{ url_for('products.edit_product', product_id=product.id) }}" class="btn btn-secondary">Edit</a>
+  <a href="{{ url_for('products.list_products') }}" class="btn btn-secondary">Back</a>
+{% endblock %}
+
+{% block content %}
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px">
+
+  <!-- Info card -->
+  <div class="card">
+    <div class="card-header"><span class="card-title">Details</span></div>
+    <div class="card-body" style="padding:0">
+      <table style="width:100%;border-collapse:collapse">
+        {% macro row(label, value) %}
+        <tr>
+          <td style="padding:10px 20px;color:var(--text-muted);font-size:13px;width:40%;border-bottom:1px solid var(--border)">{{ label }}</td>
+          <td style="padding:10px 20px;font-weight:600;border-bottom:1px solid var(--border)">{{ value }}</td>
+        </tr>
+        {% endmacro %}
+        {{ row('Category', product.category_name or '—') }}
+        {{ row('SKU', product.sku or '—') }}
+        {{ row('Unit Price', product.unit_price|inr) }}
+        {{ row('Tax Rate', product.tax_rate ~ '%') }}
+        {{ row('Min Quantity', product.min_quantity if product.min_quantity else '—') }}
+        {{ row('Status', 'Active' if product.is_active else 'Inactive') }}
+        {% if product.description %}
+        <tr>
+          <td style="padding:10px 20px;color:var(--text-muted);font-size:13px">Description</td>
+          <td style="padding:10px 20px">{{ product.description }}</td>
+        </tr>
+        {% endif %}
+      </table>
+    </div>
+  </div>
+
+  <!-- Stock card -->
+  <div class="card">
+    <div class="card-header"><span class="card-title">Stock (Parent)</span></div>
+    <div class="card-body">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+        <div style="text-align:center;padding:14px;background:var(--bg-alt);border-radius:var(--radius-sm)">
+          <div style="font-size:22px;font-weight:700;color:{% if product.min_quantity > 0 and product.stock_qty < product.min_quantity %}var(--danger){% else %}var(--success){% endif %}">
+            {{ product.stock_qty }}
+          </div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px">Available</div>
+        </div>
+        <div style="text-align:center;padding:14px;background:var(--bg-alt);border-radius:var(--radius-sm)">
+          <div style="font-size:22px;font-weight:700;color:var(--warning)">{{ product.production_qty or 0 }}</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px">In Production</div>
+        </div>
+        <div style="text-align:center;padding:14px;background:var(--bg-alt);border-radius:var(--radius-sm)">
+          <div style="font-size:22px;font-weight:700;color:var(--primary)">{{ product.in_transit_qty or 0 }}</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px">In Transit</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Sub-products -->
+{% if subs %}
+<div class="card" style="margin-bottom:18px">
+  <div class="card-header">
+    <span class="card-title">Sub-Products ({{ subs|length }})</span>
+    <a href="{{ url_for('products.new_sub_product', product_id=product.id) }}" class="btn btn-secondary btn-sm">+ Add</a>
+  </div>
+  <div class="table-wrap">
+    <table id="subsTable">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th style="text-align:right">Stock</th>
+          <th style="text-align:right">In Transit</th>
+          <th style="text-align:right">In Production</th>
+          <th style="text-align:right">Price (₹)</th>
+          <th style="text-align:right">Tax %</th>
+          <th style="text-align:center;width:120px"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in subs %}
+        {% set min_qty = s.min_quantity or product.min_quantity or 0 %}
+        {% set stock_color =
+          'var(--danger)'   if min_qty > 0 and s.stock_qty < min_qty else
+          'var(--warning)'  if min_qty > 0 and s.stock_qty <= (min_qty * 1.2) else
+          'var(--success)'
+        %}
+        <tr id="sub-row-{{ s.id }}" data-sub-id="{{ s.id }}" data-product-id="{{ product.id }}">
+          <!-- view mode -->
+          <td class="view-cell fw-700">{{ s.name }}</td>
+          <td class="view-cell" style="text-align:right">
+            <span style="font-weight:700;color:{{ stock_color }}">{{ s.stock_qty }}</span>
+            {% if min_qty > 0 %}<div style="font-size:10px;color:var(--text-muted)">min {{ min_qty }}</div>{% endif %}
+          </td>
+          <td class="view-cell" style="text-align:right;color:var(--primary);font-weight:600">{{ s.in_transit_qty or '—' }}</td>
+          <td class="view-cell" style="text-align:right;color:var(--warning);font-weight:600">{{ s.production_qty or '—' }}</td>
+          <td class="view-cell" style="text-align:right">
+            {% if s.use_parent_price %}<span class="muted">↑ parent</span>
+            {% else %}{{ s.unit_price|inr }}{% endif %}
+          </td>
+          <td class="view-cell" style="text-align:right;color:var(--text-muted)">{{ s.tax_rate }}%</td>
+
+          <!-- edit mode (hidden) -->
+          <td class="edit-cell" style="display:none"><input type="text" class="ef-name" value="{{ s.name }}" style="width:100%"></td>
+          <td class="edit-cell" style="display:none;text-align:right"><span style="color:{{ stock_color }};font-weight:700">{{ s.stock_qty }}</span></td>
+          <td class="edit-cell" style="display:none;text-align:right;color:var(--primary)">{{ s.in_transit_qty or '—' }}</td>
+          <td class="edit-cell" style="display:none;text-align:right;color:var(--warning)">{{ s.production_qty or '—' }}</td>
+          <td class="edit-cell" style="display:none"><input type="number" class="ef-price" value="{{ '' if s.use_parent_price else s.unit_price }}" step="0.01" min="0" placeholder="parent" style="width:100%;text-align:right"></td>
+          <td class="edit-cell" style="display:none"><input type="number" class="ef-tax" value="{{ s.tax_rate }}" step="0.01" min="0" max="100" style="width:70px;text-align:right"></td>
+
+          <td style="text-align:center;white-space:nowrap">
+            <!-- view actions -->
+            <span class="view-actions">
+              <button class="btn btn-secondary btn-sm" onclick="startEdit({{ s.id }})">Edit</button>
+              <form method="post" action="{{ url_for('products.delete_sub_product', product_id=product.id, sub_id=s.id) }}"
+                    style="display:inline" onsubmit="return confirm('Delete {{ s.name }}?')">
+                <button class="btn btn-danger btn-sm">Del</button>
+              </form>
+            </span>
+            <!-- edit actions -->
+            <span class="edit-actions" style="display:none">
+              <button class="btn btn-primary btn-sm" onclick="saveEdit({{ s.id }})">Save</button>
+              <button class="btn btn-secondary btn-sm" onclick="discardEdit({{ s.id }})">Discard</button>
+            </span>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="card" style="margin-bottom:18px">
+  <div class="card-header">
+    <span class="card-title">Sub-Products</span>
+    <a href="{{ url_for('products.new_sub_product', product_id=product.id) }}" class="btn btn-secondary btn-sm">+ Add Sub-Product</a>
+  </div>
+  <div class="empty-state" style="padding:30px">
+    <p style="color:var(--text-muted)">No sub-products. Sub-products let you track variants (sizes, grades, types) under this product.</p>
+  </div>
+</div>
+{% endif %}
+
+<!-- Stock history -->
+{% if movements %}
+<div class="card">
+  <div class="card-header"><span class="card-title">Stock History (last 30)</span></div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Type</th>
+          <th style="text-align:right">Qty</th>
+          <th>Notes</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for m in movements %}
+        <tr>
+          <td class="muted font-mono" style="font-size:12px">{{ m.created_at[:16] if m.created_at else '—' }}</td>
+          <td>
+            {% if m.movement_type == 'add' %}<span class="badge badge-active">Added</span>
+            {% elif m.movement_type == 'production' %}<span class="badge" style="background:rgba(245,158,11,.15);color:#d97706">Production</span>
+            {% elif m.movement_type == 'dispatch' %}<span class="badge" style="background:rgba(99,102,241,.15);color:#6366f1">Dispatched</span>
+            {% elif m.movement_type == 'arrival' %}<span class="badge" style="background:rgba(16,185,129,.15);color:#10b981">Arrived</span>
+            {% else %}<span class="badge">{{ m.movement_type }}</span>{% endif %}
+          </td>
+          <td style="text-align:right;font-weight:700">{{ m.quantity }}</td>
+          <td class="muted">{{ m.notes or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+function startEdit(subId) {
+  const row = document.getElementById('sub-row-' + subId);
+  row.querySelectorAll('.view-cell').forEach(c => c.style.display = 'none');
+  row.querySelectorAll('.edit-cell').forEach(c => c.style.display = '');
+  row.querySelector('.view-actions').style.display = 'none';
+  row.querySelector('.edit-actions').style.display = '';
+}
+
+function discardEdit(subId) {
+  const row = document.getElementById('sub-row-' + subId);
+  row.querySelectorAll('.view-cell').forEach(c => c.style.display = '');
+  row.querySelectorAll('.edit-cell').forEach(c => c.style.display = 'none');
+  row.querySelector('.view-actions').style.display = '';
+  row.querySelector('.edit-actions').style.display = 'none';
+}
+
+async function saveEdit(subId) {
+  const row = document.getElementById('sub-row-' + subId);
+  const productId = row.dataset.productId;
+  const name = row.querySelector('.ef-name').value.trim();
+  const priceVal = row.querySelector('.ef-price').value;
+  const taxVal = row.querySelector('.ef-tax').value;
+
+  if (!name) { alert('Name is required'); return; }
+
+  const payload = {
+    name,
+    unit_price: priceVal === '' ? null : parseFloat(priceVal),
+    use_parent_price: priceVal === '' ? 1 : 0,
+    tax_rate: taxVal === '' ? 0 : parseFloat(taxVal),
+  };
+
+  const res = await fetch(`/products/${productId}/sub/${subId}/inline`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const json = await res.json();
+  if (!json.ok) { alert(json.error || 'Save failed'); return; }
+
+  // Reload the page to reflect updated values
+  location.reload();
+}
+</script>
+{% endblock %}

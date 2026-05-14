@@ -1,0 +1,194 @@
+{% extends "base.html" %}
+{% block title %}Import Statement{% endblock %}
+{% block page_title %}Import Bank Statement{% endblock %}
+{% block topbar_actions %}
+  <a href="{{ url_for('payments.new_payment') }}" class="btn btn-secondary">Manual Payment</a>
+{% endblock %}
+
+{% block content %}
+
+{% if not show_table %}
+<!-- Step 1: Upload -->
+<div class="card" style="max-width:560px">
+  <div class="card-header"><span class="card-title">Upload HDFC Statement (.xls)</span></div>
+  <div class="card-body">
+    <form method="post" enctype="multipart/form-data" action="{{ url_for('payments.import_payments') }}">
+      <div class="form-group" style="margin-bottom:20px">
+        <label for="statement">Statement File</label>
+        <input type="file" id="statement" name="statement" accept=".xls,.xlsx" required
+               style="padding:8px;border:2px dashed var(--border);background:var(--bg);cursor:pointer">
+        <div style="font-size:12px;color:var(--text-muted);margin-top:6px">
+          Supports HDFC Bank statement format. Only credit (deposit) entries will be shown.
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary">Parse Statement</button>
+    </form>
+  </div>
+</div>
+
+{% else %}
+<!-- Step 2: Review & assign -->
+<form method="post" action="{{ url_for('payments.import_payments') }}">
+  <input type="hidden" name="action" value="save">
+
+  <div class="card" style="margin-bottom:18px">
+    <div class="card-header">
+      <span class="card-title">Review Transactions — {{ rows|length }} credit entries found</span>
+      <div style="display:flex;gap:8px">
+        <button type="button" class="btn btn-secondary btn-sm" onclick="selectAll(true)">Select all</button>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="selectAll(false)">Deselect all</button>
+        <button type="submit" class="btn btn-primary">Import Selected</button>
+      </div>
+    </div>
+
+    {% if rows %}
+    <div class="table-wrap" style="overflow-x:auto">
+      <table id="importTable" style="table-layout:fixed;width:100%">
+        <colgroup>
+          <col id="col-check" style="width:36px">
+          <col id="col-date"   style="width:110px">
+          <col id="col-amount" style="width:120px">
+          <col id="col-narr"   style="width:260px">
+          <col id="col-client" style="width:230px">
+          <col id="col-ref"    style="width:160px">
+        </colgroup>
+        <thead>
+          <tr>
+            <th style="width:36px;padding:0 8px">
+              <input type="checkbox" id="checkAll" onchange="selectAll(this.checked)" checked>
+            </th>
+            <th class="resizable" data-col="col-date">Date</th>
+            <th class="resizable" data-col="col-amount" style="text-align:right">Amount</th>
+            <th class="resizable" data-col="col-narr">Narration</th>
+            <th class="resizable" data-col="col-client">Assign to Client</th>
+            <th class="resizable" data-col="col-ref">Reference</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for i, row in rows|enumerate %}
+          <tr id="row-{{ i }}">
+            <td style="padding:0 8px">
+              <input type="checkbox" class="row-check" name="include_{{ i }}" value="1" checked
+                     onchange="toggleRow({{ i }}, this.checked)">
+              <input type="hidden" name="date_{{ i }}"      value="{{ row.date }}">
+              <input type="hidden" name="narration_{{ i }}" value="{{ row.narration }}">
+              <input type="hidden" name="ref_{{ i }}"       value="{{ row.reference }}">
+              <input type="hidden" name="amount_{{ i }}"    value="{{ row.amount }}">
+            </td>
+            <td style="white-space:nowrap;font-size:13px">{{ row.date }}</td>
+            <td style="text-align:right;font-weight:700;color:var(--success);font-size:13px">{{ row.amount|inr }}</td>
+            <td style="font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                title="{{ row.narration }}">{{ row.narration }}</td>
+            <td>
+              <div style="display:flex;flex-direction:column;gap:3px">
+                <input type="text" class="client-search-input" placeholder="Search client…"
+                       style="font-size:12px;padding:4px 6px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);color:var(--text);width:100%;box-sizing:border-box"
+                       oninput="filterClients(this, 'client_{{ i }}')">
+                <select name="client_{{ i }}" id="client_{{ i }}"
+                        style="width:100%;font-size:12px"
+                        onchange="updateSearchLabel(this, {{ i }})">
+                  <option value="">— ignore —</option>
+                  {% for c in clients %}
+                  <option value="{{ c.id }}">{{ c.name }}{% if c.company %} ({{ c.company }}){% endif %}</option>
+                  {% endfor %}
+                </select>
+              </div>
+            </td>
+            <td class="muted font-mono" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                title="{{ row.reference }}">{{ row.reference[:24] if row.reference else '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty-state"><p>No credit entries found in the uploaded statement.</p></div>
+    {% endif %}
+
+    <div style="padding:16px 22px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:10px">
+      <a href="{{ url_for('payments.import_payments') }}" class="btn btn-secondary">Upload different file</a>
+      <button type="submit" class="btn btn-primary">Import Selected</button>
+    </div>
+  </div>
+</form>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+/* ── Row select/deselect ── */
+function selectAll(checked) {
+  document.querySelectorAll('.row-check').forEach(cb => {
+    cb.checked = checked;
+    toggleRow(cb.name.replace('include_', ''), checked);
+  });
+  document.getElementById('checkAll').checked = checked;
+}
+
+function toggleRow(idx, checked) {
+  const sel = document.getElementById('client_' + idx);
+  if (sel) sel.disabled = !checked;
+  const row = document.getElementById('row-' + idx);
+  if (row) row.style.opacity = checked ? '1' : '0.35';
+}
+
+/* ── Client search filter ── */
+function filterClients(input, selectId) {
+  const sel = document.getElementById(selectId);
+  if (!sel) return;
+  const q = input.value.toLowerCase().trim();
+  for (const opt of sel.options) {
+    if (opt.value === '') {
+      opt.style.display = '';
+      continue;
+    }
+    opt.style.display = opt.text.toLowerCase().includes(q) ? '' : 'none';
+  }
+  /* Reset to "ignore" if current selection is hidden */
+  const cur = sel.options[sel.selectedIndex];
+  if (cur && cur.style.display === 'none') {
+    sel.value = '';
+  }
+  /* Show the dropdown size so filtered results are visible */
+  const visible = Array.from(sel.options).filter(o => o.style.display !== 'none').length;
+  sel.size = q ? Math.min(visible, 6) : 1;
+}
+
+/* ── Resizable columns ── */
+(function initResizable() {
+  const ths = document.querySelectorAll('th.resizable');
+  ths.forEach(th => {
+    const handle = document.createElement('div');
+    handle.style.cssText = [
+      'position:absolute', 'right:0', 'top:0', 'width:6px', 'height:100%',
+      'cursor:col-resize', 'user-select:none', 'z-index:10',
+      'background:transparent',
+    ].join(';');
+    th.style.position = 'relative';
+    th.appendChild(handle);
+
+    let startX, startW, col;
+    handle.addEventListener('mousedown', e => {
+      col     = document.getElementById(th.dataset.col);
+      startX  = e.clientX;
+      startW  = col ? col.offsetWidth : th.offsetWidth;
+      e.preventDefault();
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup',   onUp);
+      handle.style.background = 'var(--primary)';
+    });
+
+    function onMove(e) {
+      const w = Math.max(60, startW + e.clientX - startX);
+      if (col) col.style.width = w + 'px';
+    }
+    function onUp() {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup',   onUp);
+      handle.style.background = 'transparent';
+    }
+  });
+})();
+</script>
+{% endblock %}
