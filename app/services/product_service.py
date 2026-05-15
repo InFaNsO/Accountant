@@ -289,6 +289,40 @@ def get_stock_movements(product_id=None, sub_id=None, limit=50):
     ).fetchall()
 
 
+def get_stock_history(product_id=None, sub_id=None, movement_types=None, limit=100):
+    """Return enriched stock movement history joined with dispatches/invoices/clients."""
+    db = get_db()
+    where_parts = []
+    params = []
+    if sub_id:
+        where_parts.append("sm.sub_product_id=?")
+        params.append(sub_id)
+    elif product_id:
+        where_parts.append("sm.product_id=?")
+        params.append(product_id)
+    if movement_types:
+        placeholders = ",".join("?" for _ in movement_types)
+        where_parts.append(f"sm.movement_type IN ({placeholders})")
+        params.extend(movement_types)
+    where_clause = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+    params.append(limit)
+    rows = db.execute(
+        f"""SELECT sm.*,
+                   d.name  AS dispatch_name,
+                   i.invoice_number,
+                   c.name  AS client_name
+            FROM stock_movements sm
+            LEFT JOIN dispatches d  ON sm.dispatch_id = d.id
+            LEFT JOIN invoices   i  ON sm.invoice_id  = i.id
+            LEFT JOIN clients    c  ON i.client_id    = c.id
+            {where_clause}
+            ORDER BY sm.created_at DESC
+            LIMIT ?""",
+        params,
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 # ── Dashboard stock alerts ────────────────────────────────────────────────────
 
 def get_stock_alerts():

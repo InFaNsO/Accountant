@@ -212,6 +212,12 @@ async function saveAllSp() {
   btn.textContent = 'Save Changes';
   if (dirtySpRows.size === 0) btn.style.display = 'none';
 }
+
+window.__dirtyCheck = () => ({
+  isDirty: dirtySpRows.size > 0,
+  label: 'Supplier price list changes',
+  save: saveAllSp,
+});
 </script>
 
 <style>

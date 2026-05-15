@@ -127,5 +127,91 @@
 
 <script src="{{ url_for('static', filename='js/main.js') }}"></script>
 {% block scripts %}{% endblock %}
+
+<!-- ── Unsaved-changes modal ──────────────────────────────────────────────── -->
+<div id="unsavedModal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.45);align-items:center;justify-content:center">
+  <div style="background:var(--bg);border-radius:var(--radius);padding:32px 28px;max-width:420px;width:90%;box-shadow:0 8px 40px rgba(0,0,0,.35)">
+    <div style="font-size:18px;font-weight:700;margin-bottom:8px">Unsaved Changes</div>
+    <div id="unsavedModalMsg" style="font-size:14px;color:var(--text-muted);margin-bottom:24px">
+      You have unsaved changes. What would you like to do?
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <button id="unsavedSaveLeave" class="btn btn-primary"
+              style="display:none" onclick="__unsavedSaveAndLeave()">
+        💾 Save Changes and Leave
+      </button>
+      <button class="btn btn-secondary" onclick="__unsavedDiscard()">
+        🚪 Discard and Leave
+      </button>
+      <button class="btn btn-secondary" onclick="__unsavedStay()">
+        ✏️ Don't Leave — Continue Editing
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  let _pendingHref = null;
+
+  function _getDirty() {
+    if (typeof window.__dirtyCheck === 'function') return window.__dirtyCheck();
+    return { isDirty: false };
+  }
+
+  // Intercept all anchor clicks
+  document.addEventListener('click', function (e) {
+    const anchor = e.target.closest('a[href]');
+    if (!anchor) return;
+    const href = anchor.getAttribute('href');
+    if (!href || href.startsWith('#') || href.startsWith('javascript')) return;
+    // Skip confirm-inline forms (handled by the form itself)
+    if (anchor.closest('.confirm-inline')) return;
+
+    const dirty = _getDirty();
+    if (!dirty.isDirty) return;
+
+    e.preventDefault();
+    _pendingHref = anchor.href;
+
+    const modal   = document.getElementById('unsavedModal');
+    const saveBtn = document.getElementById('unsavedSaveLeave');
+    saveBtn.style.display = dirty.save ? '' : 'none';
+    modal.style.display   = 'flex';
+  }, true);
+
+  // beforeunload for browser back / address bar navigation
+  window.addEventListener('beforeunload', function (e) {
+    const dirty = _getDirty();
+    if (dirty.isDirty) {
+      e.preventDefault();
+      e.returnValue = '';
+    }
+  });
+
+  window.__unsavedSaveAndLeave = async function () {
+    const dirty = _getDirty();
+    if (dirty.save) {
+      document.getElementById('unsavedModal').style.display = 'none';
+      await dirty.save();
+    }
+    window.location.href = _pendingHref;
+  };
+
+  window.__unsavedDiscard = function () {
+    document.getElementById('unsavedModal').style.display = 'none';
+    // Temporarily disable dirty check so beforeunload doesn't fire
+    const orig = window.__dirtyCheck;
+    window.__dirtyCheck = () => ({ isDirty: false });
+    window.location.href = _pendingHref;
+    setTimeout(() => { window.__dirtyCheck = orig; }, 500);
+  };
+
+  window.__unsavedStay = function () {
+    document.getElementById('unsavedModal').style.display = 'none';
+    _pendingHref = null;
+  };
+})();
+</script>
 </body>
 </html>

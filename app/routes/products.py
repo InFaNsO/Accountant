@@ -79,8 +79,22 @@ def product_detail(product_id):
         flash("Product not found.", "error")
         return redirect(url_for("products.list_products"))
     subs = product_service.get_sub_products(product_id)
-    movements = product_service.get_stock_movements(product_id=product_id, limit=30)
-    return render_template("products/detail.html", product=product, subs=subs, movements=movements)
+    # Only load stock history for products with no sub-products
+    warehouse_history = production_history = transit_history = []
+    if not subs:
+        warehouse_history  = product_service.get_stock_history(
+            product_id=product_id,
+            movement_types=["add", "arrival", "transit_arrival", "correction"])
+        production_history = product_service.get_stock_history(
+            product_id=product_id,
+            movement_types=["production"])
+        transit_history    = product_service.get_stock_history(
+            product_id=product_id,
+            movement_types=["dispatch", "transit_dispatch"])
+    return render_template("products/detail.html", product=product, subs=subs,
+                           warehouse_history=warehouse_history,
+                           production_history=production_history,
+                           transit_history=transit_history)
 
 
 @bp.route("/<int:product_id>/edit", methods=["GET", "POST"])
@@ -201,16 +215,20 @@ def delete_sub_product(product_id, sub_id):
 
 @bp.route("/<int:product_id>/sub/<int:sub_id>/stock", methods=["POST"])
 def sub_stock_action(product_id, sub_id):
-    movement = request.form.get("movement_type")
-    qty_raw  = request.form.get("qty", "0")
-    notes    = request.form.get("notes", "")
+    movement  = request.form.get("movement_type")
+    qty_raw   = request.form.get("qty", "0")
+    notes     = request.form.get("notes", "")
+    from_page = request.form.get("from_page", "product")  # 'sub' or 'product'
     try:
         qty = float(qty_raw)
         if qty <= 0:
             raise ValueError
     except ValueError:
         flash("Enter a valid positive quantity.", "error")
-        return redirect(url_for("products.product_detail", product_id=product_id))
+        dest = url_for("products.sub_detail", product_id=product_id, sub_id=sub_id) \
+               if from_page == "sub" else \
+               url_for("products.product_detail", product_id=product_id)
+        return redirect(dest)
 
     try:
         if movement == "add":
@@ -231,7 +249,34 @@ def sub_stock_action(product_id, sub_id):
     except Exception as e:
         flash(f"Error: {e}", "error")
 
+    if from_page == "sub":
+        return redirect(url_for("products.sub_detail", product_id=product_id, sub_id=sub_id))
     return redirect(url_for("products.product_detail", product_id=product_id))
+
+
+# ── Sub-product detail page ───────────────────────────────────────────────────
+
+@bp.route("/<int:product_id>/sub/<int:sub_id>")
+def sub_detail(product_id, sub_id):
+    product = product_service.get_product(product_id)
+    sub     = product_service.get_sub_product(sub_id)
+    if not product or not sub:
+        flash("Not found.", "error")
+        return redirect(url_for("products.list_products"))
+    warehouse_history  = product_service.get_stock_history(
+        sub_id=sub_id,
+        movement_types=["add", "arrival", "transit_arrival", "correction"])
+    production_history = product_service.get_stock_history(
+        sub_id=sub_id,
+        movement_types=["production"])
+    transit_history    = product_service.get_stock_history(
+        sub_id=sub_id,
+        movement_types=["dispatch", "transit_dispatch"])
+    return render_template("products/sub_detail.html",
+                           product=product, sub=sub,
+                           warehouse_history=warehouse_history,
+                           production_history=production_history,
+                           transit_history=transit_history)
 
 
 # ── Inline sub-product save ───────────────────────────────────────────────────

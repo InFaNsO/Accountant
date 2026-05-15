@@ -2,7 +2,9 @@
 {% block title %}{{ product.name }}{% endblock %}
 {% block page_title %}{{ product.name }}{% endblock %}
 {% block topbar_actions %}
+  {% if subs %}
   <a href="{{ url_for('products.new_sub_product', product_id=product.id) }}" class="btn btn-secondary">+ Sub-Product</a>
+  {% endif %}
   <a href="{{ url_for('products.edit_product', product_id=product.id) }}" class="btn btn-secondary">Edit</a>
   <a href="{{ url_for('products.list_products') }}" class="btn btn-secondary">Back</a>
 {% endblock %}
@@ -37,9 +39,9 @@
     </div>
   </div>
 
-  <!-- Stock card -->
+  <!-- Stock summary card -->
   <div class="card">
-    <div class="card-header"><span class="card-title">Stock (Parent)</span></div>
+    <div class="card-header"><span class="card-title">Stock{% if subs %} (Parent){% endif %}</span></div>
     <div class="card-body">
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
         <div style="text-align:center;padding:14px;background:var(--bg-alt);border-radius:var(--radius-sm)">
@@ -61,13 +63,13 @@
   </div>
 </div>
 
-<!-- Sub-products -->
+<!-- Sub-products table (only when subs exist) -->
 {% if subs %}
 <div class="card" style="margin-bottom:18px">
   <div class="card-header">
     <div>
       <span class="card-title">Sub-Products ({{ subs|length }})</span>
-      <span style="font-size:11px;color:var(--text-muted);margin-left:10px">Double-click Name or Price to edit</span>
+      <span style="font-size:11px;color:var(--text-muted);margin-left:10px">Double-click Name or Price to edit · Click name to view details</span>
     </div>
     <div style="display:flex;gap:8px;align-items:center">
       <button id="subsSaveBtn" class="btn btn-primary btn-sm" onclick="saveAllSubs()" style="display:none">Save Changes</button>
@@ -96,7 +98,19 @@
           'var(--success)'
         %}
         <tr id="sub-row-{{ s.id }}" data-sub-id="{{ s.id }}" data-product-id="{{ product.id }}">
-          <td class="fw-700 sub-editable" data-field="name" data-val="{{ s.name }}" title="Double-click to edit" ondblclick="cellEdit(this)">{{ s.name }}</td>
+          <td class="fw-700">
+            <div style="display:flex;align-items:center;gap:6px">
+              <a href="{{ url_for('products.sub_detail', product_id=product.id, sub_id=s.id) }}"
+                 class="sub-name-link"
+                 style="color:var(--text);text-decoration:none;font-weight:700"
+                 title="View sub-product detail">{{ s.name }}</a>
+              <span class="sub-edit-hint sub-editable"
+                    data-field="name" data-val="{{ s.name }}"
+                    title="Double-click to rename"
+                    ondblclick="cellEdit(this)"
+                    style="font-size:10px;color:var(--text-muted);cursor:cell;padding:1px 4px;border-radius:3px;border:1px dashed transparent">✎</span>
+            </div>
+          </td>
           <td style="text-align:right">
             <span style="font-weight:700;color:{{ stock_color }}">{{ s.stock_qty }}</span>
             {% if min_qty > 0 %}<div style="font-size:10px;color:var(--text-muted)">min {{ min_qty }}</div>{% endif %}
@@ -119,49 +133,147 @@
     </table>
   </div>
 </div>
+
+<!-- No subs: show stock action form + tabbed history -->
 {% else %}
+
 <div class="card" style="margin-bottom:18px">
   <div class="card-header">
-    <span class="card-title">Sub-Products</span>
+    <span class="card-title">Stock Actions</span>
     <a href="{{ url_for('products.new_sub_product', product_id=product.id) }}" class="btn btn-secondary btn-sm">+ Add Sub-Product</a>
   </div>
-  <div class="empty-state" style="padding:30px">
-    <p style="color:var(--text-muted)">No sub-products. Sub-products let you track variants (sizes, grades, types) under this product.</p>
+  <div class="card-body">
+    <form method="post" action="{{ url_for('products.stock_action', product_id=product.id) }}">
+      <div class="form-grid form-grid-2" style="margin-bottom:16px">
+        <div class="form-group">
+          <label>Movement Type</label>
+          <select name="movement_type">
+            <option value="add">Add to Warehouse</option>
+            <option value="production">Send to Production</option>
+            <option value="dispatch">Dispatch from Production</option>
+            <option value="arrival">Mark as Arrived</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Quantity *</label>
+          <input type="number" name="qty" step="0.01" min="0.01" placeholder="0" required>
+        </div>
+        <div class="form-group">
+          <label>Expected Arrival (for Dispatch)</label>
+          <input type="date" name="expected_arrival">
+        </div>
+        <div class="form-group">
+          <label>Notes</label>
+          <input type="text" name="notes" placeholder="Optional…">
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary btn-sm">Apply</button>
+    </form>
   </div>
 </div>
-{% endif %}
 
-<!-- Stock history -->
-{% if movements %}
+<!-- 3-tab stock history -->
 <div class="card">
-  <div class="card-header"><span class="card-title">Stock History (last 30)</span></div>
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Date</th>
-          <th>Type</th>
-          <th style="text-align:right">Qty</th>
-          <th>Notes</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for m in movements %}
-        <tr>
-          <td class="muted font-mono" style="font-size:12px">{{ m.created_at[:16] if m.created_at else '—' }}</td>
-          <td>
-            {% if m.movement_type == 'add' %}<span class="badge badge-active">Added</span>
-            {% elif m.movement_type == 'production' %}<span class="badge" style="background:rgba(245,158,11,.15);color:#d97706">Production</span>
-            {% elif m.movement_type == 'dispatch' %}<span class="badge" style="background:rgba(99,102,241,.15);color:#6366f1">Dispatched</span>
-            {% elif m.movement_type == 'arrival' %}<span class="badge" style="background:rgba(16,185,129,.15);color:#10b981">Arrived</span>
-            {% else %}<span class="badge">{{ m.movement_type }}</span>{% endif %}
-          </td>
-          <td style="text-align:right;font-weight:700">{{ m.quantity }}</td>
-          <td class="muted">{{ m.notes or '—' }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+  <div class="card-header" style="gap:0;padding:0">
+    <div style="display:flex;width:100%">
+      <button class="stock-tab-btn active" onclick="switchTab('warehouse')"
+              style="flex:1;padding:12px 16px;background:none;border:none;border-bottom:2px solid var(--primary);font-weight:600;font-size:13px;cursor:pointer;color:var(--primary)">
+        🏭 Warehouse
+      </button>
+      <button class="stock-tab-btn" onclick="switchTab('production')"
+              style="flex:1;padding:12px 16px;background:none;border:none;border-bottom:2px solid transparent;font-weight:600;font-size:13px;cursor:pointer;color:var(--text-muted)">
+        ⚙️ Production
+      </button>
+      <button class="stock-tab-btn" onclick="switchTab('transit')"
+              style="flex:1;padding:12px 16px;background:none;border:none;border-bottom:2px solid transparent;font-weight:600;font-size:13px;cursor:pointer;color:var(--text-muted)">
+        🚢 Transit
+      </button>
+    </div>
+  </div>
+
+  <!-- Warehouse tab -->
+  <div id="tab-warehouse" class="stock-tab-pane">
+    {% if warehouse_history %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Date</th><th>Action</th><th style="text-align:right">Qty</th><th>Notes</th></tr></thead>
+        <tbody>
+          {% for m in warehouse_history %}
+          <tr>
+            <td class="muted font-mono" style="font-size:12px">{{ m.created_at[:16] if m.created_at else '—' }}</td>
+            <td>
+              {% if m.movement_type in ('arrival', 'transit_arrival') %}
+                <span class="badge" style="background:rgba(16,185,129,.15);color:#10b981">Dispatch Received</span>
+                {% if m.dispatch_name %}<span class="muted" style="font-size:12px;margin-left:6px">{{ m.dispatch_name }}</span>{% endif %}
+              {% elif m.movement_type == 'add' %}
+                <span class="badge badge-active">Correction / Added</span>
+              {% elif m.invoice_number %}
+                <span class="badge badge-sent">Sale</span>
+                <span class="muted" style="font-size:12px;margin-left:6px">{{ m.client_name or '' }} — {{ m.invoice_number }}</span>
+              {% else %}
+                <span class="badge">{{ m.movement_type }}</span>
+              {% endif %}
+            </td>
+            <td style="text-align:right;font-weight:700;color:var(--success)">+{{ m.quantity }}</td>
+            <td class="muted" style="font-size:12px">{{ m.notes or '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty-state" style="padding:28px"><p>No warehouse history yet.</p></div>
+    {% endif %}
+  </div>
+
+  <!-- Production tab -->
+  <div id="tab-production" class="stock-tab-pane" style="display:none">
+    {% if production_history %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Date</th><th>Action</th><th style="text-align:right">Qty</th><th>Notes</th></tr></thead>
+        <tbody>
+          {% for m in production_history %}
+          <tr>
+            <td class="muted font-mono" style="font-size:12px">{{ m.created_at[:16] if m.created_at else '—' }}</td>
+            <td><span class="badge" style="background:rgba(245,158,11,.15);color:#d97706">Sent to Production</span></td>
+            <td style="text-align:right;font-weight:700;color:var(--warning)">{{ m.quantity }}</td>
+            <td class="muted" style="font-size:12px">{{ m.notes or '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty-state" style="padding:28px"><p>No production history yet.</p></div>
+    {% endif %}
+  </div>
+
+  <!-- Transit tab -->
+  <div id="tab-transit" class="stock-tab-pane" style="display:none">
+    {% if transit_history %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Date</th><th>Action</th><th style="text-align:right">Qty</th><th>Expected Arrival</th><th>Notes</th></tr></thead>
+        <tbody>
+          {% for m in transit_history %}
+          <tr>
+            <td class="muted font-mono" style="font-size:12px">{{ m.created_at[:16] if m.created_at else '—' }}</td>
+            <td>
+              <span class="badge" style="background:rgba(99,102,241,.15);color:#6366f1">Dispatched</span>
+              {% if m.dispatch_name %}<span class="muted" style="font-size:12px;margin-left:6px">{{ m.dispatch_name }}</span>{% endif %}
+            </td>
+            <td style="text-align:right;font-weight:700;color:var(--primary)">{{ m.quantity }}</td>
+            <td class="muted" style="font-size:12px">{{ m.expected_arrival or '—' }}</td>
+            <td class="muted" style="font-size:12px">{{ m.notes or '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty-state" style="padding:28px"><p>No transit history yet.</p></div>
+    {% endif %}
   </div>
 </div>
 {% endif %}
@@ -169,10 +281,26 @@
 
 {% block scripts %}
 <script>
+/* ── Tab switching ──────────────────────────────────────────────────────────── */
+function switchTab(name) {
+  document.querySelectorAll('.stock-tab-pane').forEach(p => p.style.display = 'none');
+  document.querySelectorAll('.stock-tab-btn').forEach(b => {
+    b.style.borderBottomColor = 'transparent';
+    b.style.color = 'var(--text-muted)';
+  });
+  const pane = document.getElementById('tab-' + name);
+  const btn  = [...document.querySelectorAll('.stock-tab-btn')]
+                 .find(b => b.getAttribute('onclick').includes("'" + name + "'"));
+  if (pane) pane.style.display = '';
+  if (btn)  { btn.style.borderBottomColor = 'var(--primary)'; btn.style.color = 'var(--primary)'; }
+}
+
+/* ── Inline sub-product cell editing ────────────────────────────────────────── */
 const dirtySubs = new Set();
 
 function cellEdit(cell) {
   if (cell.querySelector('input')) return;
+  // If this is the pencil icon span, find the associated name cell
   const row    = cell.closest('tr');
   const field  = cell.dataset.field;
   const val    = cell.dataset.val !== undefined ? String(cell.dataset.val) : '';
@@ -199,13 +327,19 @@ function cellEdit(cell) {
     const newVal = inp.value.trim();
     cell.dataset.val = newVal;
     refreshSubCell(cell, field, newVal);
+    // For name field: also update the link text in the same row
+    if (field === 'name') {
+      const link = row.querySelector('.sub-name-link');
+      if (link) link.textContent = newVal || '—';
+      cell.textContent = '✎';
+    }
     markSubDirty(row);
   });
 }
 
 function refreshSubCell(cell, field, val) {
   if (field === 'name') {
-    cell.textContent = val || '—';
+    cell.textContent = '✎';
   } else if (field === 'price') {
     if (val === '' || val === null || val === undefined) {
       cell.innerHTML = '<span class="muted">↑ parent</span>';
@@ -244,16 +378,18 @@ async function saveAllSubs() {
   for (const row of [...dirtySubs]) {
     const subId     = row.dataset.subId;
     const productId = row.dataset.productId;
-    const nameCell  = row.querySelector('[data-field="name"]');
-    const priceCell = row.querySelector('[data-field="price"]');
-    const name      = nameCell  ? nameCell.dataset.val.trim()  : '';
+    const nameEditCell = row.querySelector('[data-field="name"]');
+    const priceCell    = row.querySelector('[data-field="price"]');
+    // Get name from the link element (the actual visible text)
+    const nameLink  = row.querySelector('.sub-name-link');
+    const name      = nameLink ? nameLink.textContent.trim() : (nameEditCell ? nameEditCell.dataset.val.trim() : '');
     const priceVal  = priceCell ? priceCell.dataset.val.trim() : '';
 
     if (!name) { showSubError(row, 'Name is required'); continue; }
 
     const payload = {
       name,
-      unit_price:      priceVal === '' ? null : parseFloat(priceVal),
+      unit_price:       priceVal === '' ? null : parseFloat(priceVal),
       use_parent_price: priceVal === '' ? 1 : 0,
     };
     try {
@@ -271,11 +407,20 @@ async function saveAllSubs() {
   btn.textContent = 'Save Changes';
   if (dirtySubs.size === 0) btn.style.display = 'none';
 }
+
+/* ── Dirty check registration ──────────────────────────────────────────────── */
+window.__dirtyCheck = () => ({
+  isDirty: dirtySubs.size > 0,
+  label: 'Sub-product changes',
+  save: saveAllSubs,
+});
 </script>
 
 <style>
 .sub-editable          { cursor: cell; }
-.sub-editable:hover    { background: rgba(99,102,241,.05); }
+.sub-edit-hint:hover   { border-color: var(--border) !important; background: var(--bg-alt); }
+.sub-name-link:hover   { color: var(--accent) !important; text-decoration: underline !important; }
 .row-dirty             { background: rgba(245,158,11,.06) !important; box-shadow: inset 3px 0 0 var(--warning); }
+.stock-tab-btn:hover   { background: var(--bg-alt); }
 </style>
 {% endblock %}

@@ -151,6 +151,15 @@ def create_dispatch(data, items):
         _update_qty(db, product_id, sub_product_id, "production_qty", -effective)
         _update_qty(db, product_id, sub_product_id, "in_transit_qty", +effective)
 
+        # Record stock movement for transit dispatch
+        db.execute(
+            """INSERT INTO stock_movements
+                   (product_id, sub_product_id, movement_type, quantity, notes, dispatch_id, expected_arrival)
+               VALUES (?,?,'transit_dispatch',?,?,?,?)""",
+            (product_id, sub_product_id, effective,
+             data.get("notes"), dispatch_id, data.get("expected_arrival") or None),
+        )
+
     db.commit()
     return dispatch_id, warnings
 
@@ -212,6 +221,14 @@ def receive_items(dispatch_id, received):
         )
         _update_qty(db, row["product_id"], row["sub_product_id"], "in_transit_qty", -qty)
         _update_qty(db, row["product_id"], row["sub_product_id"], "stock_qty",      +qty)
+        # Record stock movement for dispatch received
+        db.execute(
+            """INSERT INTO stock_movements
+                   (product_id, sub_product_id, movement_type, quantity, notes, dispatch_id)
+               VALUES (?,?,'transit_arrival',?,?,?)""",
+            (row["product_id"], row["sub_product_id"], qty,
+             f"Received from dispatch #{dispatch_id}", dispatch_id),
+        )
 
     # Refresh dispatch status
     totals = db.execute(

@@ -8,7 +8,7 @@
 <div class="card">
   <div class="card-header"><span class="card-title">Order Details</span></div>
   <div class="card-body">
-    <form method="post" action="{{ url_for('purchases.new_purchase') }}">
+    <form id="poForm" method="post" action="{{ url_for('purchases.new_purchase') }}">
       <div class="form-grid form-grid-2" style="margin-bottom:24px">
         <div class="form-group">
           <label>Order Name *</label>
@@ -38,7 +38,7 @@
       <div class="table-wrap" style="margin-bottom:12px">
         <table id="itemsTable" style="table-layout:fixed;width:100%">
           <colgroup>
-            <col style="width:38%"><col style="width:14%"><col style="width:14%"><col style="width:14%"><col style="width:36px">
+            <col style="width:45%"><col style="width:20%"><col style="width:20%"><col style="width:36px">
           </colgroup>
           <thead>
             <tr>
@@ -48,22 +48,7 @@
               <th></th>
             </tr>
           </thead>
-          <tbody id="itemsBody">
-            <tr id="row_0">
-              <td>
-                <select name="product_id_0" onchange="syncSubId(this,0)" style="width:100%">
-                  <option value="">— select product —</option>
-                  {% for p in products %}
-                  <option value="{{ p.product_id }}" data-sub="{{ p.sub_product_id or '' }}" data-price="{{ p.price }}">{{ p.label }}</option>
-                  {% endfor %}
-                </select>
-                <input type="hidden" name="sub_product_id_0" id="sub_0" value="">
-              </td>
-              <td><input type="number" name="quantity_0" step="0.01" min="0.01" placeholder="0" style="width:100%"></td>
-              <td><input type="number" name="price_0" step="0.01" min="0" placeholder="optional" style="width:100%"></td>
-              <td><button type="button" onclick="removeRow(0)" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:18px;padding:0 6px">×</button></td>
-            </tr>
-          </tbody>
+          <tbody id="itemsBody"></tbody>
         </table>
       </div>
       <button type="button" class="btn btn-secondary btn-sm" onclick="addRow()" style="margin-bottom:24px">+ Add Product</button>
@@ -78,35 +63,128 @@
 {% endblock %}
 {% block scripts %}
 <script>
-const PRODUCTS = {{ products | tojson }};
-let rowCount = 1;
+const CATALOG = {{ products | tojson }};
+let rowCount = 0;
 
-function syncSubId(sel, idx) {
-  const opt = sel.options[sel.selectedIndex];
-  document.getElementById('sub_' + idx).value = opt ? (opt.dataset.sub || '') : '';
-  const priceInput = sel.closest('tr').querySelector('input[name^="price_"]');
-  if (priceInput && opt && opt.dataset.price && !priceInput.value) {
-    priceInput.value = opt.dataset.price;
+/* ── Combobox helpers ─────────────────────────────────────────────────────── */
+function cbFilter(inp) {
+  const q   = inp.value.toLowerCase();
+  const dd  = inp.closest('.cb-wrap').querySelector('.cb-dropdown');
+  const all = dd.querySelectorAll('.cb-option');
+  let any = false;
+  all.forEach(opt => {
+    const match = opt.dataset.name.toLowerCase().includes(q) ||
+                  opt.dataset.sku.toLowerCase().includes(q);
+    opt.style.display = match ? '' : 'none';
+    if (match) any = true;
+  });
+  dd.style.display = any ? '' : 'none';
+}
+
+function cbOpen(inp) {
+  const dd  = inp.closest('.cb-wrap').querySelector('.cb-dropdown');
+  const all = dd.querySelectorAll('.cb-option');
+  all.forEach(opt => opt.style.display = '');
+  dd.style.display = '';
+}
+
+function cbBlur(inp) {
+  setTimeout(() => {
+    const dd = inp.closest('.cb-wrap').querySelector('.cb-dropdown');
+    if (dd) dd.style.display = 'none';
+  }, 150);
+}
+
+function cbSelect(opt, idx) {
+  const wrap  = opt.closest('.cb-wrap');
+  const inp   = wrap.querySelector('.cb-inp');
+  const dd    = wrap.querySelector('.cb-dropdown');
+  const pid   = wrap.querySelector('input[name^="product_id_"]');
+  const sid   = wrap.querySelector('input[name^="sub_product_id_"]');
+  const row   = wrap.closest('tr');
+  const priceInp = row.querySelector('input[name^="price_"]');
+
+  inp.value   = opt.dataset.name;
+  pid.value   = opt.dataset.pid  || '';
+  sid.value   = opt.dataset.sid  || '';
+  if (priceInp && opt.dataset.price && !priceInp.value)
+    priceInp.value = opt.dataset.price;
+  dd.style.display = 'none';
+  markFormDirty();
+}
+
+function cbKey(e, inp) {
+  const dd      = inp.closest('.cb-wrap').querySelector('.cb-dropdown');
+  const visible = [...dd.querySelectorAll('.cb-option')].filter(o => o.style.display !== 'none');
+  const cur     = dd.querySelector('.cb-option.cb-focus');
+  if (e.key === 'Escape') { dd.style.display = 'none'; return; }
+  if (!visible.length) return;
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    const idx = cur ? visible.indexOf(cur) : -1;
+    const next = visible[Math.min(idx + 1, visible.length - 1)];
+    cur && cur.classList.remove('cb-focus');
+    next.classList.add('cb-focus');
+    next.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    const idx = cur ? visible.indexOf(cur) : visible.length;
+    const prev = visible[Math.max(idx - 1, 0)];
+    cur && cur.classList.remove('cb-focus');
+    prev.classList.add('cb-focus');
+    prev.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter') {
+    if (cur) { e.preventDefault(); cur.dispatchEvent(new MouseEvent('mousedown')); }
   }
 }
 
-function addRow() {
+function buildOptions(idx) {
+  return CATALOG.map(p => `
+    <div class="cb-option"
+         data-name="${p.label.replace(/"/g,'&quot;')}"
+         data-pid="${p.product_id}"
+         data-sid="${p.sub_product_id || ''}"
+         data-sku="${(p.label.match(/\[([^\]]+)\]/) || ['',''])[1]}"
+         data-price="${p.price || ''}"
+         onmousedown="cbSelect(this,${idx})">
+      <span class="cb-opt-name">${p.label}</span>
+      ${p.price ? `<span class="cb-opt-meta">₹${parseFloat(p.price).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</span>` : ''}
+    </div>`).join('');
+}
+
+function addRow(nameVal, pidVal, sidVal, qtyVal, priceVal) {
   const i = rowCount++;
-  const opts = PRODUCTS.map(p =>
-    `<option value="${p.product_id}" data-sub="${p.sub_product_id||''}" data-price="${p.price||''}">${p.label}</option>`
-  ).join('');
   const row = document.createElement('tr');
   row.id = 'row_' + i;
   row.innerHTML = `
     <td>
-      <select name="product_id_${i}" onchange="syncSubId(this,${i})" style="width:100%">
-        <option value="">— select product —</option>${opts}
-      </select>
-      <input type="hidden" name="sub_product_id_${i}" id="sub_${i}" value="">
+      <div class="cb-wrap" style="position:relative">
+        <input class="cb-inp" type="text"
+               name="description_${i}"
+               value="${nameVal || ''}"
+               placeholder="Type product name or SKU…"
+               autocomplete="off"
+               oninput="cbFilter(this)"
+               onfocus="cbOpen(this)"
+               onblur="cbBlur(this)"
+               onkeydown="cbKey(event,this)"
+               style="width:100%"
+               oninput="cbFilter(this);markFormDirty()">
+        <input type="hidden" name="product_id_${i}"     value="${pidVal  || ''}">
+        <input type="hidden" name="sub_product_id_${i}" value="${sidVal  || ''}">
+        <div class="cb-dropdown" style="display:none;position:absolute;left:0;right:0;top:100%;z-index:200;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);max-height:220px;overflow-y:auto;box-shadow:0 4px 16px rgba(0,0,0,.15)">
+          ${buildOptions(i)}
+        </div>
+      </div>
     </td>
-    <td><input type="number" name="quantity_${i}" step="0.01" min="0.01" placeholder="0" style="width:100%"></td>
-    <td><input type="number" name="price_${i}" step="0.01" min="0" placeholder="optional" style="width:100%"></td>
-    <td><button type="button" onclick="removeRow(${i})" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:18px;padding:0 6px">×</button></td>`;
+    <td><input type="number" name="quantity_${i}" step="0.01" min="0.01"
+               value="${qtyVal || ''}" placeholder="0" style="width:100%"
+               oninput="markFormDirty()"></td>
+    <td><input type="number" name="price_${i}" step="0.01" min="0"
+               value="${priceVal || ''}" placeholder="optional" style="width:100%"
+               oninput="markFormDirty()"></td>
+    <td><button type="button" onclick="removeRow(${i})"
+                style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:18px;padding:0 6px">×</button></td>`;
   document.getElementById('itemsBody').appendChild(row);
 }
 
@@ -114,5 +192,25 @@ function removeRow(i) {
   const row = document.getElementById('row_' + i);
   if (row && document.getElementById('itemsBody').children.length > 1) row.remove();
 }
+
+// Start with one blank row
+addRow();
+
+/* ── Dirty tracking ───────────────────────────────────────────────────────── */
+let _formDirty = false;
+function markFormDirty() { _formDirty = true; }
+window.__dirtyCheck = () => ({
+  isDirty: _formDirty,
+  label: 'Purchase Order',
+  save: null,   // no auto-save for new forms
+});
+document.getElementById('poForm').addEventListener('submit', () => { _formDirty = false; });
 </script>
+
+<style>
+.cb-option { padding:8px 12px; cursor:pointer; font-size:13px; display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.cb-option:hover, .cb-option.cb-focus { background:var(--bg-alt); }
+.cb-opt-name { flex:1; min-width:0; }
+.cb-opt-meta { font-size:11px; color:var(--text-muted); flex-shrink:0; font-family:'SF Mono','Fira Code',monospace; }
+</style>
 {% endblock %}

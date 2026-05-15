@@ -366,6 +366,20 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   recalcTotals();
+
+  // Dirty tracking — flag any change to the form
+  let _invFormDirty = false;
+  function _markInvDirty() { _invFormDirty = true; }
+  document.querySelectorAll('#invoiceForm input, #invoiceForm select, #invoiceForm textarea')
+    .forEach(el => el.addEventListener('input', _markInvDirty));
+  document.getElementById('invoiceForm').addEventListener('submit', () => { _invFormDirty = false; });
+  // Observe DOM additions (new line items)
+  new MutationObserver(_markInvDirty).observe(document.getElementById('lineItems'), { childList: true });
+  window.__dirtyCheck = () => ({
+    isDirty: _invFormDirty,
+    label: 'Invoice',
+    save: null,
+  });
 });
 </script>
 
