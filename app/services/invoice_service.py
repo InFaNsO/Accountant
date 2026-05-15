@@ -52,7 +52,7 @@ def get_invoice_payments(invoice_id):
 def _apply_client_credit(db, client_id, invoice_id):
     """Reallocate unallocated (NULL) payments that represent true credit to the new invoice."""
     client = db.execute("SELECT opening_balance FROM clients WHERE id=?", (client_id,)).fetchone()
-    opening_debt = abs((client["opening_balance"] or 0)) if client else 0.0
+    opening_debt = max(0.0, (client["opening_balance"] or 0)) if client else 0.0
 
     total_null = db.execute(
         "SELECT COALESCE(SUM(amount), 0) AS s FROM payments WHERE client_id=? AND invoice_id IS NULL",

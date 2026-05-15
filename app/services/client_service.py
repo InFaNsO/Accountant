@@ -56,11 +56,19 @@ def create_client(data):
             data["name"], data.get("company"), data.get("email"),
             data.get("phone"), data.get("address"), data.get("city"),
             data.get("country"), data.get("tax_id"), data.get("notes"),
-            float(data.get("opening_balance") or 0),
+            _signed_opening(data),
         ),
     )
     db.commit()
     return cur.lastrowid
+
+
+def _signed_opening(data):
+    """Return signed opening balance: positive = debt, negative = credit."""
+    amt = abs(float(data.get("opening_balance_amt") or data.get("opening_balance") or 0))
+    if data.get("opening_balance_type") == "credit":
+        return -amt
+    return amt
 
 
 def update_client(client_id, data):
@@ -75,7 +83,7 @@ def update_client(client_id, data):
             data["name"], data.get("company"), data.get("email"),
             data.get("phone"), data.get("address"), data.get("city"),
             data.get("country"), data.get("tax_id"), data.get("notes"),
-            float(data.get("opening_balance") or 0),
+            _signed_opening(data),
             client_id,
         ),
     )
@@ -114,8 +122,13 @@ def get_client_balance(client_id):
     invoice_balance = invoice_row["balance"] if invoice_row else 0
     opening = client_row["opening_balance"] if client_row else 0
     ob_paid = ob_paid_row["ob_paid"] if ob_paid_row else 0
-    opening_debt = abs(opening)
-    opening_remaining = max(0.0, opening_debt - ob_paid)
-    excess = max(0.0, ob_paid - opening_debt)
+    if opening >= 0:
+        # opening_balance > 0: client had a starting debt
+        opening_remaining = max(0.0, opening - ob_paid)
+        excess = max(0.0, ob_paid - opening)
+    else:
+        # opening_balance < 0: client had a starting credit
+        opening_remaining = 0.0
+        excess = ob_paid + abs(opening)
     # negative = client owes us, positive = client has credit
     return -(opening_remaining + invoice_balance) + excess

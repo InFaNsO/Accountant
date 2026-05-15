@@ -55,11 +55,17 @@
         </div>
 
         <div class="form-group">
-          <label for="opening_balance">Opening Balance (₹)</label>
-          <input type="number" id="opening_balance" name="opening_balance"
-                 value="{{ client.get('opening_balance', 0) }}"
-                 step="0.01" placeholder="0.00"
-                 title="Any amount this client owed before you started using Ledger">
+          <label for="opening_balance_amt">Opening Balance (₹)</label>
+          <input type="number" id="opening_balance_amt" name="opening_balance_amt"
+                 value="{{ client.get('opening_balance', 0)|abs }}"
+                 step="0.01" min="0" placeholder="0.00">
+        </div>
+        <div class="form-group">
+          <label for="opening_balance_type">Balance Type</label>
+          <select id="opening_balance_type" name="opening_balance_type">
+            <option value="debt" {{ 'selected' if (client.get('opening_balance') or 0) >= 0 }}>Client owes us (debt)</option>
+            <option value="credit" {{ 'selected' if (client.get('opening_balance') or 0) < 0 }}>Client has credit (advance paid)</option>
+          </select>
         </div>
 
         <div class="form-group span-2">
