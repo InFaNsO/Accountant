@@ -276,6 +276,30 @@ def mark_arrived(product_id, sub_id, qty, notes=""):
     db.commit()
 
 
+def adjust_stock(product_id, sub_id, bucket, direction, qty, notes=""):
+    """Directly adjust one stock bucket by qty.
+    bucket: 'warehouse' | 'production' | 'dispatch'
+    direction: 'increase' | 'decrease'
+    """
+    db = get_db()
+    field_map = {
+        'warehouse':  'stock_qty',
+        'production': 'production_qty',
+        'dispatch':   'in_transit_qty',
+    }
+    field = field_map.get(bucket, 'stock_qty')
+    delta = qty if direction == 'increase' else -qty
+    tbl = "sub_products" if sub_id else "products"
+    pk  = sub_id if sub_id else product_id
+    db.execute(f"UPDATE {tbl} SET {field}={field}+? WHERE id=?", (delta, pk))
+    movement_type = f"{bucket}_{'add' if direction == 'increase' else 'deduct'}"
+    db.execute(
+        "INSERT INTO stock_movements (product_id, sub_product_id, movement_type, quantity, notes) VALUES (?,?,?,?,?)",
+        (product_id or None, sub_id or None, movement_type, qty, notes or None),
+    )
+    db.commit()
+
+
 def get_stock_movements(product_id=None, sub_id=None, limit=50):
     db = get_db()
     if sub_id:

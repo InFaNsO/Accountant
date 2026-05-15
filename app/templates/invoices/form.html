@@ -150,7 +150,29 @@ const CATALOG = {{ products | tojson }};
 // ── Row counter (handles non-sequential idx after deletes) ─────────────────────
 let rowCount = {{ items | length }};
 
-// ── Combobox helpers ───────────────────────────────────────────────────────────
+// ── Shared dropdown (appended to <body> so it's never clipped by table overflow)
+let _cbInput = null;   // currently active input
+const _cbDD  = (() => {
+  const el = document.createElement('div');
+  el.id    = 'cbSharedDropdown';
+  el.style.cssText =
+    'display:none;position:fixed;z-index:9500;background:var(--bg);' +
+    'border:1px solid var(--border);border-radius:var(--radius-sm);' +
+    'box-shadow:0 8px 32px rgba(0,0,0,.22);overflow-y:auto;' +
+    'max-height:310px;min-width:380px';
+  document.body.appendChild(el);
+  el._matches = [];
+  el._cursor  = -1;
+  return el;
+})();
+
+function _cbPos(input) {
+  const r = input.getBoundingClientRect();
+  _cbDD.style.top   = (r.bottom + 3) + 'px';
+  _cbDD.style.left  = r.left + 'px';
+  _cbDD.style.width = Math.max(r.width, 400) + 'px';
+}
+
 function cbBuildOptions(query) {
   const q = query.trim().toLowerCase();
   return q === ''
@@ -162,32 +184,29 @@ function cbBuildOptions(query) {
 }
 
 function cbRender(input, matches) {
-  const wrap = input.closest('.cb-wrap');
-  const dd   = wrap.querySelector('.cb-dropdown');
+  _cbInput        = input;
+  _cbDD._matches  = matches;
+  _cbDD._cursor   = -1;
 
   if (!matches.length) {
-    dd.innerHTML = '<div class="cb-no-match">No products found</div>';
+    _cbDD.innerHTML = '<div class="cb-no-match">No products found</div>';
   } else {
-    dd.innerHTML = matches.map((p, i) => `
-      <div class="cb-option" data-idx="${i}" onmousedown="cbSelect(event, this)">
+    _cbDD.innerHTML = matches.map((p, i) => `
+      <div class="cb-option" data-idx="${i}" onmousedown="cbSelect(event,this)">
         <div class="cb-opt-name">${escHtml(p.name)}</div>
         <div class="cb-opt-meta">${p.sku ? '<span class="cb-sku-tag">' + escHtml(p.sku) + '</span>' : ''} <span class="cb-price-tag">₹${(p.unit_price||0).toFixed(2)}</span> · <span>Tax ${p.tax_rate||0}%</span></div>
       </div>`).join('');
   }
-  // Store matches on the dropdown for key navigation
-  dd._matches = matches;
-  dd._cursor  = -1;
-  dd.style.display = '';
+  _cbPos(input);
+  _cbDD.style.display = '';
 }
 
 function cbOpen(input) {
-  const q = input.value;
-  cbRender(input, cbBuildOptions(q));
+  cbRender(input, cbBuildOptions(input.value));
 }
 
 function cbFilter(input) {
   const wrap = input.closest('.cb-wrap');
-  // User typed something manually — clear product binding
   wrap.querySelector('.cb-pid').value  = '';
   wrap.querySelector('.cb-spid').value = '';
   cbRender(input, cbBuildOptions(input.value));
@@ -195,67 +214,70 @@ function cbFilter(input) {
 }
 
 function cbBlur(input) {
-  // Short delay lets onmousedown fire before the dropdown hides
   setTimeout(() => {
-    const dd = input.closest('.cb-wrap').querySelector('.cb-dropdown');
-    dd.style.display = 'none';
-    dd._cursor = -1;
+    if (_cbInput === input) {
+      _cbDD.style.display = 'none';
+      _cbDD._cursor = -1;
+      _cbInput = null;
+    }
   }, 180);
 }
 
 function cbSelect(event, optEl) {
   event.preventDefault();
-  const wrap    = optEl.closest('.cb-wrap');
-  const input   = wrap.querySelector('.cb-input');
-  const dd      = wrap.querySelector('.cb-dropdown');
-  const matches = dd._matches || [];
-  const idx     = parseInt(optEl.dataset.idx, 10);
-  const p       = matches[idx];
-  if (!p) return;
+  const idx = parseInt(optEl.dataset.idx, 10);
+  const p   = _cbDD._matches[idx];
+  if (!p || !_cbInput) return;
 
-  // Fill description
-  input.value = p.name;
-  // Fill hidden IDs
+  const wrap = _cbInput.closest('.cb-wrap');
+  _cbInput.value = p.name;
   wrap.querySelector('.cb-pid').value  = p.product_id  || '';
   wrap.querySelector('.cb-spid').value = p.sub_product_id || '';
-  // Fill SKU in the row's sku input
-  const row = wrap.closest('tr');
+
+  const row    = wrap.closest('tr');
   const skuInp = row.querySelector('.cb-sku-inp');
   if (skuInp && !skuInp._userEdited) skuInp.value = p.sku || '';
-  // Fill price & tax
+
   const priceInp = row.querySelector('[name$="[unit_price]"]');
   const taxInp   = row.querySelector('[name$="[tax_rate]"]');
   if (priceInp) priceInp.value = (p.unit_price || 0).toFixed(2);
   if (taxInp)   taxInp.value   = p.tax_rate || 0;
 
-  dd.style.display = 'none';
+  _cbDD.style.display = 'none';
+  _cbInput = null;
   recalcTotals();
 }
 
 function cbKey(event, input) {
-  const dd = input.closest('.cb-wrap').querySelector('.cb-dropdown');
-  if (dd.style.display === 'none') { cbOpen(input); return; }
-  const opts = dd.querySelectorAll('.cb-option');
+  if (_cbDD.style.display === 'none' || _cbInput !== input) {
+    cbOpen(input);
+    return;
+  }
+  const opts = _cbDD.querySelectorAll('.cb-option');
+  if (!opts.length) return;
 
-  if (event.key === 'Escape') { dd.style.display = 'none'; return; }
-
+  if (event.key === 'Escape') {
+    _cbDD.style.display = 'none'; _cbInput = null; return;
+  }
   if (event.key === 'ArrowDown') {
     event.preventDefault();
-    dd._cursor = Math.min((dd._cursor || -1) + 1, opts.length - 1);
-    opts.forEach((o, i) => o.classList.toggle('cb-active', i === dd._cursor));
-    if (opts[dd._cursor]) opts[dd._cursor].scrollIntoView({ block: 'nearest' });
+    _cbDD._cursor = Math.min(_cbDD._cursor + 1, opts.length - 1);
+    opts.forEach((o, i) => o.classList.toggle('cb-active', i === _cbDD._cursor));
+    opts[_cbDD._cursor]?.scrollIntoView({ block: 'nearest' });
   } else if (event.key === 'ArrowUp') {
     event.preventDefault();
-    dd._cursor = Math.max((dd._cursor || 0) - 1, 0);
-    opts.forEach((o, i) => o.classList.toggle('cb-active', i === dd._cursor));
-    if (opts[dd._cursor]) opts[dd._cursor].scrollIntoView({ block: 'nearest' });
+    _cbDD._cursor = Math.max(_cbDD._cursor - 1, 0);
+    opts.forEach((o, i) => o.classList.toggle('cb-active', i === _cbDD._cursor));
+    opts[_cbDD._cursor]?.scrollIntoView({ block: 'nearest' });
   } else if (event.key === 'Enter') {
     event.preventDefault();
-    if (dd._cursor >= 0 && opts[dd._cursor]) {
-      cbSelect(event, opts[dd._cursor]);
-    }
+    if (_cbDD._cursor >= 0 && opts[_cbDD._cursor]) cbSelect(event, opts[_cbDD._cursor]);
   }
 }
+
+// Reposition on scroll/resize while open
+window.addEventListener('scroll', () => { if (_cbInput) _cbPos(_cbInput); }, true);
+window.addEventListener('resize', () => { if (_cbInput) _cbPos(_cbInput); });
 
 function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -387,19 +409,7 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ── Combobox ──────────────────────────────────────────────────────────────── */
 .cb-wrap { position: relative; }
 .cb-input { width: 100%; }
-.cb-dropdown {
-  position: absolute;
-  top: calc(100% + 2px);
-  left: 0;
-  right: 0;
-  z-index: 300;
-  background: var(--bg-card, #fff);
-  border: 1px solid var(--border, #e2e8f0);
-  border-radius: var(--radius-sm, 6px);
-  box-shadow: 0 4px 16px rgba(0,0,0,.12);
-  max-height: 260px;
-  overflow-y: auto;
-}
+/* .cb-dropdown is now a shared body element — no per-wrap styles needed */
 .cb-option {
   padding: 8px 12px;
   cursor: pointer;

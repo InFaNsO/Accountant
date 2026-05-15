@@ -146,21 +146,23 @@
     <form method="post" action="{{ url_for('products.stock_action', product_id=product.id) }}">
       <div class="form-grid form-grid-2" style="margin-bottom:16px">
         <div class="form-group">
-          <label>Movement Type</label>
-          <select name="movement_type">
-            <option value="add">Add to Warehouse</option>
-            <option value="production">Send to Production</option>
-            <option value="dispatch">Dispatch from Production</option>
-            <option value="arrival">Mark as Arrived</option>
+          <label>Action For</label>
+          <select name="bucket">
+            <option value="warehouse">🏭 Warehouse</option>
+            <option value="production">⚙️ Production</option>
+            <option value="dispatch">🚢 Dispatch / Transit</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Increase or Decrease</label>
+          <select name="direction">
+            <option value="increase">▲ Increase</option>
+            <option value="decrease">▼ Decrease</option>
           </select>
         </div>
         <div class="form-group">
           <label>Quantity *</label>
           <input type="number" name="qty" step="0.01" min="0.01" placeholder="0" required>
-        </div>
-        <div class="form-group">
-          <label>Expected Arrival (for Dispatch)</label>
-          <input type="date" name="expected_arrival">
         </div>
         <div class="form-group">
           <label>Notes</label>
@@ -202,9 +204,15 @@
           <tr>
             <td class="muted font-mono" style="font-size:12px">{{ m.created_at[:16] if m.created_at else '—' }}</td>
             <td>
-              {% if m.movement_type in ('arrival', 'transit_arrival') %}
-                <span class="badge" style="background:rgba(16,185,129,.15);color:#10b981">Dispatch Received</span>
-                {% if m.dispatch_name %}<span class="muted" style="font-size:12px;margin-left:6px">{{ m.dispatch_name }}</span>{% endif %}
+              {% if m.movement_type in ('arrival', 'transit_arrival', 'warehouse_add') %}
+                {% if m.dispatch_name %}
+                  <span class="badge" style="background:rgba(16,185,129,.15);color:#10b981">Dispatch Received</span>
+                  <span class="muted" style="font-size:12px;margin-left:6px">{{ m.dispatch_name }}</span>
+                {% else %}
+                  <span class="badge badge-active">{{ '▲ Added' if m.movement_type == 'warehouse_add' else 'Correction / Added' }}</span>
+                {% endif %}
+              {% elif m.movement_type == 'warehouse_deduct' %}
+                <span class="badge" style="background:rgba(239,68,68,.12);color:var(--danger)">▼ Reduced</span>
               {% elif m.movement_type == 'add' %}
                 <span class="badge badge-active">Correction / Added</span>
               {% elif m.invoice_number %}
@@ -236,7 +244,13 @@
           {% for m in production_history %}
           <tr>
             <td class="muted font-mono" style="font-size:12px">{{ m.created_at[:16] if m.created_at else '—' }}</td>
-            <td><span class="badge" style="background:rgba(245,158,11,.15);color:#d97706">Sent to Production</span></td>
+            <td>
+              {% if m.movement_type == 'production_deduct' %}
+                <span class="badge" style="background:rgba(239,68,68,.12);color:var(--danger)">▼ Reduced</span>
+              {% else %}
+                <span class="badge" style="background:rgba(245,158,11,.15);color:#d97706">▲ {{ 'Added' if m.movement_type == 'production_add' else 'Sent to Production' }}</span>
+              {% endif %}
+            </td>
             <td style="text-align:right;font-weight:700;color:var(--warning)">{{ m.quantity }}</td>
             <td class="muted" style="font-size:12px">{{ m.notes or '—' }}</td>
           </tr>
@@ -260,8 +274,14 @@
           <tr>
             <td class="muted font-mono" style="font-size:12px">{{ m.created_at[:16] if m.created_at else '—' }}</td>
             <td>
-              <span class="badge" style="background:rgba(99,102,241,.15);color:#6366f1">Dispatched</span>
-              {% if m.dispatch_name %}<span class="muted" style="font-size:12px;margin-left:6px">{{ m.dispatch_name }}</span>{% endif %}
+              {% if m.movement_type == 'dispatch_deduct' %}
+                <span class="badge" style="background:rgba(239,68,68,.12);color:var(--danger)">▼ Reduced</span>
+              {% elif m.movement_type == 'dispatch_add' %}
+                <span class="badge" style="background:rgba(99,102,241,.15);color:#6366f1">▲ Added</span>
+              {% else %}
+                <span class="badge" style="background:rgba(99,102,241,.15);color:#6366f1">Dispatched</span>
+                {% if m.dispatch_name %}<span class="muted" style="font-size:12px;margin-left:6px">{{ m.dispatch_name }}</span>{% endif %}
+              {% endif %}
             </td>
             <td style="text-align:right;font-weight:700;color:var(--primary)">{{ m.quantity }}</td>
             <td class="muted" style="font-size:12px">{{ m.expected_arrival or '—' }}</td>

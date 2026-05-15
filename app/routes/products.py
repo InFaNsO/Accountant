@@ -84,13 +84,14 @@ def product_detail(product_id):
     if not subs:
         warehouse_history  = product_service.get_stock_history(
             product_id=product_id,
-            movement_types=["add", "arrival", "transit_arrival", "correction"])
+            movement_types=["add", "arrival", "transit_arrival", "correction",
+                            "warehouse_add", "warehouse_deduct"])
         production_history = product_service.get_stock_history(
             product_id=product_id,
-            movement_types=["production"])
+            movement_types=["production", "production_add", "production_deduct"])
         transit_history    = product_service.get_stock_history(
             product_id=product_id,
-            movement_types=["dispatch", "transit_dispatch"])
+            movement_types=["dispatch", "transit_dispatch", "dispatch_add", "dispatch_deduct"])
     return render_template("products/detail.html", product=product, subs=subs,
                            warehouse_history=warehouse_history,
                            production_history=production_history,
@@ -128,9 +129,10 @@ def delete_product(product_id):
 
 @bp.route("/<int:product_id>/stock", methods=["POST"])
 def stock_action(product_id):
-    movement = request.form.get("movement_type")
-    qty_raw  = request.form.get("qty", "0")
-    notes    = request.form.get("notes", "")
+    bucket    = request.form.get("bucket", "warehouse")
+    direction = request.form.get("direction", "increase")
+    qty_raw   = request.form.get("qty", "0")
+    notes     = request.form.get("notes", "")
     try:
         qty = float(qty_raw)
         if qty <= 0:
@@ -138,26 +140,12 @@ def stock_action(product_id):
     except ValueError:
         flash("Enter a valid positive quantity.", "error")
         return redirect(url_for("products.product_detail", product_id=product_id))
-
     try:
-        if movement == "add":
-            product_service.add_stock(product_id, None, qty, notes)
-            flash(f"Added {qty} units to stock.", "success")
-        elif movement == "production":
-            product_service.send_to_production(product_id, None, qty, notes)
-            flash(f"Moved {qty} units to production.", "success")
-        elif movement == "dispatch":
-            expected = request.form.get("expected_arrival", "")
-            product_service.dispatch_from_production(product_id, None, qty, expected, notes)
-            flash(f"Dispatched {qty} units (in transit).", "success")
-        elif movement == "arrival":
-            product_service.mark_arrived(product_id, None, qty, notes)
-            flash(f"{qty} units marked as arrived.", "success")
-        else:
-            flash("Unknown movement type.", "error")
+        product_service.adjust_stock(product_id, None, bucket, direction, qty, notes)
+        bucket_label = {"warehouse": "Warehouse", "production": "Production", "dispatch": "Dispatch"}.get(bucket, bucket)
+        flash(f"{bucket_label} stock {'increased' if direction == 'increase' else 'decreased'} by {qty}.", "success")
     except Exception as e:
         flash(f"Error: {e}", "error")
-
     return redirect(url_for("products.product_detail", product_id=product_id))
 
 
@@ -215,10 +203,11 @@ def delete_sub_product(product_id, sub_id):
 
 @bp.route("/<int:product_id>/sub/<int:sub_id>/stock", methods=["POST"])
 def sub_stock_action(product_id, sub_id):
-    movement  = request.form.get("movement_type")
+    bucket    = request.form.get("bucket", "warehouse")
+    direction = request.form.get("direction", "increase")
     qty_raw   = request.form.get("qty", "0")
     notes     = request.form.get("notes", "")
-    from_page = request.form.get("from_page", "product")  # 'sub' or 'product'
+    from_page = request.form.get("from_page", "product")
     try:
         qty = float(qty_raw)
         if qty <= 0:
@@ -229,26 +218,12 @@ def sub_stock_action(product_id, sub_id):
                if from_page == "sub" else \
                url_for("products.product_detail", product_id=product_id)
         return redirect(dest)
-
     try:
-        if movement == "add":
-            product_service.add_stock(product_id, sub_id, qty, notes)
-            flash(f"Added {qty} units to stock.", "success")
-        elif movement == "production":
-            product_service.send_to_production(product_id, sub_id, qty, notes)
-            flash(f"Moved {qty} units to production.", "success")
-        elif movement == "dispatch":
-            expected = request.form.get("expected_arrival", "")
-            product_service.dispatch_from_production(product_id, sub_id, qty, expected, notes)
-            flash(f"Dispatched {qty} units (in transit).", "success")
-        elif movement == "arrival":
-            product_service.mark_arrived(product_id, sub_id, qty, notes)
-            flash(f"{qty} units marked as arrived.", "success")
-        else:
-            flash("Unknown movement type.", "error")
+        product_service.adjust_stock(product_id, sub_id, bucket, direction, qty, notes)
+        bucket_label = {"warehouse": "Warehouse", "production": "Production", "dispatch": "Dispatch"}.get(bucket, bucket)
+        flash(f"{bucket_label} stock {'increased' if direction == 'increase' else 'decreased'} by {qty}.", "success")
     except Exception as e:
         flash(f"Error: {e}", "error")
-
     if from_page == "sub":
         return redirect(url_for("products.sub_detail", product_id=product_id, sub_id=sub_id))
     return redirect(url_for("products.product_detail", product_id=product_id))
@@ -265,13 +240,14 @@ def sub_detail(product_id, sub_id):
         return redirect(url_for("products.list_products"))
     warehouse_history  = product_service.get_stock_history(
         sub_id=sub_id,
-        movement_types=["add", "arrival", "transit_arrival", "correction"])
+        movement_types=["add", "arrival", "transit_arrival", "correction",
+                        "warehouse_add", "warehouse_deduct"])
     production_history = product_service.get_stock_history(
         sub_id=sub_id,
-        movement_types=["production"])
+        movement_types=["production", "production_add", "production_deduct"])
     transit_history    = product_service.get_stock_history(
         sub_id=sub_id,
-        movement_types=["dispatch", "transit_dispatch"])
+        movement_types=["dispatch", "transit_dispatch", "dispatch_add", "dispatch_deduct"])
     return render_template("products/sub_detail.html",
                            product=product, sub=sub,
                            warehouse_history=warehouse_history,

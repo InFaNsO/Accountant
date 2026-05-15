@@ -73,96 +73,108 @@
 const CATALOG = {{ products | tojson }};
 let rowCount = 0;
 
-/* ── Combobox helpers ─────────────────────────────────────────────────────── */
-function cbFilter(inp) {
-  const q   = inp.value.toLowerCase();
-  const dd  = inp.closest('.cb-wrap').querySelector('.cb-dropdown');
-  const all = dd.querySelectorAll('.cb-option');
-  let any = false;
-  all.forEach(opt => {
-    const match = opt.dataset.name.toLowerCase().includes(q) ||
-                  opt.dataset.sku.toLowerCase().includes(q);
-    opt.style.display = match ? '' : 'none';
-    if (match) any = true;
-  });
-  dd.style.display = any ? '' : 'none';
+/* ── Shared dropdown (fixed position, never clipped) ─────────────────────── */
+let _cbInput = null;
+const _cbDD  = (() => {
+  const el = document.createElement('div');
+  el.id    = 'cbSharedDropdown';
+  el.style.cssText =
+    'display:none;position:fixed;z-index:9500;background:var(--bg);' +
+    'border:1px solid var(--border);border-radius:var(--radius-sm);' +
+    'box-shadow:0 8px 32px rgba(0,0,0,.22);overflow-y:auto;' +
+    'max-height:310px;min-width:380px';
+  el._cursor  = -1;
+  el._matches = [];
+  document.body.appendChild(el);
+  return el;
+})();
+
+function _cbPos(inp) {
+  const r = inp.getBoundingClientRect();
+  _cbDD.style.top   = (r.bottom + 3) + 'px';
+  _cbDD.style.left  = r.left + 'px';
+  _cbDD.style.width = Math.max(r.width, 400) + 'px';
+}
+window.addEventListener('scroll', () => { if (_cbInput) _cbPos(_cbInput); }, true);
+window.addEventListener('resize', () => { if (_cbInput) _cbPos(_cbInput); });
+
+function cbRender(inp, matches) {
+  _cbInput       = inp;
+  _cbDD._matches = matches;
+  _cbDD._cursor  = -1;
+  if (!matches.length) {
+    _cbDD.innerHTML = '<div style="padding:10px 14px;color:var(--text-muted);font-size:13px;font-style:italic">No products found</div>';
+  } else {
+    _cbDD.innerHTML = matches.map((p, i) => {
+      const sku  = (p.label.match(/\[([^\]]+)\]/) || ['',''])[1];
+      const name = p.label.replace(/\s*\[[^\]]+\]/, '');
+      return `<div class="cb-option" data-idx="${i}" onmousedown="cbSelectShared(event,this)">
+        <div style="font-weight:600;font-size:13px">${name}</div>
+        <div style="font-size:11px;color:var(--text-muted);display:flex;gap:8px;margin-top:2px">
+          ${sku ? `<span style="font-family:monospace;background:var(--bg-alt);padding:1px 5px;border-radius:3px">${sku}</span>` : ''}
+          ${p.production_qty > 0 ? `<span style="color:var(--warning);font-weight:600">In production: ${p.production_qty}</span>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+  }
+  _cbPos(inp);
+  _cbDD.style.display = '';
 }
 
-function cbOpen(inp) {
-  const dd  = inp.closest('.cb-wrap').querySelector('.cb-dropdown');
-  const all = dd.querySelectorAll('.cb-option');
-  all.forEach(opt => opt.style.display = '');
-  dd.style.display = '';
+function cbFilter(inp) {
+  const q = inp.value.toLowerCase();
+  const matches = CATALOG.filter(p =>
+    p.label.toLowerCase().includes(q) ||
+    (p.label.match(/\[([^\]]+)\]/) || ['',''])[1].toLowerCase().includes(q)
+  );
+  cbRender(inp, matches);
+  markFormDirty();
 }
+
+function cbOpen(inp) { cbRender(inp, CATALOG); }
 
 function cbBlur(inp) {
   setTimeout(() => {
-    const dd = inp.closest('.cb-wrap').querySelector('.cb-dropdown');
-    if (dd) dd.style.display = 'none';
-  }, 150);
+    if (_cbInput === inp) { _cbDD.style.display = 'none'; _cbInput = null; }
+  }, 180);
 }
 
-function cbSelect(opt, idx) {
-  const wrap  = opt.closest('.cb-wrap');
-  const inp   = wrap.querySelector('.cb-inp');
-  const dd    = wrap.querySelector('.cb-dropdown');
-  const pid   = wrap.querySelector('input[name^="product_id_"]');
-  const sid   = wrap.querySelector('input[name^="sub_product_id_"]');
-  const row   = wrap.closest('tr');
+function cbSelectShared(e, optEl) {
+  e.preventDefault();
+  const idx = parseInt(optEl.dataset.idx, 10);
+  const p   = _cbDD._matches[idx];
+  if (!p || !_cbInput) return;
+  const wrap     = _cbInput.closest('.cb-wrap');
+  const row      = _cbInput.closest('tr');
+  const name     = p.label.replace(/\s*\[[^\]]+\]/, '');
+  _cbInput.value = name;
+  wrap.querySelector('[name^="product_id_"]').value     = p.product_id || '';
+  wrap.querySelector('[name^="sub_product_id_"]').value = p.sub_product_id || '';
   const prodCell = row.querySelector('.prod-qty-cell');
-  const priceInp = row.querySelector('input[name^="price_"]');
-
-  inp.value = opt.dataset.name;
-  pid.value = opt.dataset.pid || '';
-  sid.value = opt.dataset.sid || '';
-  if (prodCell) prodCell.textContent = opt.dataset.prod || '—';
-  if (priceInp && opt.dataset.price && !priceInp.value)
-    priceInp.value = opt.dataset.price;
-  dd.style.display = 'none';
+  if (prodCell) prodCell.textContent = p.production_qty > 0 ? p.production_qty : '—';
+  _cbDD.style.display = 'none'; _cbInput = null;
   markFormDirty();
 }
 
 function cbKey(e, inp) {
-  const dd      = inp.closest('.cb-wrap').querySelector('.cb-dropdown');
-  const visible = [...dd.querySelectorAll('.cb-option')].filter(o => o.style.display !== 'none');
-  const cur     = dd.querySelector('.cb-option.cb-focus');
-  if (e.key === 'Escape') { dd.style.display = 'none'; return; }
-  if (!visible.length) return;
+  if (_cbDD.style.display === 'none' || _cbInput !== inp) { cbOpen(inp); return; }
+  const opts = _cbDD.querySelectorAll('.cb-option');
+  if (!opts.length) return;
+  if (e.key === 'Escape') { _cbDD.style.display = 'none'; _cbInput = null; return; }
   if (e.key === 'ArrowDown') {
     e.preventDefault();
-    const i = cur ? visible.indexOf(cur) : -1;
-    const next = visible[Math.min(i + 1, visible.length - 1)];
-    cur && cur.classList.remove('cb-focus');
-    next.classList.add('cb-focus');
-    next.scrollIntoView({ block: 'nearest' });
+    _cbDD._cursor = Math.min(_cbDD._cursor + 1, opts.length - 1);
+    opts.forEach((o, i) => o.classList.toggle('cb-active', i === _cbDD._cursor));
+    opts[_cbDD._cursor]?.scrollIntoView({ block: 'nearest' });
   } else if (e.key === 'ArrowUp') {
     e.preventDefault();
-    const i = cur ? visible.indexOf(cur) : visible.length;
-    const prev = visible[Math.max(i - 1, 0)];
-    cur && cur.classList.remove('cb-focus');
-    prev.classList.add('cb-focus');
-    prev.scrollIntoView({ block: 'nearest' });
+    _cbDD._cursor = Math.max(_cbDD._cursor - 1, 0);
+    opts.forEach((o, i) => o.classList.toggle('cb-active', i === _cbDD._cursor));
+    opts[_cbDD._cursor]?.scrollIntoView({ block: 'nearest' });
   } else if (e.key === 'Enter') {
-    if (cur) { e.preventDefault(); cur.dispatchEvent(new MouseEvent('mousedown')); }
+    e.preventDefault();
+    if (_cbDD._cursor >= 0 && opts[_cbDD._cursor]) cbSelectShared(e, opts[_cbDD._cursor]);
   }
-}
-
-function buildOptions(idx) {
-  return CATALOG.map(p => {
-    const sku = (p.label.match(/\[([^\]]+)\]/) || ['',''])[1];
-    return `
-    <div class="cb-option"
-         data-name="${p.label.replace(/"/g,'&quot;')}"
-         data-pid="${p.product_id}"
-         data-sid="${p.sub_product_id || ''}"
-         data-sku="${sku}"
-         data-prod="${p.production_qty || 0}"
-         data-price=""
-         onmousedown="cbSelect(this,${idx})">
-      <span class="cb-opt-name">${p.label}</span>
-      ${p.production_qty > 0 ? `<span class="cb-opt-meta" style="color:var(--warning)">Prod: ${p.production_qty}</span>` : ''}
-    </div>`;
-  }).join('');
 }
 
 function addRow(nameVal, pidVal, sidVal, qtyVal, priceVal, cbmVal, gwVal) {
@@ -171,22 +183,19 @@ function addRow(nameVal, pidVal, sidVal, qtyVal, priceVal, cbmVal, gwVal) {
   row.id = 'row_' + i;
   row.innerHTML = `
     <td>
-      <div class="cb-wrap" style="position:relative">
+      <div class="cb-wrap">
         <input class="cb-inp" type="text"
                name="description_${i}"
                value="${nameVal || ''}"
                placeholder="Type product name or SKU…"
                autocomplete="off"
-               oninput="cbFilter(this);markFormDirty()"
+               oninput="cbFilter(this)"
                onfocus="cbOpen(this)"
                onblur="cbBlur(this)"
                onkeydown="cbKey(event,this)"
                style="width:100%">
         <input type="hidden" name="product_id_${i}"     value="${pidVal || ''}">
         <input type="hidden" name="sub_product_id_${i}" value="${sidVal || ''}">
-        <div class="cb-dropdown" style="display:none;position:absolute;left:0;right:0;top:100%;z-index:200;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);max-height:220px;overflow-y:auto;box-shadow:0 4px 16px rgba(0,0,0,.15)">
-          ${buildOptions(i)}
-        </div>
       </div>
     </td>
     <td class="prod-qty-cell" style="text-align:center;font-weight:700;color:var(--warning)">—</td>
@@ -219,9 +228,8 @@ document.getElementById('dispatchForm').addEventListener('submit', () => { _form
 </script>
 
 <style>
-.cb-option { padding:8px 12px; cursor:pointer; font-size:13px; display:flex; align-items:center; justify-content:space-between; gap:8px; }
-.cb-option:hover, .cb-option.cb-focus { background:var(--bg-alt); }
-.cb-opt-name { flex:1; min-width:0; }
-.cb-opt-meta { font-size:11px; color:var(--text-muted); flex-shrink:0; font-family:'SF Mono','Fira Code',monospace; }
+.cb-option { padding:10px 14px; cursor:pointer; border-bottom:1px solid var(--border); }
+.cb-option:last-child { border-bottom:none; }
+.cb-option:hover, .cb-option.cb-active { background:var(--bg-alt); }
 </style>
 {% endblock %}
