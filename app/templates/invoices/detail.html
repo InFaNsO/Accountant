@@ -90,7 +90,10 @@
       <tbody>
         {% for item in items %}
         <tr>
-          <td class="fw-700">{{ item.description }}</td>
+          <td>
+            <div class="fw-700">{{ item.description }}</div>
+            {% if item.sku %}<div style="font-size:11px;color:var(--text-muted);font-family:'SF Mono','Fira Code',monospace;margin-top:2px">{{ item.sku }}</div>{% endif %}
+          </td>
           <td class="muted">{{ item.quantity }}</td>
           <td>{{ item.unit_price|inr }}</td>
           <td class="muted">{{ item.tax_rate }}%</td>

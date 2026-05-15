@@ -43,7 +43,7 @@
     <div class="card-body">
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
         <div style="text-align:center;padding:14px;background:var(--bg-alt);border-radius:var(--radius-sm)">
-          <div style="font-size:22px;font-weight:700;color:{% if product.min_quantity > 0 and product.stock_qty < product.min_quantity %}var(--danger){% else %}var(--success){% endif %}">
+          <div style="font-size:22px;font-weight:700;color:{% if product.min_quantity > 0 and product.stock_qty < product.min_quantity %}var(--danger){% elif product.min_quantity > 0 and product.stock_qty <= (product.min_quantity * 1.2) %}var(--warning){% else %}var(--success){% endif %}">
             {{ product.stock_qty }}
           </div>
           <div style="font-size:11px;color:var(--text-muted);margin-top:2px">Available</div>
@@ -65,8 +65,14 @@
 {% if subs %}
 <div class="card" style="margin-bottom:18px">
   <div class="card-header">
-    <span class="card-title">Sub-Products ({{ subs|length }})</span>
-    <a href="{{ url_for('products.new_sub_product', product_id=product.id) }}" class="btn btn-secondary btn-sm">+ Add</a>
+    <div>
+      <span class="card-title">Sub-Products ({{ subs|length }})</span>
+      <span style="font-size:11px;color:var(--text-muted);margin-left:10px">Double-click Name or Price to edit</span>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button id="subsSaveBtn" class="btn btn-primary btn-sm" onclick="saveAllSubs()" style="display:none">Save Changes</button>
+      <a href="{{ url_for('products.new_sub_product', product_id=product.id) }}" class="btn btn-secondary btn-sm">+ Add</a>
+    </div>
   </div>
   <div class="table-wrap">
     <table id="subsTable">
@@ -78,7 +84,7 @@
           <th style="text-align:right">In Production</th>
           <th style="text-align:right">Price (₹)</th>
           <th style="text-align:right">Tax %</th>
-          <th style="text-align:center;width:120px"></th>
+          <th style="width:60px"></th>
         </tr>
       </thead>
       <tbody>
@@ -90,42 +96,22 @@
           'var(--success)'
         %}
         <tr id="sub-row-{{ s.id }}" data-sub-id="{{ s.id }}" data-product-id="{{ product.id }}">
-          <!-- view mode -->
-          <td class="view-cell fw-700">{{ s.name }}</td>
-          <td class="view-cell" style="text-align:right">
+          <td class="fw-700 sub-editable" data-field="name" data-val="{{ s.name }}" title="Double-click to edit" ondblclick="cellEdit(this)">{{ s.name }}</td>
+          <td style="text-align:right">
             <span style="font-weight:700;color:{{ stock_color }}">{{ s.stock_qty }}</span>
             {% if min_qty > 0 %}<div style="font-size:10px;color:var(--text-muted)">min {{ min_qty }}</div>{% endif %}
           </td>
-          <td class="view-cell" style="text-align:right;color:var(--primary);font-weight:600">{{ s.in_transit_qty or '—' }}</td>
-          <td class="view-cell" style="text-align:right;color:var(--warning);font-weight:600">{{ s.production_qty or '—' }}</td>
-          <td class="view-cell" style="text-align:right">
-            {% if s.use_parent_price %}<span class="muted">↑ parent</span>
-            {% else %}{{ s.unit_price|inr }}{% endif %}
+          <td style="text-align:right;color:var(--primary);font-weight:600">{{ s.in_transit_qty or '—' }}</td>
+          <td style="text-align:right;color:var(--warning);font-weight:600">{{ s.production_qty or '—' }}</td>
+          <td style="text-align:right" class="sub-editable" data-field="price" data-val="{{ '' if s.use_parent_price else s.unit_price }}" title="Double-click to edit" ondblclick="cellEdit(this)">
+            {% if s.use_parent_price %}<span class="muted">↑ parent</span>{% else %}<span style="font-weight:600">{{ s.unit_price|inr }}</span>{% endif %}
           </td>
-          <td class="view-cell" style="text-align:right;color:var(--text-muted)">{{ s.tax_rate }}%</td>
-
-          <!-- edit mode (hidden) -->
-          <td class="edit-cell" style="display:none"><input type="text" class="ef-name" value="{{ s.name }}" style="width:100%"></td>
-          <td class="edit-cell" style="display:none;text-align:right"><span style="color:{{ stock_color }};font-weight:700">{{ s.stock_qty }}</span></td>
-          <td class="edit-cell" style="display:none;text-align:right;color:var(--primary)">{{ s.in_transit_qty or '—' }}</td>
-          <td class="edit-cell" style="display:none;text-align:right;color:var(--warning)">{{ s.production_qty or '—' }}</td>
-          <td class="edit-cell" style="display:none"><input type="number" class="ef-price" value="{{ '' if s.use_parent_price else s.unit_price }}" step="0.01" min="0" placeholder="parent" style="width:100%;text-align:right"></td>
-          <td class="edit-cell" style="display:none"><input type="number" class="ef-tax" value="{{ s.tax_rate }}" step="0.01" min="0" max="100" style="width:70px;text-align:right"></td>
-
-          <td style="text-align:center;white-space:nowrap">
-            <!-- view actions -->
-            <span class="view-actions">
-              <button class="btn btn-secondary btn-sm" onclick="startEdit({{ s.id }})">Edit</button>
-              <form method="post" action="{{ url_for('products.delete_sub_product', product_id=product.id, sub_id=s.id) }}"
-                    style="display:inline" onsubmit="return confirm('Delete {{ s.name }}?')">
-                <button class="btn btn-danger btn-sm">Del</button>
-              </form>
-            </span>
-            <!-- edit actions -->
-            <span class="edit-actions" style="display:none">
-              <button class="btn btn-primary btn-sm" onclick="saveEdit({{ s.id }})">Save</button>
-              <button class="btn btn-secondary btn-sm" onclick="discardEdit({{ s.id }})">Discard</button>
-            </span>
+          <td style="text-align:right;color:var(--text-muted)">{{ s.tax_rate }}%</td>
+          <td style="text-align:center">
+            <form method="post" action="{{ url_for('products.delete_sub_product', product_id=product.id, sub_id=s.id) }}"
+                  style="display:inline" onsubmit="return confirm('Delete {{ s.name }}?')">
+              <button class="btn btn-danger btn-sm">Del</button>
+            </form>
           </td>
         </tr>
         {% endfor %}
@@ -183,63 +169,113 @@
 
 {% block scripts %}
 <script>
-function startEdit(subId) {
-  const row = document.getElementById('sub-row-' + subId);
-  row.querySelectorAll('.view-cell').forEach(c => c.style.display = 'none');
-  row.querySelectorAll('.edit-cell').forEach(c => c.style.display = '');
-  row.querySelector('.view-actions').style.display = 'none';
-  row.querySelector('.edit-actions').style.display = '';
+const dirtySubs = new Set();
+
+function cellEdit(cell) {
+  if (cell.querySelector('input')) return;
+  const row    = cell.closest('tr');
+  const field  = cell.dataset.field;
+  const val    = cell.dataset.val !== undefined ? String(cell.dataset.val) : '';
+  const origHTML = cell.innerHTML;
+  let cancelled  = false;
+
+  const inp = document.createElement('input');
+  inp.type  = field === 'price' ? 'number' : 'text';
+  if (inp.type === 'number') { inp.step = '0.01'; inp.min = '0'; inp.style.textAlign = 'right'; }
+  inp.value = val;
+  inp.style.cssText = 'width:100%;background:var(--bg);border:1.5px solid var(--primary);border-radius:4px;padding:4px 6px;box-sizing:border-box;font-size:inherit';
+
+  cell.textContent = '';
+  cell.appendChild(inp);
+  inp.focus();
+  if (inp.type === 'text') inp.select();
+
+  inp.addEventListener('keydown', e => {
+    if (e.key === 'Enter')  { e.preventDefault(); inp.blur(); }
+    if (e.key === 'Escape') { cancelled = true; cell.innerHTML = origHTML; }
+  });
+  inp.addEventListener('blur', () => {
+    if (cancelled) return;
+    const newVal = inp.value.trim();
+    cell.dataset.val = newVal;
+    refreshSubCell(cell, field, newVal);
+    markSubDirty(row);
+  });
 }
 
-function discardEdit(subId) {
-  const row = document.getElementById('sub-row-' + subId);
-  row.querySelectorAll('.view-cell').forEach(c => c.style.display = '');
-  row.querySelectorAll('.edit-cell').forEach(c => c.style.display = 'none');
-  row.querySelector('.view-actions').style.display = '';
-  row.querySelector('.edit-actions').style.display = 'none';
+function refreshSubCell(cell, field, val) {
+  if (field === 'name') {
+    cell.textContent = val || '—';
+  } else if (field === 'price') {
+    if (val === '' || val === null || val === undefined) {
+      cell.innerHTML = '<span class="muted">↑ parent</span>';
+    } else {
+      cell.innerHTML = '<span style="font-weight:600">' + formatINR(parseFloat(val)) + '</span>';
+    }
+  }
 }
 
-function showRowError(row, msg) {
-  let err = row.querySelector('.inline-error');
-  if (!err) {
-    err = document.createElement('td');
-    err.className = 'inline-error';
-    err.colSpan = 7;
-    err.style.cssText = 'color:var(--danger);font-size:12px;padding:4px 12px';
-    const errRow = document.createElement('tr');
-    errRow.appendChild(err);
+function markSubDirty(row) {
+  dirtySubs.add(row);
+  row.classList.add('row-dirty');
+  document.getElementById('subsSaveBtn').style.display = '';
+}
+
+function showSubError(row, msg) {
+  let errRow = row.nextElementSibling;
+  if (!errRow || !errRow.classList.contains('row-err')) {
+    errRow = document.createElement('tr');
+    errRow.className = 'row-err';
+    const td = document.createElement('td');
+    td.colSpan = 7;
+    td.style.cssText = 'color:var(--danger);font-size:12px;padding:4px 16px';
+    errRow.appendChild(td);
     row.after(errRow);
   }
-  err.textContent = msg;
-  // auto-clear after 4s
-  setTimeout(() => err.closest('tr').remove(), 4000);
+  errRow.querySelector('td').textContent = msg;
+  setTimeout(() => { if (errRow.parentNode) errRow.remove(); }, 5000);
 }
 
-async function saveEdit(subId) {
-  const row = document.getElementById('sub-row-' + subId);
-  const productId = row.dataset.productId;
-  const name = row.querySelector('.ef-name').value.trim();
-  const priceVal = row.querySelector('.ef-price').value;
-  const taxVal = row.querySelector('.ef-tax').value;
+async function saveAllSubs() {
+  const btn = document.getElementById('subsSaveBtn');
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
 
-  if (!name) { showRowError(row, 'Name is required.'); return; }
+  for (const row of [...dirtySubs]) {
+    const subId     = row.dataset.subId;
+    const productId = row.dataset.productId;
+    const nameCell  = row.querySelector('[data-field="name"]');
+    const priceCell = row.querySelector('[data-field="price"]');
+    const name      = nameCell  ? nameCell.dataset.val.trim()  : '';
+    const priceVal  = priceCell ? priceCell.dataset.val.trim() : '';
 
-  const payload = {
-    name,
-    unit_price: priceVal === '' ? null : parseFloat(priceVal),
-    use_parent_price: priceVal === '' ? 1 : 0,
-    tax_rate: taxVal === '' ? 0 : parseFloat(taxVal),
-  };
+    if (!name) { showSubError(row, 'Name is required'); continue; }
 
-  const res = await fetch(`/products/${productId}/sub/${subId}/inline`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  const json = await res.json();
-  if (!json.ok) { showRowError(row, json.error || 'Save failed.'); return; }
+    const payload = {
+      name,
+      unit_price:      priceVal === '' ? null : parseFloat(priceVal),
+      use_parent_price: priceVal === '' ? 1 : 0,
+    };
+    try {
+      const res  = await fetch(`/products/${productId}/sub/${subId}/inline`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const json = await res.json();
+      if (!json.ok) { showSubError(row, json.error || 'Save failed'); }
+      else { dirtySubs.delete(row); row.classList.remove('row-dirty'); }
+    } catch { showSubError(row, 'Network error'); }
+  }
 
-  location.reload();
+  btn.disabled    = false;
+  btn.textContent = 'Save Changes';
+  if (dirtySubs.size === 0) btn.style.display = 'none';
 }
 </script>
+
+<style>
+.sub-editable          { cursor: cell; }
+.sub-editable:hover    { background: rgba(99,102,241,.05); }
+.row-dirty             { background: rgba(245,158,11,.06) !important; box-shadow: inset 3px 0 0 var(--warning); }
+</style>
 {% endblock %}

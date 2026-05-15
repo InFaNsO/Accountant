@@ -300,5 +300,6 @@ def _create_schema(db):
     _add_column(db, "sub_products",  "production_qty",  "REAL DEFAULT 0")
     _add_column(db, "sub_products",  "in_transit_qty",  "REAL DEFAULT 0")
     _add_column(db, "invoice_items", "sub_product_id",  "INTEGER")
+    _add_column(db, "invoice_items", "sku",             "TEXT")
 
     db.commit()

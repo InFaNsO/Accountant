@@ -14,17 +14,24 @@ def _build_product_choices():
                 if not s["is_active"]:
                     continue
                 choices.append({
-                    "id":         f"sub_{s['id']}",
-                    "name":       f"{p['name']} — {s['name']}",
-                    "unit_price": p["unit_price"] if s["use_parent_price"] else s["unit_price"],
-                    "tax_rate":   p["tax_rate"],
+                    "id":             f"sub_{s['id']}",
+                    "product_id":     p["id"],
+                    "sub_product_id": s["id"],
+                    "name":           f"{p['name']} — {s['name']}",
+                    # SKU: sub's own SKU first, fall back to parent SKU
+                    "sku":            s["sku"] or p["sku"] or "",
+                    "unit_price":     p["unit_price"] if s["use_parent_price"] else (s["unit_price"] or 0),
+                    "tax_rate":       p["tax_rate"] or 0,
                 })
         else:
             choices.append({
-                "id":         str(p["id"]),
-                "name":       p["name"],
-                "unit_price": p["unit_price"],
-                "tax_rate":   p["tax_rate"],
+                "id":             str(p["id"]),
+                "product_id":     p["id"],
+                "sub_product_id": None,
+                "name":           p["name"],
+                "sku":            p["sku"] or "",
+                "unit_price":     p["unit_price"] or 0,
+                "tax_rate":       p["tax_rate"] or 0,
             })
     return choices
 
@@ -43,11 +50,13 @@ def _parse_items(form):
         desc = form.get(f"items[{idx}][description]", "").strip()
         if desc:
             items.append({
-                "product_id": form.get(f"items[{idx}][product_id]") or None,
-                "description": desc,
-                "quantity": form.get(f"items[{idx}][quantity]", 1),
-                "unit_price": form.get(f"items[{idx}][unit_price]", 0),
-                "tax_rate": form.get(f"items[{idx}][tax_rate]", 0),
+                "product_id":     form.get(f"items[{idx}][product_id]") or None,
+                "sub_product_id": form.get(f"items[{idx}][sub_product_id]") or None,
+                "sku":            form.get(f"items[{idx}][sku]", "").strip() or None,
+                "description":    desc,
+                "quantity":       form.get(f"items[{idx}][quantity]", 1),
+                "unit_price":     form.get(f"items[{idx}][unit_price]", 0),
+                "tax_rate":       form.get(f"items[{idx}][tax_rate]", 0),
             })
     return items
 

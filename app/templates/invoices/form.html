@@ -62,48 +62,70 @@
   <div class="card" style="margin-bottom:18px">
     <div class="card-header">
       <span class="card-title">Line Items</span>
-      <div style="display:flex;gap:8px">
-        <select id="productPicker" style="width:220px" onchange="addFromProduct(this)">
-          <option value="">+ Add from catalog…</option>
-          {% for p in products %}
-          <option value="{{ p.id }}" data-name="{{ p.name }}" data-price="{{ p.unit_price or 0 }}" data-tax="{{ p.tax_rate or 0 }}">{{ p.name }} — {{ p.unit_price|inr }}</option>
-          {% endfor %}
-        </select>
-        <button type="button" class="btn btn-secondary" onclick="addRow()">+ Add row</button>
-      </div>
+      <button type="button" class="btn btn-secondary" onclick="addLineItem()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        Add Item
+      </button>
     </div>
-    <div class="card-body" style="padding:16px">
-      <div class="table-wrap">
-        <table class="line-items">
-          <thead>
-            <tr>
-              <th class="col-desc">Description</th>
-              <th class="col-qty">Qty</th>
-              <th class="col-price">Unit Price</th>
-              <th class="col-tax">Tax %</th>
-              <th class="col-total">Line Total</th>
-              <th class="col-del"></th>
-            </tr>
-          </thead>
-          <tbody id="lineItems">
-            {% for item in items %}
-            <tr>
-              <td class="col-desc">
-                <input type="hidden" name="items[{{ loop.index0 }}][product_id]" value="{{ item.get('product_id','') }}">
-                <input type="text" name="items[{{ loop.index0 }}][description]" value="{{ item.get('description','') }}" placeholder="Description" oninput="recalcRow(this)" required>
-              </td>
-              <td class="col-qty"><input type="number" name="items[{{ loop.index0 }}][quantity]" value="{{ item.get('quantity',1) }}" min="0.01" step="any" oninput="recalcRow(this)"></td>
-              <td class="col-price"><input type="number" name="items[{{ loop.index0 }}][unit_price]" value="{{ item.get('unit_price',0) }}" min="0" step="0.01" oninput="recalcRow(this)"></td>
-              <td class="col-tax"><input type="number" name="items[{{ loop.index0 }}][tax_rate]" value="{{ item.get('tax_rate',0) }}" min="0" max="100" step="0.01" oninput="recalcRow(this)"></td>
-              <td class="col-total"><div class="line-total-readonly" id="lt-{{ loop.index0 }}">₹0.00</div></td>
-              <td class="col-del"><button type="button" class="btn btn-danger btn-sm" onclick="removeRow(this)">✕</button></td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
+    <div class="table-wrap">
+      <table class="line-items" style="min-width:700px">
+        <thead>
+          <tr>
+            <th>Product / Description</th>
+            <th style="width:80px;text-align:right">Qty</th>
+            <th style="width:130px;text-align:right">Unit Price (₹)</th>
+            <th style="width:70px;text-align:center">Tax %</th>
+            <th style="width:120px;text-align:right">Total</th>
+            <th style="width:36px"></th>
+          </tr>
+        </thead>
+        <tbody id="lineItems">
+          {% for item in items %}
+          <tr>
+            <td class="col-desc" style="min-width:280px">
+              <div class="cb-wrap">
+                <input type="text"
+                       name="items[{{ loop.index0 }}][description]"
+                       class="cb-input"
+                       value="{{ item.get('description','') }}"
+                       placeholder="Search product by name or SKU…"
+                       autocomplete="off"
+                       oninput="cbFilter(this)"
+                       onfocus="cbOpen(this)"
+                       onblur="cbBlur(this)"
+                       onkeydown="cbKey(event,this)">
+                <div class="cb-dropdown" style="display:none"></div>
+                <input type="hidden" name="items[{{ loop.index0 }}][product_id]"     class="cb-pid"  value="{{ item.get('product_id','') }}">
+                <input type="hidden" name="items[{{ loop.index0 }}][sub_product_id]" class="cb-spid" value="{{ item.get('sub_product_id','') }}">
+              </div>
+              <input type="text"
+                     name="items[{{ loop.index0 }}][sku]"
+                     class="cb-sku-inp"
+                     value="{{ item.get('sku','') }}"
+                     placeholder="SKU (optional)">
+            </td>
+            <td class="col-qty" style="vertical-align:top;padding-top:10px">
+              <input type="number" name="items[{{ loop.index0 }}][quantity]"   value="{{ item.get('quantity',1) }}"   min="0.01" step="any"  oninput="recalcTotals()" style="text-align:right">
+            </td>
+            <td class="col-price" style="vertical-align:top;padding-top:10px">
+              <input type="number" name="items[{{ loop.index0 }}][unit_price]" value="{{ item.get('unit_price',0) }}" min="0"    step="0.01" oninput="recalcTotals()" style="text-align:right">
+            </td>
+            <td class="col-tax" style="vertical-align:top;padding-top:10px">
+              <input type="number" name="items[{{ loop.index0 }}][tax_rate]"   value="{{ item.get('tax_rate',0) }}"   min="0"    max="100"   step="0.01" oninput="recalcTotals()" style="text-align:center">
+            </td>
+            <td class="col-total" style="vertical-align:top;padding-top:14px;text-align:right">
+              <span class="line-total-disp fw-700">₹0.00</span>
+            </td>
+            <td class="col-del" style="vertical-align:top;padding-top:8px">
+              <button type="button" class="btn btn-danger btn-sm" onclick="removeRow(this)" title="Remove">✕</button>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
 
-      <!-- Totals -->
+    <div class="card-body" style="padding:16px 22px">
       <div class="invoice-totals">
         <div class="total-row"><span>Subtotal</span><span id="subtotal">₹0.00</span></div>
         <div class="total-row"><span>Tax</span><span id="taxTotal">₹0.00</span></div>
@@ -122,32 +144,173 @@
 
 {% block scripts %}
 <script>
-let rowCount = {{ items|length }};
+// ── Catalog data (injected from server) ────────────────────────────────────────
+const CATALOG = {{ products | tojson }};
 
-function addRow(desc='', qty=1, price=0, tax=0, productId='') {
-  const idx = rowCount++;
-  const tbody = document.getElementById('lineItems');
-  const tr = document.createElement('tr');
-  tr.innerHTML = `
-    <td class="col-desc">
-      <input type="hidden" name="items[${idx}][product_id]" value="${productId}">
-      <input type="text" name="items[${idx}][description]" value="${desc}" placeholder="Description" oninput="recalcRow(this)" required>
-    </td>
-    <td class="col-qty"><input type="number" name="items[${idx}][quantity]" value="${qty}" min="0.01" step="any" oninput="recalcRow(this)"></td>
-    <td class="col-price"><input type="number" name="items[${idx}][unit_price]" value="${price}" min="0" step="0.01" oninput="recalcRow(this)"></td>
-    <td class="col-tax"><input type="number" name="items[${idx}][tax_rate]" value="${tax}" min="0" max="100" step="0.01" oninput="recalcRow(this)"></td>
-    <td class="col-total"><div class="line-total-readonly" id="lt-${idx}">₹0.00</div></td>
-    <td class="col-del"><button type="button" class="btn btn-danger btn-sm" onclick="removeRow(this)">✕</button></td>
-  `;
-  tbody.appendChild(tr);
+// ── Row counter (handles non-sequential idx after deletes) ─────────────────────
+let rowCount = {{ items | length }};
+
+// ── Combobox helpers ───────────────────────────────────────────────────────────
+function cbBuildOptions(query) {
+  const q = query.trim().toLowerCase();
+  return q === ''
+    ? CATALOG
+    : CATALOG.filter(p =>
+        p.name.toLowerCase().includes(q) ||
+        (p.sku && p.sku.toLowerCase().includes(q))
+      );
+}
+
+function cbRender(input, matches) {
+  const wrap = input.closest('.cb-wrap');
+  const dd   = wrap.querySelector('.cb-dropdown');
+
+  if (!matches.length) {
+    dd.innerHTML = '<div class="cb-no-match">No products found</div>';
+  } else {
+    dd.innerHTML = matches.map((p, i) => `
+      <div class="cb-option" data-idx="${i}" onmousedown="cbSelect(event, this)">
+        <div class="cb-opt-name">${escHtml(p.name)}</div>
+        <div class="cb-opt-meta">${p.sku ? '<span class="cb-sku-tag">' + escHtml(p.sku) + '</span>' : ''} <span class="cb-price-tag">₹${(p.unit_price||0).toFixed(2)}</span> · <span>Tax ${p.tax_rate||0}%</span></div>
+      </div>`).join('');
+  }
+  // Store matches on the dropdown for key navigation
+  dd._matches = matches;
+  dd._cursor  = -1;
+  dd.style.display = '';
+}
+
+function cbOpen(input) {
+  const q = input.value;
+  cbRender(input, cbBuildOptions(q));
+}
+
+function cbFilter(input) {
+  const wrap = input.closest('.cb-wrap');
+  // User typed something manually — clear product binding
+  wrap.querySelector('.cb-pid').value  = '';
+  wrap.querySelector('.cb-spid').value = '';
+  cbRender(input, cbBuildOptions(input.value));
   recalcTotals();
 }
 
-function addFromProduct(sel) {
-  const opt = sel.options[sel.selectedIndex];
-  if (!opt.value) return;
-  addRow(opt.dataset.name, 1, parseFloat(opt.dataset.price), parseFloat(opt.dataset.tax), opt.value);
-  sel.selectedIndex = 0;
+function cbBlur(input) {
+  // Short delay lets onmousedown fire before the dropdown hides
+  setTimeout(() => {
+    const dd = input.closest('.cb-wrap').querySelector('.cb-dropdown');
+    dd.style.display = 'none';
+    dd._cursor = -1;
+  }, 180);
+}
+
+function cbSelect(event, optEl) {
+  event.preventDefault();
+  const wrap    = optEl.closest('.cb-wrap');
+  const input   = wrap.querySelector('.cb-input');
+  const dd      = wrap.querySelector('.cb-dropdown');
+  const matches = dd._matches || [];
+  const idx     = parseInt(optEl.dataset.idx, 10);
+  const p       = matches[idx];
+  if (!p) return;
+
+  // Fill description
+  input.value = p.name;
+  // Fill hidden IDs
+  wrap.querySelector('.cb-pid').value  = p.product_id  || '';
+  wrap.querySelector('.cb-spid').value = p.sub_product_id || '';
+  // Fill SKU in the row's sku input
+  const row = wrap.closest('tr');
+  const skuInp = row.querySelector('.cb-sku-inp');
+  if (skuInp && !skuInp._userEdited) skuInp.value = p.sku || '';
+  // Fill price & tax
+  const priceInp = row.querySelector('[name$="[unit_price]"]');
+  const taxInp   = row.querySelector('[name$="[tax_rate]"]');
+  if (priceInp) priceInp.value = (p.unit_price || 0).toFixed(2);
+  if (taxInp)   taxInp.value   = p.tax_rate || 0;
+
+  dd.style.display = 'none';
+  recalcTotals();
+}
+
+function cbKey(event, input) {
+  const dd = input.closest('.cb-wrap').querySelector('.cb-dropdown');
+  if (dd.style.display === 'none') { cbOpen(input); return; }
+  const opts = dd.querySelectorAll('.cb-option');
+
+  if (event.key === 'Escape') { dd.style.display = 'none'; return; }
+
+  if (event.key === 'ArrowDown') {
+    event.preventDefault();
+    dd._cursor = Math.min((dd._cursor || -1) + 1, opts.length - 1);
+    opts.forEach((o, i) => o.classList.toggle('cb-active', i === dd._cursor));
+    if (opts[dd._cursor]) opts[dd._cursor].scrollIntoView({ block: 'nearest' });
+  } else if (event.key === 'ArrowUp') {
+    event.preventDefault();
+    dd._cursor = Math.max((dd._cursor || 0) - 1, 0);
+    opts.forEach((o, i) => o.classList.toggle('cb-active', i === dd._cursor));
+    if (opts[dd._cursor]) opts[dd._cursor].scrollIntoView({ block: 'nearest' });
+  } else if (event.key === 'Enter') {
+    event.preventDefault();
+    if (dd._cursor >= 0 && opts[dd._cursor]) {
+      cbSelect(event, opts[dd._cursor]);
+    }
+  }
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Add / remove rows ──────────────────────────────────────────────────────────
+function addLineItem(desc='', sku='', qty=1, price=0, tax=0, pid='', spid='') {
+  const idx   = rowCount++;
+  const tbody = document.getElementById('lineItems');
+  const tr    = document.createElement('tr');
+  tr.innerHTML = `
+    <td class="col-desc" style="min-width:280px">
+      <div class="cb-wrap">
+        <input type="text"
+               name="items[${idx}][description]"
+               class="cb-input"
+               value="${escHtml(desc)}"
+               placeholder="Search product by name or SKU…"
+               autocomplete="off"
+               oninput="cbFilter(this)"
+               onfocus="cbOpen(this)"
+               onblur="cbBlur(this)"
+               onkeydown="cbKey(event,this)">
+        <div class="cb-dropdown" style="display:none"></div>
+        <input type="hidden" name="items[${idx}][product_id]"     class="cb-pid"  value="${escHtml(pid)}">
+        <input type="hidden" name="items[${idx}][sub_product_id]" class="cb-spid" value="${escHtml(spid)}">
+      </div>
+      <input type="text"
+             name="items[${idx}][sku]"
+             class="cb-sku-inp"
+             value="${escHtml(sku)}"
+             placeholder="SKU (optional)">
+    </td>
+    <td class="col-qty"   style="vertical-align:top;padding-top:10px">
+      <input type="number" name="items[${idx}][quantity]"   value="${qty}"   min="0.01" step="any"  oninput="recalcTotals()" style="text-align:right">
+    </td>
+    <td class="col-price" style="vertical-align:top;padding-top:10px">
+      <input type="number" name="items[${idx}][unit_price]" value="${price}" min="0"    step="0.01" oninput="recalcTotals()" style="text-align:right">
+    </td>
+    <td class="col-tax"   style="vertical-align:top;padding-top:10px">
+      <input type="number" name="items[${idx}][tax_rate]"   value="${tax}"   min="0"    max="100"   step="0.01" oninput="recalcTotals()" style="text-align:center">
+    </td>
+    <td class="col-total" style="vertical-align:top;padding-top:14px;text-align:right">
+      <span class="line-total-disp fw-700">₹0.00</span>
+    </td>
+    <td class="col-del"   style="vertical-align:top;padding-top:8px">
+      <button type="button" class="btn btn-danger btn-sm" onclick="removeRow(this)" title="Remove">✕</button>
+    </td>`;
+  tbody.appendChild(tr);
+  // Mark sku as not user-edited yet
+  tr.querySelector('.cb-sku-inp')._userEdited = false;
+  tr.querySelector('.cb-sku-inp').addEventListener('input', function() { this._userEdited = true; });
+  // Focus the new combobox
+  tr.querySelector('.cb-input').focus();
+  recalcTotals();
 }
 
 function removeRow(btn) {
@@ -158,44 +321,94 @@ function removeRow(btn) {
 
 function renumberRows() {
   document.querySelectorAll('#lineItems tr').forEach((tr, i) => {
-    tr.querySelectorAll('input[name]').forEach(input => {
-      input.name = input.name.replace(/items\[\d+\]/, `items[${i}]`);
+    tr.querySelectorAll('input[name]').forEach(inp => {
+      inp.name = inp.name.replace(/items\[\d+\]/, `items[${i}]`);
     });
-    const lt = tr.querySelector('[id^="lt-"]');
-    if (lt) lt.id = `lt-${i}`;
   });
   rowCount = document.querySelectorAll('#lineItems tr').length;
 }
 
-function recalcRow(input) { recalcTotals(); }
-
+// ── Totals ─────────────────────────────────────────────────────────────────────
 function recalcTotals() {
   let subtotal = 0, taxTotal = 0;
-  document.querySelectorAll('#lineItems tr').forEach((tr, i) => {
-    const qty   = parseFloat(tr.querySelector('[name$="[quantity]"]')?.value) || 0;
+  document.querySelectorAll('#lineItems tr').forEach(tr => {
+    const qty   = parseFloat(tr.querySelector('[name$="[quantity]"]')?.value)   || 0;
     const price = parseFloat(tr.querySelector('[name$="[unit_price]"]')?.value) || 0;
-    const tax   = parseFloat(tr.querySelector('[name$="[tax_rate]"]')?.value) || 0;
+    const tax   = parseFloat(tr.querySelector('[name$="[tax_rate]"]')?.value)   || 0;
     const lineTotal = qty * price;
     const lineTax   = lineTotal * tax / 100;
-    subtotal += lineTotal;
-    taxTotal += lineTax;
-    const ltEl = tr.querySelector('[id^="lt-"]');
-    if (ltEl) ltEl.textContent = formatINR(lineTotal);
+    subtotal  += lineTotal;
+    taxTotal  += lineTax;
+    const disp = tr.querySelector('.line-total-disp');
+    if (disp) disp.textContent = formatINR(lineTotal);
   });
   const discount = parseFloat(document.getElementById('discount_amount')?.value) || 0;
   const grand = subtotal + taxTotal - discount;
-  document.getElementById('subtotal').textContent       = formatINR(subtotal);
-  document.getElementById('taxTotal').textContent       = formatINR(taxTotal);
-  document.getElementById('discountDisplay').textContent= formatINR(discount);
-  document.getElementById('grandTotal').textContent     = formatINR(grand);
+  document.getElementById('subtotal').textContent        = formatINR(subtotal);
+  document.getElementById('taxTotal').textContent        = formatINR(taxTotal);
+  document.getElementById('discountDisplay').textContent = formatINR(discount);
+  document.getElementById('grandTotal').textContent      = formatINR(grand);
 }
 
-// Set today's date default and recalc on load
+// ── Init ───────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
+  // Set today's date if blank
   const issueDate = document.getElementById('issue_date');
   if (!issueDate.value) issueDate.value = new Date().toISOString().slice(0,10);
-  if ({{ items|length }} === 0) addRow();
+
+  // If no rows exist yet, add a blank one
+  if (document.querySelectorAll('#lineItems tr').length === 0) addLineItem();
+
+  // Wire up sku user-edit tracking for server-rendered rows (edit mode)
+  document.querySelectorAll('#lineItems .cb-sku-inp').forEach(inp => {
+    inp._userEdited = !!inp.value;
+    inp.addEventListener('input', function() { this._userEdited = true; });
+  });
+
   recalcTotals();
 });
 </script>
+
+<style>
+/* ── Combobox ──────────────────────────────────────────────────────────────── */
+.cb-wrap { position: relative; }
+.cb-input { width: 100%; }
+.cb-dropdown {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  right: 0;
+  z-index: 300;
+  background: var(--bg-card, #fff);
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: var(--radius-sm, 6px);
+  box-shadow: 0 4px 16px rgba(0,0,0,.12);
+  max-height: 260px;
+  overflow-y: auto;
+}
+.cb-option {
+  padding: 8px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border, #e2e8f0);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.cb-option:last-child { border-bottom: none; }
+.cb-option:hover, .cb-option.cb-active { background: var(--bg-alt, #f8fafc); }
+.cb-opt-name { font-weight: 600; color: var(--text, #1e293b); }
+.cb-opt-meta { font-size: 11px; color: var(--text-muted, #64748b); margin-top: 2px; display: flex; gap: 6px; align-items: center; }
+.cb-sku-tag  { background: var(--bg-alt, #f1f5f9); border-radius: 3px; padding: 1px 5px; font-family: monospace; }
+.cb-price-tag{ font-weight: 600; color: var(--success, #10b981); }
+.cb-no-match { padding: 10px 12px; color: var(--text-muted, #64748b); font-size: 13px; font-style: italic; }
+/* SKU input under the combobox */
+.cb-sku-inp {
+  margin-top: 4px;
+  width: 100%;
+  font-size: 11px;
+  color: var(--text-muted, #64748b);
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  padding: 3px 8px !important;
+  height: auto !important;
+}
+</style>
 {% endblock %}

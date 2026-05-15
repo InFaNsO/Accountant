@@ -27,6 +27,7 @@
   <div class="card">
     <div class="card-header"><span class="card-title">Add Product to Price List</span></div>
     <div class="card-body">
+      {% if choices %}
       <form method="post" action="{{ url_for('suppliers.add_product', supplier_id=supplier.id) }}">
         <div class="form-group" style="margin-bottom:10px">
           <label style="font-size:12px">Product</label>
@@ -50,23 +51,54 @@
         </div>
         <button class="btn btn-primary btn-sm" style="width:100%">Add to Price List</button>
       </form>
+      {% else %}
+      <div class="empty-state" style="padding:20px">
+        <p style="color:var(--text-muted);font-size:13px">All available products are already in the price list.</p>
+      </div>
+      {% endif %}
     </div>
   </div>
 </div>
 
 <!-- Price list -->
 <div class="card">
-  <div class="card-header"><span class="card-title">Price List ({{ sp_list|length }})</span></div>
+  <div class="card-header">
+    <div>
+      <span class="card-title">Price List ({{ sp_list|length }})</span>
+      <span style="font-size:11px;color:var(--text-muted);margin-left:10px">Double-click Price or Notes to edit</span>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button id="spSaveBtn" class="btn btn-primary btn-sm" onclick="saveAllSp()" style="display:none">Save Changes</button>
+    </div>
+  </div>
   {% if sp_list %}
   <div class="table-wrap">
     <table>
-      <thead><tr><th>Product</th><th style="text-align:right">Price</th><th>Notes</th><th></th></tr></thead>
+      <thead>
+        <tr>
+          <th>Product</th>
+          <th style="text-align:right;width:150px">Price (₹)</th>
+          <th>Notes</th>
+          <th style="width:90px"></th>
+        </tr>
+      </thead>
       <tbody>
         {% for sp in sp_list %}
-        <tr>
+        <tr id="sp-row-{{ sp.id }}" data-sp-id="{{ sp.id }}" data-supplier-id="{{ supplier.id }}">
           <td class="fw-700">{{ sp.display_name }}</td>
-          <td style="text-align:right">{% if sp.price %}{{ sp.price|inr }}{% else %}<span class="muted">—</span>{% endif %}</td>
-          <td class="muted">{{ sp.notes or '—' }}</td>
+          <td style="text-align:right"
+              class="sp-editable"
+              data-field="price"
+              data-val="{{ sp.price or '' }}"
+              title="Double-click to edit"
+              ondblclick="spCellEdit(this)">
+            {% if sp.price %}<span style="font-weight:600">{{ sp.price|inr }}</span>{% else %}<span class="muted">—</span>{% endif %}
+          </td>
+          <td class="sp-editable muted"
+              data-field="notes"
+              data-val="{{ sp.notes or '' }}"
+              title="Double-click to edit"
+              ondblclick="spCellEdit(this)">{{ sp.notes or '—' }}</td>
           <td style="text-align:right">
             <form method="post" action="{{ url_for('suppliers.remove_product', supplier_id=supplier.id, sp_id=sp.id) }}"
                   style="display:inline" onsubmit="return confirm('Remove from price list?')">
@@ -82,4 +114,109 @@
   <div class="empty-state" style="padding:30px"><p>No products linked yet.</p></div>
   {% endif %}
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const dirtySpRows = new Set();
+
+function spCellEdit(cell) {
+  if (cell.querySelector('input')) return;
+  const row     = cell.closest('tr');
+  const field   = cell.dataset.field;
+  const val     = cell.dataset.val !== undefined ? String(cell.dataset.val) : '';
+  const origHTML = cell.innerHTML;
+  let cancelled  = false;
+
+  const inp  = document.createElement('input');
+  inp.type   = field === 'price' ? 'number' : 'text';
+  if (inp.type === 'number') { inp.step = '0.01'; inp.min = '0'; inp.style.textAlign = 'right'; }
+  inp.value  = val;
+  inp.style.cssText = 'width:100%;background:var(--bg);border:1.5px solid var(--primary);border-radius:4px;padding:4px 6px;box-sizing:border-box;font-size:inherit';
+
+  cell.textContent = '';
+  cell.appendChild(inp);
+  inp.focus();
+  if (inp.type === 'text') inp.select();
+
+  inp.addEventListener('keydown', e => {
+    if (e.key === 'Enter')  { e.preventDefault(); inp.blur(); }
+    if (e.key === 'Escape') { cancelled = true; cell.innerHTML = origHTML; }
+  });
+  inp.addEventListener('blur', () => {
+    if (cancelled) return;
+    const newVal = inp.value.trim();
+    cell.dataset.val = newVal;
+    refreshSpCell(cell, field, newVal);
+    markSpDirty(row);
+  });
+}
+
+function refreshSpCell(cell, field, val) {
+  if (field === 'price') {
+    cell.innerHTML = val === ''
+      ? '<span class="muted">—</span>'
+      : '<span style="font-weight:600">' + formatINR(parseFloat(val)) + '</span>';
+  } else {
+    cell.textContent = val || '—';
+    cell.className   = val ? 'sp-editable' : 'sp-editable muted';
+  }
+}
+
+function markSpDirty(row) {
+  dirtySpRows.add(row);
+  row.classList.add('row-dirty');
+  document.getElementById('spSaveBtn').style.display = '';
+}
+
+function showSpError(row, msg) {
+  let errRow = row.nextElementSibling;
+  if (!errRow || !errRow.classList.contains('sp-err-row')) {
+    errRow = document.createElement('tr');
+    errRow.className = 'sp-err-row';
+    const td = document.createElement('td');
+    td.colSpan = 4;
+    td.style.cssText = 'color:var(--danger);font-size:12px;padding:4px 16px';
+    errRow.appendChild(td);
+    row.after(errRow);
+  }
+  errRow.querySelector('td').textContent = msg;
+  setTimeout(() => { if (errRow.parentNode) errRow.remove(); }, 5000);
+}
+
+async function saveAllSp() {
+  const btn = document.getElementById('spSaveBtn');
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
+
+  for (const row of [...dirtySpRows]) {
+    const spId       = row.dataset.spId;
+    const supplierId = row.dataset.supplierId;
+    const priceCell  = row.querySelector('[data-field="price"]');
+    const notesCell  = row.querySelector('[data-field="notes"]');
+    const priceVal   = priceCell ? priceCell.dataset.val.trim() : '';
+    const notesVal   = notesCell ? notesCell.dataset.val.trim() : '';
+
+    try {
+      const res  = await fetch(`/suppliers/${supplierId}/products/${spId}/update`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ price: priceVal === '' ? null : priceVal, notes: notesVal }),
+      });
+      const json = await res.json();
+      if (!json.ok) { showSpError(row, json.error || 'Save failed'); }
+      else { dirtySpRows.delete(row); row.classList.remove('row-dirty'); }
+    } catch { showSpError(row, 'Network error'); }
+  }
+
+  btn.disabled    = false;
+  btn.textContent = 'Save Changes';
+  if (dirtySpRows.size === 0) btn.style.display = 'none';
+}
+</script>
+
+<style>
+.sp-editable         { cursor: cell; }
+.sp-editable:hover   { background: rgba(99,102,241,.05); }
+.row-dirty           { background: rgba(245,158,11,.06) !important; box-shadow: inset 3px 0 0 var(--warning); }
+</style>
 {% endblock %}

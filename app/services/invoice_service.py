@@ -129,11 +129,14 @@ def create_invoice(data, items):
     for it in items:
         line_total = float(it["unit_price"]) * float(it["quantity"])
         db.execute(
-            """INSERT INTO invoice_items (invoice_id, product_id, description, quantity, unit_price, tax_rate, line_total)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO invoice_items
+               (invoice_id, product_id, sub_product_id, sku, description, quantity, unit_price, tax_rate, line_total)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 invoice_id,
                 it.get("product_id") or None,
+                it.get("sub_product_id") or None,
+                it.get("sku") or None,
                 it["description"],
                 float(it["quantity"]),
                 float(it["unit_price"]),
@@ -181,12 +184,19 @@ def update_invoice(invoice_id, data, items):
     for it in items:
         line_total = float(it["unit_price"]) * float(it["quantity"])
         db.execute(
-            """INSERT INTO invoice_items (invoice_id, product_id, description, quantity, unit_price, tax_rate, line_total)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO invoice_items
+               (invoice_id, product_id, sub_product_id, sku, description, quantity, unit_price, tax_rate, line_total)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                invoice_id, it.get("product_id") or None,
-                it["description"], float(it["quantity"]),
-                float(it["unit_price"]), float(it.get("tax_rate", 0)), line_total,
+                invoice_id,
+                it.get("product_id") or None,
+                it.get("sub_product_id") or None,
+                it.get("sku") or None,
+                it["description"],
+                float(it["quantity"]),
+                float(it["unit_price"]),
+                float(it.get("tax_rate", 0)),
+                line_total,
             ),
         )
     db.commit()

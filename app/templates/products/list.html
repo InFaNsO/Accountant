@@ -11,7 +11,7 @@
 
 {% block content %}
 {% if groups %}
-  {% set ns = namespace(current_cat=None) %}
+  {% set ns = namespace(current_cat=None, cat_id=0) %}
   {% for g in groups %}
     {% set p = g.product %}
     {% set subs = g.subs %}
@@ -19,16 +19,35 @@
     {% if p.category_name != ns.current_cat %}
       {% if ns.current_cat is not none %}</div>{% endif %}
       {% set ns.current_cat = p.category_name %}
+      {% set ns.cat_id = ns.cat_id + 1 %}
       <div class="card" style="margin-bottom:18px">
         <div class="card-header" style="background:var(--bg-alt)">
           <span class="card-title" style="font-size:13px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted)">
             {{ p.category_name or 'Uncategorised' }}
           </span>
+          <div class="cat-ctrl" data-cat="{{ ns.cat_id }}" style="display:flex;gap:6px">
+            <button class="btn btn-secondary btn-sm" onclick="setCatExpand({{ ns.cat_id }}, true)">Expand All</button>
+            <button class="btn btn-secondary btn-sm" onclick="setCatExpand({{ ns.cat_id }}, false)">Collapse All</button>
+          </div>
         </div>
     {% endif %}
 
+    {% set p_color =
+      'var(--danger)'  if p.min_quantity > 0 and p.stock_qty < p.min_quantity else
+      'var(--warning)' if p.min_quantity > 0 and p.stock_qty <= (p.min_quantity * 1.2) else
+      'var(--success)'
+    %}
+
     <!-- Product row -->
-    <div style="display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--border)">
+    <div style="display:flex;align-items:center;gap:8px;padding:14px 20px;border-bottom:1px solid var(--border)">
+      {% if subs %}
+      <button class="sub-toggle" data-pid="{{ p.id }}" data-cat="{{ ns.cat_id }}"
+              onclick="toggleSubs({{ p.id }})"
+              style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:13px;padding:2px 4px;flex-shrink:0;line-height:1"
+              title="Toggle sub-products">▼</button>
+      {% else %}
+      <span style="width:20px;flex-shrink:0"></span>
+      {% endif %}
       <div style="flex:1;min-width:0">
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <a href="{{ url_for('products.product_detail', product_id=p.id) }}"
@@ -39,9 +58,9 @@
         <div style="display:flex;gap:24px;margin-top:4px;font-size:13px;color:var(--text-muted);flex-wrap:wrap">
           <span>Price: <strong style="color:var(--text)">{{ p.unit_price|inr }}</strong></span>
           <span>Tax: {{ p.tax_rate }}%</span>
-          <span>Stock: <strong style="color:{% if p.stock_qty < p.min_quantity and p.min_quantity > 0 %}var(--danger){% else %}var(--text){% endif %}">{{ p.stock_qty }}</strong>
-            {% if p.min_quantity > 0 %}<span style="color:var(--text-muted)"> / min {{ p.min_quantity }}</span>{% endif %}
-          </span>
+          {% if not subs %}
+          <span>Stock: <strong style="color:{{ p_color }}">{{ p.stock_qty }}</strong>{% if p.min_quantity > 0 %}<span style="color:var(--text-muted)"> / min {{ p.min_quantity }}</span>{% endif %}</span>
+          {% endif %}
           {% if p.production_qty > 0 %}<span style="color:var(--warning)">In production: {{ p.production_qty }}</span>{% endif %}
           {% if p.in_transit_qty > 0 %}<span style="color:var(--primary)">In transit: {{ p.in_transit_qty }}</span>{% endif %}
         </div>
@@ -56,39 +75,45 @@
       </div>
     </div>
 
-    {% for s in subs %}
-    <!-- Sub-product row -->
-    <div style="display:flex;align-items:center;gap:12px;padding:10px 20px 10px 44px;border-bottom:1px solid var(--border);background:var(--bg-alt)">
-      <div style="flex:1;min-width:0">
-        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-          <span style="color:var(--text-muted);font-size:12px">↳</span>
-          <span style="font-weight:600;font-size:14px">{{ s.name }}</span>
-          {% if s.sku %}<span class="muted font-mono" style="font-size:12px">{{ s.sku }}</span>{% endif %}
-          {% if not s.is_active %}<span class="badge badge-inactive">Inactive</span>{% endif %}
+    {% if subs %}
+    <div id="sub-group-{{ p.id }}" class="sub-group" data-cat="{{ ns.cat_id }}">
+      {% for s in subs %}
+      {% set min_q = s.min_quantity if s.min_quantity > 0 else p.min_quantity %}
+      {% set s_color =
+        'var(--danger)'  if min_q > 0 and s.stock_qty < min_q else
+        'var(--warning)' if min_q > 0 and s.stock_qty <= (min_q * 1.2) else
+        'var(--success)'
+      %}
+      <div style="display:flex;align-items:center;gap:8px;padding:10px 20px 10px 52px;border-bottom:1px solid var(--border);background:var(--bg-alt)">
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span style="color:var(--text-muted);font-size:12px">↳</span>
+            <span style="font-weight:600;font-size:14px">{{ s.name }}</span>
+            {% if s.sku %}<span class="muted font-mono" style="font-size:12px">{{ s.sku }}</span>{% endif %}
+            {% if not s.is_active %}<span class="badge badge-inactive">Inactive</span>{% endif %}
+          </div>
+          <div style="display:flex;gap:20px;margin-top:3px;font-size:12px;color:var(--text-muted);flex-wrap:wrap">
+            {% if s.use_parent_price %}
+              <span>Price: <em>parent ({{ p.unit_price|inr }})</em></span>
+            {% else %}
+              <span>Price: <strong style="color:var(--text)">{{ s.unit_price|inr }}</strong></span>
+            {% endif %}
+            <span>Stock: <strong style="color:{{ s_color }}">{{ s.stock_qty }}</strong>{% if min_q > 0 %}<span style="color:var(--text-muted)"> / min {{ min_q }}</span>{% endif %}</span>
+            {% if s.production_qty > 0 %}<span style="color:var(--warning)">In production: {{ s.production_qty }}</span>{% endif %}
+            {% if s.in_transit_qty > 0 %}<span style="color:var(--primary)">In transit: {{ s.in_transit_qty }}</span>{% endif %}
+          </div>
         </div>
-        <div style="display:flex;gap:20px;margin-top:3px;font-size:12px;color:var(--text-muted);flex-wrap:wrap">
-          {% if s.use_parent_price %}
-            <span>Price: <em>parent ({{ p.unit_price|inr }})</em></span>
-          {% else %}
-            <span>Price: <strong style="color:var(--text)">{{ s.unit_price|inr }}</strong></span>
-          {% endif %}
-          <span>Stock: <strong>{{ s.stock_qty }}</strong>
-            {% set min_q = s.min_quantity if s.min_quantity > 0 else p.min_quantity %}
-            {% if min_q > 0 %}<span style="color:var(--text-muted)"> / min {{ min_q }}</span>{% endif %}
-          </span>
-          {% if s.production_qty > 0 %}<span style="color:var(--warning)">In production: {{ s.production_qty }}</span>{% endif %}
-          {% if s.in_transit_qty > 0 %}<span style="color:var(--primary)">In transit: {{ s.in_transit_qty }}</span>{% endif %}
+        <div style="display:flex;gap:6px;flex-shrink:0">
+          <a href="{{ url_for('products.edit_sub_product', product_id=p.id, sub_id=s.id) }}" class="btn btn-secondary btn-sm">Edit</a>
+          <form method="post" action="{{ url_for('products.delete_sub_product', product_id=p.id, sub_id=s.id) }}"
+                onsubmit="return confirm('Delete {{ s.name }}?')">
+            <button class="btn btn-danger btn-sm">Delete</button>
+          </form>
         </div>
       </div>
-      <div style="display:flex;gap:6px;flex-shrink:0">
-        <a href="{{ url_for('products.edit_sub_product', product_id=p.id, sub_id=s.id) }}" class="btn btn-secondary btn-sm">Edit</a>
-        <form method="post" action="{{ url_for('products.delete_sub_product', product_id=p.id, sub_id=s.id) }}"
-              onsubmit="return confirm('Delete {{ s.name }}?')">
-          <button class="btn btn-danger btn-sm">Delete</button>
-        </form>
-      </div>
+      {% endfor %}
     </div>
-    {% endfor %}
+    {% endif %}
 
   {% endfor %}
   {% if ns.current_cat is not none %}</div>{% endif %}
@@ -103,4 +128,36 @@
   </div>
 </div>
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+function toggleSubs(pid) {
+  const el  = document.getElementById('sub-group-' + pid);
+  const btn = document.querySelector(`.sub-toggle[data-pid="${pid}"]`);
+  if (!el) return;
+  const visible = el.style.display !== 'none';
+  el.style.display  = visible ? 'none' : '';
+  btn.textContent   = visible ? '▶' : '▼';
+}
+
+function setCatExpand(catId, expand) {
+  document.querySelectorAll(`.sub-group[data-cat="${catId}"]`).forEach(el => {
+    el.style.display = expand ? '' : 'none';
+  });
+  document.querySelectorAll(`.sub-toggle[data-cat="${catId}"]`).forEach(btn => {
+    btn.textContent = expand ? '▼' : '▶';
+  });
+}
+
+// Hide category expand/collapse buttons if the category has no sub-groups
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.cat-ctrl').forEach(ctrl => {
+    const catId = ctrl.dataset.cat;
+    if (!document.querySelector(`.sub-group[data-cat="${catId}"]`)) {
+      ctrl.style.display = 'none';
+    }
+  });
+});
+</script>
 {% endblock %}
