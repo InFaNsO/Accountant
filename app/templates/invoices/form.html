@@ -147,7 +147,7 @@
 {% block scripts %}
 <script>
 // ── Client list ────────────────────────────────────────────────────────────────
-const CLIENT_LIST = [{% for c in clients %}{"id":{{ c.id }},"name":{{ c.name|tojson }},"company":{{ (c.company or '')|tojson }}}{% if not loop.last %},{% endif %}{% endfor %}];
+const CLIENT_LIST = [{% for c in clients %}{"id":{{ c.id }},"name":{{ c.name|tojson }},"company":{{ (c.company or '')|tojson }},"payment_terms":{{ c.payment_terms or 0 }}}{% if not loop.last %},{% endif %}{% endfor %}];
 
 // ── Client combobox ────────────────────────────────────────────────────────────
 const _clientDD = (() => {
@@ -200,6 +200,21 @@ function clientCbSelect(e, optEl) {
   document.getElementById('client_id').value = c.id;
   document.getElementById('client_error').style.display = 'none';
   _clientDD.style.display = 'none'; _clientInput = null;
+
+  // Auto-fill due date from client's payment terms
+  const dueDate = document.getElementById('due_date');
+  const issueDate = document.getElementById('issue_date');
+  if (c.payment_terms > 0) {
+    dueDate._clientTerms = c.payment_terms;
+    if (issueDate.value) {
+      const d = new Date(issueDate.value);
+      d.setDate(d.getDate() + c.payment_terms);
+      dueDate.value = d.toISOString().slice(0, 10);
+      dueDate._userSet = false;
+    }
+  } else {
+    dueDate._clientTerms = null;
+  }
 }
 function clientCbKey(e, inp) {
   if (_clientDD.style.display === 'none' || _clientInput !== inp) {
@@ -512,10 +527,12 @@ function recalcTotals() {
 // ── Init ───────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   // Pre-populate client combobox in edit mode
-  const clientIdVal = document.getElementById('client_id').value;
-  if (clientIdVal) {
-    const found = CLIENT_LIST.find(c => String(c.id) === String(clientIdVal));
-    if (found) document.getElementById('client_search').value = found.name + (found.company ? ' — ' + found.company : '');
+  {
+    const clientIdVal = document.getElementById('client_id').value;
+    if (clientIdVal) {
+      const found = CLIENT_LIST.find(c => String(c.id) === String(clientIdVal));
+      if (found) document.getElementById('client_search').value = found.name + (found.company ? ' — ' + found.company : '');
+    }
   }
 
   // Validate client selection on submit
@@ -528,21 +545,30 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }, true);
 
-  // Set today's date if blank; auto-set due date to +60 days
+  // Set today's date if blank; auto-set due date from client payment terms (fallback: 60 days)
   const issueDate = document.getElementById('issue_date');
   const dueDate   = document.getElementById('due_date');
   function syncDueDate() {
     if (issueDate.value && !dueDate._userSet) {
+      const days = dueDate._clientTerms || 60;
       const d = new Date(issueDate.value);
-      d.setDate(d.getDate() + 60);
+      d.setDate(d.getDate() + days);
       dueDate.value = d.toISOString().slice(0, 10);
     }
   }
   if (!issueDate.value) issueDate.value = new Date().toISOString().slice(0, 10);
   dueDate._userSet = !!dueDate.value;
+  dueDate._clientTerms = null;  // set by clientCbSelect when a client is chosen
   dueDate.addEventListener('change', () => { dueDate._userSet = true; });
   issueDate.addEventListener('change', syncDueDate);
   if (!dueDate.value) syncDueDate();
+
+  // Pre-populate payment terms from selected client in edit mode
+  const clientIdVal = document.getElementById('client_id').value;
+  if (clientIdVal) {
+    const found = CLIENT_LIST.find(c => String(c.id) === String(clientIdVal));
+    if (found && found.payment_terms > 0) dueDate._clientTerms = found.payment_terms;
+  }
 
   // If no rows exist yet, add a blank one
   if (document.querySelectorAll('#lineItems tr').length === 0) addLineItem();

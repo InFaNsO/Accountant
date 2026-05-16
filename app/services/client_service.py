@@ -50,13 +50,14 @@ def create_client(data):
     db = get_db()
     cur = db.execute(
         """INSERT INTO clients
-               (name, company, email, phone, address, city, country, tax_id, notes, opening_balance)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               (name, company, email, phone, address, city, country, tax_id, notes, opening_balance, payment_terms)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             data["name"], data.get("company"), data.get("email"),
             data.get("phone"), data.get("address"), data.get("city"),
             data.get("country"), data.get("tax_id"), data.get("notes"),
             _signed_opening(data),
+            int(data.get("payment_terms") or 0),
         ),
     )
     db.commit()
@@ -77,13 +78,14 @@ def update_client(client_id, data):
         """UPDATE clients
            SET name=?, company=?, email=?, phone=?, address=?,
                city=?, country=?, tax_id=?, notes=?, opening_balance=?,
-               updated_at=CURRENT_TIMESTAMP
+               payment_terms=?, updated_at=CURRENT_TIMESTAMP
            WHERE id=?""",
         (
             data["name"], data.get("company"), data.get("email"),
             data.get("phone"), data.get("address"), data.get("city"),
             data.get("country"), data.get("tax_id"), data.get("notes"),
             _signed_opening(data),
+            int(data.get("payment_terms") or 0),
             client_id,
         ),
     )
