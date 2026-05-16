@@ -36,24 +36,39 @@
       {% if invoices %}
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Invoice</th><th>Date</th><th>Due</th><th>Total</th><th>Paid</th><th>Status</th><th></th></tr></thead>
+          <thead>
+            <tr>
+              <th>Invoice</th>
+              <th>Date</th>
+              <th>Due</th>
+              <th>Total</th>
+              {% if can_financials %}<th>Paid</th><th>Status</th>{% endif %}
+              <th></th>
+            </tr>
+          </thead>
           <tbody>
             {% for inv in invoices %}
-            {% set _paid = inv.status == 'paid' or inv.amount_paid >= inv.total and inv.total > 0 %}
-            {% set _overdue = inv.due_date and inv.due_date < today and inv.status not in ('paid','cancelled') %}
-            {% set _pct_unpaid = ((inv.total - inv.amount_paid) / inv.total) if inv.total > 0 else 0 %}
-            {% if inv.status == 'cancelled' %}{% set _rc = '' %}
-            {% elif _paid %}{% set _rc = 'var(--success)' %}
-            {% elif _overdue %}{% set _rc = '#b91c1c' %}
-            {% elif _pct_unpaid > 0.5 %}{% set _rc = 'var(--danger)' %}
-            {% else %}{% set _rc = 'var(--warning)' %}{% endif %}
+            {% if can_financials %}
+              {% set _paid = inv.status == 'paid' or inv.amount_paid >= inv.total and inv.total > 0 %}
+              {% set _overdue = inv.due_date and inv.due_date < today and inv.status not in ('paid','cancelled') %}
+              {% set _pct_unpaid = ((inv.total - inv.amount_paid) / inv.total) if inv.total > 0 else 0 %}
+              {% if inv.status == 'cancelled' %}{% set _rc = '' %}
+              {% elif _paid %}{% set _rc = 'var(--success)' %}
+              {% elif _overdue %}{% set _rc = '#b91c1c' %}
+              {% elif _pct_unpaid > 0.5 %}{% set _rc = 'var(--danger)' %}
+              {% else %}{% set _rc = 'var(--warning)' %}{% endif %}
+            {% else %}
+              {% set _rc = '' %}
+            {% endif %}
             <tr{% if _rc %} style="border-left:4px solid {{ _rc }}"{% endif %}>
               <td><a href="{{ url_for('invoices.detail', invoice_id=inv.id) }}" style="font-weight:600;color:var(--accent);text-decoration:none">{{ inv.invoice_number }}</a></td>
               <td class="muted">{{ inv.issue_date }}</td>
               <td class="muted">{{ inv.due_date or '—' }}</td>
               <td class="fw-700">{{ inv.total|inr }}</td>
+              {% if can_financials %}
               <td>{{ inv.amount_paid|inr }}</td>
               <td><span class="badge badge-{{ inv.status }}">{{ inv.status }}</span></td>
+              {% endif %}
               <td><a href="{{ url_for('invoices.detail', invoice_id=inv.id) }}" class="btn btn-ghost btn-sm">View</a></td>
             </tr>
             {% endfor %}
@@ -69,8 +84,10 @@
 
   </div>
 
-  <!-- Right: balance -->
+  <!-- Right: balance + summary -->
   <div style="display:flex;flex-direction:column;gap:22px">
+
+    {% if can_financials %}
     <div class="card" onclick="showClientLedger({{ client.id }}, '{{ client.name|replace("'", "\\'") }}')"
          style="cursor:pointer" title="Click to view full ledger">
       <div class="card-header"><span class="card-title">Balance</span><span style="font-size:11px;color:var(--text-muted);margin-left:auto">Click to view ledger</span></div>
@@ -81,12 +98,14 @@
         <div class="stat-sub mt-4">{% if balance < 0 %}Outstanding balance{% elif balance > 0 %}Overpaid — credit available{% else %}Settled{% endif %}</div>
       </div>
     </div>
+    {% endif %}
 
     <div class="card">
       <div class="card-header"><span class="card-title">Summary</span></div>
       <div class="card-body">
         <div class="info-list">
           <div class="info-row"><span class="info-label">Invoices</span><span class="info-value fw-700">{{ invoices|length }}</span></div>
+          {% if can_financials %}
           <div class="info-row"><span class="info-label">Paid</span><span class="info-value" style="color:var(--success)">{{ invoices|selectattr('status','eq','paid')|list|length }}</span></div>
           <div class="info-row"><span class="info-label">Pending</span><span class="info-value" style="color:var(--warning)">{{ invoices|selectattr('status','in',['sent','issued','partial'])|list|length }}</span></div>
           <div class="info-row">
@@ -95,10 +114,12 @@
               {% if balance < 0 %}-{{ (balance * -1)|inr }}{% else %}{{ balance|inr }}{% endif %}
             </span>
           </div>
+          {% endif %}
           <div class="info-row"><span class="info-label">Client since</span><span class="info-value muted">{{ client.created_at[:10] }}</span></div>
         </div>
       </div>
     </div>
+
   </div>
 </div>
 {% endblock %}

@@ -58,12 +58,13 @@
       <table>
         <thead>
           <tr>
-            <th style="width:180px">Module</th>
-            <th style="text-align:center;width:90px">View</th>
-            <th style="text-align:center;width:90px">Create</th>
-            <th style="text-align:center;width:90px">Edit</th>
-            <th style="text-align:center;width:90px">Delete</th>
-            <th style="text-align:center;width:110px">All</th>
+            <th style="width:160px">Module</th>
+            <th style="text-align:center;width:80px">View</th>
+            <th style="text-align:center;width:80px">Create</th>
+            <th style="text-align:center;width:80px">Edit</th>
+            <th style="text-align:center;width:80px">Delete</th>
+            <th style="text-align:center;width:100px">Financials</th>
+            <th style="text-align:center;width:90px">All</th>
           </tr>
         </thead>
         <tbody>
@@ -80,9 +81,20 @@
             </td>
             {% endfor %}
             <td style="text-align:center">
+              {% if module == 'clients' %}
+              <input type="checkbox" name="perm_clients_financials"
+                     class="perm-cb mod-clients" id="perm_clients_financials"
+                     value="1" style="width:auto"
+                     title="Access to balance, ledger and payment status"
+                     {{ 'checked' if mp.get('financials') }}>
+              {% else %}
+              <span style="color:var(--border)">—</span>
+              {% endif %}
+            </td>
+            <td style="text-align:center">
               <input type="checkbox" class="row-all" data-module="{{ module }}"
                      style="width:auto" title="Toggle all for {{ module }}"
-                     {{ 'checked' if mp.get('view') and mp.get('create') and mp.get('edit') and mp.get('delete') }}>
+                     {{ 'checked' if mp.get('view') and mp.get('create') and mp.get('edit') and mp.get('delete') and (mp.get('financials', True) if module == 'clients' else True) }}>
             </td>
           </tr>
           {% endfor %}
@@ -154,6 +166,12 @@ document.querySelectorAll('.row-all').forEach(rowCb => {
 
 function setAll(val) {
   document.querySelectorAll('.perm-cb, .row-all').forEach(cb => cb.checked = val);
+}
+
+// Highlight financials cell on hover
+const finCell = document.getElementById('perm_clients_financials');
+if (finCell) {
+  finCell.closest('td').title = 'Balance, ledger & payment status visibility';
 }
 
 function setAllDash(val) {

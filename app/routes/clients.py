@@ -1,5 +1,5 @@
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
-from flask_login import login_required
+from flask_login import login_required, current_user
 from ..services import client_service
 from ..services.auth_service import permission_required
 from ..database import get_db
@@ -39,8 +39,10 @@ def detail(client_id):
         flash("Client not found.", "error")
         return redirect(url_for("clients.list_clients"))
     invoices = client_service.get_client_invoices(client_id)
-    balance = client_service.get_client_balance(client_id)
-    return render_template("clients/detail.html", client=client, invoices=invoices, balance=balance)
+    can_financials = current_user.has_permission("clients", "financials")
+    balance = client_service.get_client_balance(client_id) if can_financials else None
+    return render_template("clients/detail.html", client=client, invoices=invoices,
+                           balance=balance, can_financials=can_financials)
 
 
 @bp.route("/<int:client_id>/edit", methods=["GET", "POST"])
@@ -64,7 +66,7 @@ def edit_client(client_id):
 
 @bp.route("/<int:client_id>/ledger")
 @login_required
-@permission_required("clients", "view")
+@permission_required("clients", "financials")
 def ledger(client_id):
     client = client_service.get_client(client_id)
     if not client:
@@ -140,7 +142,7 @@ def ledger(client_id):
 
 @bp.route("/<int:client_id>/ledger/entry", methods=["POST"])
 @login_required
-@permission_required("clients", "edit")
+@permission_required("clients", "financials")
 def add_ledger_entry(client_id):
     data        = request.get_json(silent=True) or {}
     entry_date  = data.get("entry_date")

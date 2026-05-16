@@ -18,6 +18,8 @@ def _parse_permissions(form):
             "edit":   bool(form.get(f"perm_{module}_edit")),
             "delete": bool(form.get(f"perm_{module}_delete")),
         }
+    # Financials is a clients-only extra permission
+    perms["clients"]["financials"] = bool(form.get("perm_clients_financials"))
     return perms
 
 

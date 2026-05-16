@@ -338,6 +338,7 @@ def _create_schema(db):
     """)
 
     # ── Column-level migrations for existing installs ─────────
+    _add_column(db, "user_permissions",  "can_financials",  "INTEGER DEFAULT 0")
     _add_column(db, "clients",          "opening_balance", "REAL DEFAULT 0")
     _add_column(db, "products",         "category_id",     "INTEGER")
     _add_column(db, "products",         "min_quantity",    "REAL DEFAULT 0")
