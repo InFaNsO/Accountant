@@ -176,9 +176,10 @@
 
 <!-- ── Client Ledger modal ────────────────────────────────────────────────── -->
 <div id="ledgerModal" style="display:none;position:fixed;inset:0;z-index:9998;background:rgba(0,0,0,.5);align-items:center;justify-content:center" onclick="if(event.target===this)closeLedgerModal()">
-  <div style="background:var(--bg);border-radius:var(--radius);width:min(700px,96vw);max-height:85vh;display:flex;flex-direction:column;box-shadow:0 12px 48px rgba(0,0,0,.4)">
-    <!-- Header -->
-    <div style="display:flex;align-items:center;justify-content:space-between;padding:20px 24px 16px;border-bottom:1px solid var(--border)">
+  <div style="background:var(--bg);border-radius:var(--radius);width:min(760px,96vw);max-height:90vh;display:flex;flex-direction:column;box-shadow:0 12px 48px rgba(0,0,0,.4)">
+
+    <!-- Header row -->
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:18px 24px 14px;border-bottom:1px solid var(--border)">
       <div>
         <div id="ledgerModalTitle" style="font-size:17px;font-weight:700"></div>
         <div style="font-size:12px;color:var(--text-muted);margin-top:2px">Client Ledger</div>
@@ -189,6 +190,37 @@
         <button onclick="closeLedgerModal()" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:22px;line-height:1;padding:0 4px">&times;</button>
       </div>
     </div>
+
+    <!-- Time-window picker bar -->
+    <div id="ledgerWindowBar" style="padding:8px 16px;border-bottom:1px solid var(--border);background:var(--bg-alt);overflow-x:auto">
+      <div style="display:flex;gap:4px;align-items:center;min-width:max-content">
+        <span style="font-size:11px;color:var(--text-muted);margin-right:4px;white-space:nowrap;font-weight:600">Period:</span>
+        <button class="lw-btn lw-active" data-w="all"           onclick="setLedgerWindow('all')">All Time</button>
+        <button class="lw-btn" data-w="today"          onclick="setLedgerWindow('today')">Today</button>
+        <button class="lw-btn" data-w="yesterday"      onclick="setLedgerWindow('yesterday')">Yesterday</button>
+        <button class="lw-btn" data-w="this_week"      onclick="setLedgerWindow('this_week')">This Week</button>
+        <button class="lw-btn" data-w="last_week"      onclick="setLedgerWindow('last_week')">Last Week</button>
+        <button class="lw-btn" data-w="last_15"        onclick="setLedgerWindow('last_15')">Last 15 Days</button>
+        <button class="lw-btn" data-w="this_month"     onclick="setLedgerWindow('this_month')">This Month</button>
+        <button class="lw-btn" data-w="last_2_months"  onclick="setLedgerWindow('last_2_months')">Last 2 Months</button>
+        <button class="lw-btn" data-w="60_days"        onclick="setLedgerWindow('60_days')">60 Days</button>
+        <button class="lw-btn" data-w="90_days"        onclick="setLedgerWindow('90_days')">90 Days</button>
+        <button class="lw-btn" data-w="this_year"      onclick="setLedgerWindow('this_year')">This Year</button>
+        <button class="lw-btn" data-w="current_fy"     onclick="setLedgerWindow('current_fy')">Current FY</button>
+        <button class="lw-btn" data-w="last_fy"        onclick="setLedgerWindow('last_fy')">Last FY</button>
+        <button class="lw-btn" data-w="custom"         onclick="setLedgerWindow('custom')">Custom…</button>
+      </div>
+      <!-- Custom date pickers -->
+      <div id="lwCustomRow" style="display:none;margin-top:6px;gap:8px;align-items:center">
+        <input type="date" id="lwFrom"
+               style="font-size:12px;padding:3px 8px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg);color:var(--text)">
+        <span style="color:var(--text-muted)">—</span>
+        <input type="date" id="lwTo"
+               style="font-size:12px;padding:3px 8px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg);color:var(--text)">
+        <button onclick="applyLedgerCustom()" class="btn btn-primary btn-sm">Apply</button>
+      </div>
+    </div>
+
     <!-- Add Entry Form -->
     <div id="ledgerEntryForm" style="display:none;padding:16px 24px;border-bottom:1px solid var(--border);background:var(--bg-alt)">
       <div style="display:grid;grid-template-columns:120px 1fr 130px 130px auto;gap:10px;align-items:end">
@@ -212,7 +244,8 @@
       </div>
       <div id="leError" style="font-size:12px;color:var(--danger);margin-top:6px;display:none"></div>
     </div>
-    <!-- Body -->
+
+    <!-- Table body -->
     <div style="overflow-y:auto;flex:1">
       <table style="width:100%;border-collapse:collapse;font-size:13px">
         <thead style="position:sticky;top:0;background:var(--bg);z-index:1">
@@ -226,17 +259,117 @@
         </thead>
         <tbody id="ledgerBody"></tbody>
       </table>
-      <div id="ledgerEmpty" style="display:none;padding:40px;text-align:center;color:var(--text-muted)">No transactions yet.</div>
+      <div id="ledgerEmpty" style="display:none;padding:40px;text-align:center;color:var(--text-muted)">No transactions in this period.</div>
     </div>
+
   </div>
 </div>
 
+<style>
+.lw-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.lw-btn:hover { background: var(--bg); color: var(--text); border-color: var(--accent); }
+.lw-btn.lw-active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+#lwCustomRow { display: none; }
+#lwCustomRow.show { display: flex; }
+</style>
+
 <script>
+/* ── INR formatter ───────────────────────────────────────────── */
 function _fmtInr(n) {
   const abs = Math.abs(n);
-  const s = abs.toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2});
-  return '₹' + s;
+  return '₹' + abs.toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2});
 }
+
+/* ── Date helpers ────────────────────────────────────────────── */
+const _fmt = d => d.toISOString().slice(0,10);
+const _addD = (d, n) => { const r = new Date(d); r.setDate(r.getDate()+n); return r; };
+
+function _windowDates(w) {
+  const today = new Date();
+  const dow = today.getDay() === 0 ? 6 : today.getDay() - 1; // Mon=0
+  const y = today.getFullYear(), m = today.getMonth()+1;
+  const cfy = m >= 4 ? `${y}-04-01` : `${y-1}-04-01`;
+  const lfyEnd   = m >= 4 ? `${y}-03-31`   : `${y-1}-03-31`;
+  const lfyStart = m >= 4 ? `${y-1}-04-01` : `${y-2}-04-01`;
+
+  switch(w) {
+    case 'all':          return [null, null];
+    case 'today':        return [_fmt(today), _fmt(today)];
+    case 'yesterday':    return [_fmt(_addD(today,-1)), _fmt(_addD(today,-1))];
+    case 'this_week':    return [_fmt(_addD(today,-dow)), _fmt(today)];
+    case 'last_week': {
+      const s = _addD(today,-dow-7), e = _addD(today,-dow-1);
+      return [_fmt(s), _fmt(e)];
+    }
+    case 'last_15':       return [_fmt(_addD(today,-14)), _fmt(today)];
+    case 'this_month': {
+      const s = new Date(y, today.getMonth(), 1);
+      return [_fmt(s), _fmt(today)];
+    }
+    case 'last_2_months': return [_fmt(_addD(today,-60)), _fmt(today)];
+    case '60_days':       return [_fmt(_addD(today,-59)), _fmt(today)];
+    case '90_days':       return [_fmt(_addD(today,-89)), _fmt(today)];
+    case 'this_year':     return [`${y}-01-01`, _fmt(today)];
+    case 'current_fy':    return [cfy, _fmt(today)];
+    case 'last_fy':       return [lfyStart, lfyEnd];
+    default:              return [null, null];
+  }
+}
+
+/* ── Ledger state ────────────────────────────────────────────── */
+let _ledgerClientId  = null;
+let _ledgerDateFrom  = null;
+let _ledgerDateTo    = null;
+let _ledgerWindow    = 'all';
+
+/* ── Window selection ────────────────────────────────────────── */
+function setLedgerWindow(w) {
+  _ledgerWindow = w;
+  document.querySelectorAll('.lw-btn').forEach(b =>
+    b.classList.toggle('lw-active', b.dataset.w === w)
+  );
+  const customRow = document.getElementById('lwCustomRow');
+  if (w === 'custom') {
+    customRow.classList.add('show');
+    // Pre-fill today if blank
+    if (!document.getElementById('lwFrom').value)
+      document.getElementById('lwFrom').value = _fmt(new Date());
+    if (!document.getElementById('lwTo').value)
+      document.getElementById('lwTo').value   = _fmt(new Date());
+    return;
+  }
+  customRow.classList.remove('show');
+  const [df, dt] = _windowDates(w);
+  _ledgerDateFrom = df;
+  _ledgerDateTo   = dt;
+  _reloadLedger();
+}
+
+function applyLedgerCustom() {
+  const df = document.getElementById('lwFrom').value;
+  const dt = document.getElementById('lwTo').value;
+  if (!df || !dt) return;
+  _ledgerDateFrom = df;
+  _ledgerDateTo   = dt;
+  _reloadLedger();
+}
+
+/* ── Modal control ───────────────────────────────────────────── */
 function closeLedgerModal() {
   document.getElementById('ledgerModal').style.display = 'none';
   document.getElementById('ledgerEntryForm').style.display = 'none';
@@ -245,9 +378,8 @@ function toggleLedgerEntryForm() {
   const f = document.getElementById('ledgerEntryForm');
   f.style.display = f.style.display === 'none' ? '' : 'none';
   if (f.style.display !== 'none') {
-    if (!document.getElementById('leDate').value) {
-      document.getElementById('leDate').value = new Date().toISOString().slice(0,10);
-    }
+    if (!document.getElementById('leDate').value)
+      document.getElementById('leDate').value = _fmt(new Date());
     document.getElementById('leDesc').focus();
   }
 }
@@ -257,70 +389,95 @@ function submitLedgerEntry() {
   const debit  = parseFloat(document.getElementById('leDebit').value)  || 0;
   const credit = parseFloat(document.getElementById('leCredit').value) || 0;
   const errEl  = document.getElementById('leError');
-  if (!date)                    { errEl.textContent = 'Date is required.';                errEl.style.display = ''; return; }
-  if (debit === 0 && credit === 0) { errEl.textContent = 'Enter a debit or credit amount.'; errEl.style.display = ''; return; }
+  if (!date)                       { errEl.textContent = 'Date is required.'; errEl.style.display = ''; return; }
+  if (!debit && !credit)           { errEl.textContent = 'Enter a debit or credit amount.'; errEl.style.display = ''; return; }
   errEl.style.display = 'none';
   fetch('/clients/' + _ledgerClientId + '/ledger/entry', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ entry_date: date, description: desc, debit, credit }),
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({entry_date: date, description: desc, debit, credit}),
   })
   .then(r => r.json())
   .then(d => {
     if (!d.ok) { errEl.textContent = d.error || 'Error saving entry.'; errEl.style.display = ''; return; }
-    document.getElementById('leDebit').value  = '';
-    document.getElementById('leCredit').value = '';
-    document.getElementById('leDesc').value   = '';
+    ['leDebit','leCredit','leDesc'].forEach(id => { document.getElementById(id).value = ''; });
     document.getElementById('ledgerEntryForm').style.display = 'none';
     _reloadLedger();
   })
   .catch(() => { errEl.textContent = 'Network error.'; errEl.style.display = ''; });
 }
-let _ledgerClientId = null;
+
+/* ── Fetch & render ──────────────────────────────────────────── */
 function _reloadLedger() {
-  document.getElementById('ledgerBody').innerHTML = '<tr><td colspan="5" style="padding:30px;text-align:center;color:var(--text-muted)">Loading…</td></tr>';
-  fetch('/clients/' + _ledgerClientId + '/ledger')
+  document.getElementById('ledgerBody').innerHTML =
+    '<tr><td colspan="5" style="padding:30px;text-align:center;color:var(--text-muted)">Loading…</td></tr>';
+  let url = '/clients/' + _ledgerClientId + '/ledger';
+  if (_ledgerDateFrom && _ledgerDateTo)
+    url += '?from=' + _ledgerDateFrom + '&to=' + _ledgerDateTo;
+  fetch(url)
     .then(r => r.json())
     .then(_renderLedger)
     .catch(() => {
-      document.getElementById('ledgerBody').innerHTML = '<tr><td colspan="5" style="padding:20px;text-align:center;color:var(--danger)">Failed to load ledger.</td></tr>';
+      document.getElementById('ledgerBody').innerHTML =
+        '<tr><td colspan="5" style="padding:20px;text-align:center;color:var(--danger)">Failed to load ledger.</td></tr>';
     });
 }
+
 function _renderLedger(data) {
   const entries = data.entries || [];
-  const bal = data.final_balance || 0;
-  const balEl = document.getElementById('ledgerFinalBal');
+  const bal     = data.final_balance || 0;
+  const balEl   = document.getElementById('ledgerFinalBal');
   balEl.textContent = _fmtInr(bal);
   balEl.style.color = bal < 0 ? 'var(--danger)' : bal > 0 ? 'var(--success)' : 'var(--warning)';
+
   if (!entries.length) {
     document.getElementById('ledgerBody').innerHTML = '';
     document.getElementById('ledgerEmpty').style.display = '';
     return;
   }
   document.getElementById('ledgerEmpty').style.display = 'none';
+
+  const badge = (type) => {
+    const map = {
+      opening: 'rgba(99,102,241,.15)|#6366f1|opening',
+      bbf:     'rgba(99,102,241,.12)|#6366f1|B/F',
+      invoice: 'rgba(239,68,68,.12)|var(--danger)|invoice',
+      manual:  'rgba(160,160,160,.15)|var(--text-muted)|manual',
+      payment: 'rgba(16,185,129,.12)|var(--success)|payment',
+    };
+    const [bg, color, label] = (map[type] || map.payment).split('|');
+    return `<span style="font-size:10px;background:${bg};color:${color};padding:2px 6px;border-radius:3px;margin-left:6px">${label}</span>`;
+  };
+
   document.getElementById('ledgerBody').innerHTML = entries.map(e => {
     const runColor = e.running < 0 ? 'var(--danger)' : e.running > 0 ? 'var(--success)' : 'var(--warning)';
-    let typeBadge = '';
-    if (e.type === 'opening') typeBadge = '<span style="font-size:10px;background:rgba(99,102,241,.15);color:#6366f1;padding:2px 6px;border-radius:3px;margin-left:6px">opening</span>';
-    else if (e.type === 'invoice') typeBadge = '<span style="font-size:10px;background:rgba(239,68,68,.12);color:var(--danger);padding:2px 6px;border-radius:3px;margin-left:6px">invoice</span>';
-    else if (e.type === 'manual') typeBadge = '<span style="font-size:10px;background:rgba(99,102,241,.1);color:var(--text-muted);padding:2px 6px;border-radius:3px;margin-left:6px">manual</span>';
-    else typeBadge = '<span style="font-size:10px;background:rgba(16,185,129,.12);color:var(--success);padding:2px 6px;border-radius:3px;margin-left:6px">payment</span>';
-    return `<tr style="border-bottom:1px solid var(--border)">
+    const isBbf    = e.type === 'bbf';
+    return `<tr style="border-bottom:1px solid var(--border)${isBbf ? ';background:var(--bg-alt)' : ''}">
       <td style="padding:10px 16px;color:var(--text-muted);font-family:monospace;font-size:12px">${e.date || '—'}</td>
-      <td style="padding:10px 16px">${e.label}${typeBadge}</td>
+      <td style="padding:10px 16px;font-weight:${isBbf ? 600 : 400}">${e.label}${badge(e.type)}</td>
       <td style="padding:10px 16px;text-align:right;color:var(--danger);font-weight:${e.debit ? 600 : 400}">${e.debit ? _fmtInr(e.debit) : '—'}</td>
       <td style="padding:10px 16px;text-align:right;color:var(--success);font-weight:${e.credit ? 600 : 400}">${e.credit ? _fmtInr(e.credit) : '—'}</td>
       <td style="padding:10px 16px;text-align:right;font-weight:700;color:${runColor}">${_fmtInr(e.running)}</td>
     </tr>`;
   }).join('');
 }
+
+/* ── Public opener ───────────────────────────────────────────── */
 window.showClientLedger = function(clientId, name) {
   _ledgerClientId = clientId;
+  _ledgerDateFrom = null;
+  _ledgerDateTo   = null;
+  _ledgerWindow   = 'all';
+  // Reset picker UI
+  document.querySelectorAll('.lw-btn').forEach(b =>
+    b.classList.toggle('lw-active', b.dataset.w === 'all')
+  );
+  document.getElementById('lwCustomRow').classList.remove('show');
   document.getElementById('ledgerModalTitle').textContent = name || 'Client';
-  document.getElementById('ledgerFinalBal').textContent = '';
-  document.getElementById('ledgerEmpty').style.display = 'none';
+  document.getElementById('ledgerFinalBal').textContent   = '';
+  document.getElementById('ledgerEmpty').style.display    = 'none';
   document.getElementById('ledgerEntryForm').style.display = 'none';
-  document.getElementById('ledgerModal').style.display = 'flex';
+  document.getElementById('ledgerModal').style.display    = 'flex';
   _reloadLedger();
 };
 </script>

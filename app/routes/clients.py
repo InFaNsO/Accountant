@@ -72,6 +72,10 @@ def ledger(client_id):
     client = client_service.get_client(client_id)
     if not client:
         return jsonify({"error": "Not found"}), 404
+
+    date_from = request.args.get("from")   # YYYY-MM-DD or None
+    date_to   = request.args.get("to")     # YYYY-MM-DD or None
+
     db = get_db()
     invoices = db.execute(
         "SELECT id, invoice_number, issue_date, total, amount_paid, status FROM invoices "
@@ -83,61 +87,96 @@ def ledger(client_id):
         "WHERE client_id=? ORDER BY payment_date, id",
         (client_id,),
     ).fetchall()
-
-    opening = float(client["opening_balance"] or 0)
-
-    inv_list  = [{"sort": (r["issue_date"] or ""),    "kind": "invoice",  "row": dict(r)} for r in invoices]
-    pay_list  = [{"sort": (r["payment_date"] or ""),  "kind": "payment",  "row": dict(r)} for r in payments]
-
     manual = db.execute(
         "SELECT * FROM ledger_entries WHERE client_id=? ORDER BY entry_date, id",
         (client_id,),
     ).fetchall()
-    manual_list = [{"sort": r["entry_date"] or "", "kind": "manual", "row": dict(r)} for r in manual]
-    combined = sorted(inv_list + pay_list + manual_list, key=lambda x: x["sort"])
 
-    entries = []
-    running = 0.0
-    if opening != 0:
-        if opening > 0:
-            running -= opening
-            entries.append({"date": "", "type": "opening", "label": "Opening Balance (debt)",
-                            "debit": opening, "credit": 0, "running": running})
-        else:
-            running += abs(opening)
-            entries.append({"date": "", "type": "opening", "label": "Opening Balance (credit)",
-                            "debit": 0, "credit": abs(opening), "running": running})
+    opening = float(client["opening_balance"] or 0)
 
-    for item in combined:
-        if item["kind"] == "invoice":
-            r = item["row"]
-            running -= r["total"]
-            entries.append({"date": r["issue_date"] or "", "type": "invoice",
-                            "label": r["invoice_number"],
-                            "debit": r["total"], "credit": 0, "running": running})
-        elif item["kind"] == "payment":
-            r = item["row"]
-            running += r["amount"]
-            ref_parts = [r["method"]] if r["method"] else []
-            if r["reference"]: ref_parts.append(r["reference"])
-            if r["notes"]:     ref_parts.append(r["notes"])
-            entries.append({"date": r["payment_date"] or "", "type": "payment",
-                            "label": " — ".join(ref_parts) if ref_parts else "Payment",
-                            "invoice_id": r["invoice_id"],
-                            "debit": 0, "credit": r["amount"], "running": running})
-        else:
-            r = item["row"]
-            debit  = float(r["debit"]  or 0)
-            credit = float(r["credit"] or 0)
-            running += credit - debit
-            entries.append({"date": r["entry_date"] or "", "type": "manual",
-                            "label": r["description"] or "Manual Entry",
-                            "debit": debit, "credit": credit, "running": running})
+    inv_list    = [{"sort": r["issue_date"]    or "", "kind": "invoice", "row": dict(r)} for r in invoices]
+    pay_list    = [{"sort": r["payment_date"]  or "", "kind": "payment", "row": dict(r)} for r in payments]
+    manual_list = [{"sort": r["entry_date"]    or "", "kind": "manual",  "row": dict(r)} for r in manual]
+    combined    = sorted(inv_list + pay_list + manual_list, key=lambda x: x["sort"])
 
+    def _build(items, start=None):
+        """Build entry list and return (entries, final_running).
+        If start is None, include the opening balance as the first entry.
+        If start is a float, carry it forward (period view — opening already included in B/F).
+        """
+        running = 0.0 if start is None else start
+        entries = []
+
+        if start is None and opening != 0:
+            if opening > 0:
+                running -= opening
+                entries.append({"date": "", "type": "opening",
+                                "label": "Opening Balance (debt)",
+                                "debit": opening, "credit": 0, "running": running})
+            else:
+                running += abs(opening)
+                entries.append({"date": "", "type": "opening",
+                                "label": "Opening Balance (credit)",
+                                "debit": 0, "credit": abs(opening), "running": running})
+
+        for item in items:
+            r = item["row"]
+            if item["kind"] == "invoice":
+                running -= float(r["total"])
+                entries.append({"date": r["issue_date"] or "", "type": "invoice",
+                                "label": r["invoice_number"],
+                                "debit": r["total"], "credit": 0, "running": running})
+            elif item["kind"] == "payment":
+                running += float(r["amount"])
+                parts = [r["method"]] if r["method"] else []
+                if r["reference"]: parts.append(r["reference"])
+                if r["notes"]:     parts.append(r["notes"])
+                entries.append({"date": r["payment_date"] or "", "type": "payment",
+                                "label": " — ".join(parts) if parts else "Payment",
+                                "invoice_id": r["invoice_id"],
+                                "debit": 0, "credit": r["amount"], "running": running})
+            else:  # manual
+                debit  = float(r["debit"]  or 0)
+                credit = float(r["credit"] or 0)
+                running += credit - debit
+                entries.append({"date": r["entry_date"] or "", "type": "manual",
+                                "label": r["description"] or "Manual Entry",
+                                "debit": debit, "credit": credit, "running": running})
+        return entries, running
+
+    if date_from and date_to:
+        # Compute Balance Brought Forward = running total of everything BEFORE date_from
+        before  = [i for i in combined if (i["sort"] or "") < date_from]
+        _, bbf  = _build(before)  # includes opening balance
+
+        # Entries within the window
+        in_win  = [i for i in combined if date_from <= (i["sort"] or "") <= date_to]
+        win_entries, final_balance = _build(in_win, start=bbf)
+
+        # Prepend the BBF pseudo-entry
+        entries = [{
+            "date":    date_from,
+            "type":    "bbf",
+            "label":   "Balance Brought Forward",
+            "debit":   abs(bbf) if bbf < 0 else 0,
+            "credit":  bbf      if bbf > 0 else 0,
+            "running": bbf,
+        }] + win_entries
+
+        return jsonify({
+            "client_name":   client["name"],
+            "entries":       entries,
+            "final_balance": final_balance,
+            "date_from":     date_from,
+            "date_to":       date_to,
+        })
+
+    # Full ledger (no date filter)
+    entries, final_balance = _build(combined)
     return jsonify({
-        "client_name": client["name"],
-        "entries": entries,
-        "final_balance": running,
+        "client_name":   client["name"],
+        "entries":       entries,
+        "final_balance": final_balance,
     })
 
 

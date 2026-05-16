@@ -1,78 +1,161 @@
 {% extends "base.html" %}
 {% block title %}Dashboard{% endblock %}
 {% block page_title %}Dashboard{% endblock %}
+
 {% block topbar_actions %}
-  <a href="{{ url_for('invoices.new_invoice') }}" class="btn btn-primary">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-    New Invoice
-  </a>
+<!-- ── Time-window picker ──────────────────────────────────────── -->
+<form id="dashWinForm" method="get" action="{{ url_for('dashboard.index') }}"
+      style="display:flex;align-items:center;gap:8px">
+
+  <div style="display:flex;align-items:center;gap:6px;background:var(--bg-alt);
+              border:1px solid var(--border);border-radius:var(--radius);padding:5px 10px">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+         style="color:var(--text-muted);flex-shrink:0">
+      <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+      <line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/>
+      <line x1="3" y1="10" x2="21" y2="10"/>
+    </svg>
+    <select name="window" id="dashWinSel" onchange="dashWinChange(this)"
+            style="background:transparent;border:none;outline:none;font-size:13px;
+                   cursor:pointer;color:var(--text);font-weight:500;max-width:160px">
+      {% for val, lbl in [
+          ('today','Today'), ('yesterday','Yesterday'),
+          ('this_week','This Week'), ('last_week','Last Week'),
+          ('last_15','Last 15 Days'), ('this_month','This Month'),
+          ('last_2_months','Last 2 Months'), ('60_days','60 Days'),
+          ('90_days','90 Days'), ('this_year','This Year'),
+          ('current_fy','Current FY (Apr–Mar)'), ('last_fy','Last FY (Apr–Mar)'),
+          ('all','All Time'), ('custom','Custom…')
+      ] %}
+      <option value="{{ val }}" {% if window == val %}selected{% endif %}>{{ lbl }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <!-- Custom date inputs — shown only when Custom is selected -->
+  <div id="dashCustomRange"
+       style="display:{% if window == 'custom' %}flex{% else %}none{% endif %};
+              align-items:center;gap:6px">
+    <input type="date" name="from" value="{{ custom_from }}"
+           style="font-size:13px;padding:4px 8px;border:1px solid var(--border);
+                  border-radius:var(--radius);background:var(--bg);color:var(--text)">
+    <span style="color:var(--text-muted)">—</span>
+    <input type="date" name="to" value="{{ custom_to }}"
+           style="font-size:13px;padding:4px 8px;border:1px solid var(--border);
+                  border-radius:var(--radius);background:var(--bg);color:var(--text)">
+    <button type="submit" class="btn btn-primary btn-sm">Apply</button>
+  </div>
+
+  <!-- Resolved date range label (shown for all non-custom presets) -->
+  {% if date_from and date_to and window != 'custom' %}
+  <span style="font-size:11px;color:var(--text-muted);white-space:nowrap">
+    {{ date_from }} — {{ date_to }}
+  </span>
+  {% endif %}
+</form>
+
+<a href="{{ url_for('invoices.new_invoice') }}" class="btn btn-primary">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+       stroke-linecap="round" stroke-linejoin="round">
+    <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+  </svg>
+  New Invoice
+</a>
 {% endblock %}
 
 {% block content %}
-<!-- Stat Cards -->
-{% set show_any_stat = 'stat_revenue' in dash_sections or 'stat_outstanding' in dash_sections or 'stat_clients' in dash_sections or 'stat_overdue' in dash_sections %}
+<!-- ── Stat Cards ───────────────────────────────────────────────── -->
+{% set show_any_stat = 'stat_revenue' in dash_sections or 'stat_outstanding' in dash_sections
+   or 'stat_clients' in dash_sections or 'stat_overdue' in dash_sections %}
 {% if show_any_stat %}
 <div class="stats-grid">
+
   {% if 'stat_revenue' in dash_sections %}
   <div class="stat-card">
     <div class="stat-icon stat-icon-indigo" style="float:right">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round">
+        <line x1="12" y1="1" x2="12" y2="23"/>
+        <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+      </svg>
     </div>
-    <div class="stat-label">Total Revenue</div>
+    <div class="stat-label">Revenue Collected</div>
     <div class="stat-value">{{ stats.total_revenue|inr }}</div>
-    <div class="stat-sub">All time collected</div>
+    <div class="stat-sub">{{ window_label }}</div>
+    {% if stats.total_invoiced is not none %}
+    <div style="font-size:11px;color:var(--text-muted);margin-top:4px">
+      {{ stats.invoice_count }} invoice(s) raised · {{ stats.total_invoiced|inr }} invoiced
+    </div>
+    {% endif %}
   </div>
   {% endif %}
 
   {% if 'stat_outstanding' in dash_sections %}
   <div class="stat-card">
     <div class="stat-icon stat-icon-amber" style="float:right">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+      </svg>
     </div>
     <div class="stat-label">Outstanding</div>
     <div class="stat-value">{{ stats.outstanding|inr }}</div>
-    <div class="stat-sub">Pending collection</div>
+    <div class="stat-sub">Pending collection (current)</div>
   </div>
   {% endif %}
 
   {% if 'stat_clients' in dash_sections %}
   <div class="stat-card">
     <div class="stat-icon stat-icon-green" style="float:right">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round">
+        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+        <circle cx="9" cy="7" r="4"/>
+        <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>
+      </svg>
     </div>
     <div class="stat-label">Clients</div>
     <div class="stat-value">{{ stats.total_clients }}</div>
-    <div class="stat-sub">Active clients</div>
+    <div class="stat-sub">Total clients</div>
   </div>
   {% endif %}
 
   {% if 'stat_overdue' in dash_sections %}
   <div class="stat-card">
     <div class="stat-icon stat-icon-blue" style="float:right">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round">
+        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+        <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+      </svg>
     </div>
     <div class="stat-label">Overdue</div>
     <div class="stat-value">{{ stats.overdue_count }}</div>
-    <div class="stat-sub">Invoices past due date</div>
+    <div class="stat-sub">Invoices past due (current)</div>
   </div>
   {% endif %}
+
 </div>
 {% endif %}
 
-<!-- Main Grid: Revenue Chart + Recent Invoices -->
-{% set show_chart = 'revenue_chart' in dash_sections %}
-{% set show_invoices = 'recent_invoices' in dash_sections %}
+<!-- ── Revenue Chart + Invoices ────────────────────────────────── -->
+{% set show_chart    = 'revenue_chart'    in dash_sections %}
+{% set show_invoices = 'recent_invoices'  in dash_sections %}
 {% if show_chart or show_invoices %}
-<div class="dashboard-grid" style="{% if not (show_chart and show_invoices) %}grid-template-columns:1fr{% endif %}">
+<div class="dashboard-grid"
+     style="{% if not (show_chart and show_invoices) %}grid-template-columns:1fr{% endif %}">
+
   {% if show_chart %}
   <div class="card">
     <div class="card-header">
-      <span class="card-title">Revenue — Last 12 Months</span>
+      <span class="card-title">Revenue — {{ window_label }}</span>
+      {% if date_from and date_to %}
+      <span style="font-size:11px;color:var(--text-muted)">{{ date_from }} to {{ date_to }}</span>
+      {% endif %}
     </div>
     <div class="card-body">
-      <div class="chart-wrap">
-        <canvas id="revenueChart"></canvas>
-      </div>
+      <div class="chart-wrap"><canvas id="revenueChart"></canvas></div>
     </div>
   </div>
   {% endif %}
@@ -80,7 +163,9 @@
   {% if show_invoices %}
   <div class="card">
     <div class="card-header">
-      <span class="card-title">Recent Invoices</span>
+      <span class="card-title">
+        {% if window == 'all' %}Recent Invoices{% else %}Invoices — {{ window_label }}{% endif %}
+      </span>
       <a href="{{ url_for('invoices.list_invoices') }}" class="btn btn-ghost btn-sm">View all</a>
     </div>
     {% if stats.recent_invoices %}
@@ -89,8 +174,12 @@
         <li style="padding:12px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
           <div>
             <a href="{{ url_for('invoices.detail', invoice_id=inv.id) }}"
-               style="font-weight:600;color:var(--accent);text-decoration:none;font-size:13px">{{ inv.invoice_number }}</a>
-            <div style="font-size:12px;color:var(--text-muted);margin-top:2px">{{ inv.client_name }}</div>
+               style="font-weight:600;color:var(--accent);text-decoration:none;font-size:13px">
+              {{ inv.invoice_number }}
+            </a>
+            <div style="font-size:12px;color:var(--text-muted);margin-top:2px">
+              {{ inv.client_name }}{% if inv.issue_date %} · {{ inv.issue_date }}{% endif %}
+            </div>
           </div>
           <div style="text-align:right">
             <div style="font-weight:700;font-size:13px">{{ inv.total|inr }}</div>
@@ -101,44 +190,42 @@
       </ul>
     {% else %}
       <div class="empty-state" style="padding:30px">
-        <p>No invoices yet.</p>
-        <a href="{{ url_for('invoices.new_invoice') }}" class="btn btn-primary btn-sm">Create first invoice</a>
+        <p>No invoices in this period.</p>
+        <a href="{{ url_for('invoices.new_invoice') }}" class="btn btn-primary btn-sm">Create invoice</a>
       </div>
     {% endif %}
   </div>
   {% endif %}
+
 </div>
 {% endif %}
 
-<!-- Production Orders Due Soon -->
+<!-- ── Production Orders Due Soon ──────────────────────────────── -->
 {% if 'production_due' in dash_sections and pos_due_soon %}
 <div class="card" style="margin-top:18px">
   <div class="card-header" style="border-left:3px solid var(--warning);padding-left:17px">
-    <span class="card-title" style="color:var(--warning)">Production Orders Due Soon ({{ pos_due_soon|length }})</span>
+    <span class="card-title" style="color:var(--warning)">
+      Production Orders Due Soon ({{ pos_due_soon|length }})
+    </span>
     <a href="{{ url_for('production.list_production') }}" class="btn btn-ghost btn-sm">View all</a>
   </div>
   <div class="table-wrap">
     <table>
       <thead>
         <tr>
-          <th>Order</th>
-          <th>Supplier</th>
-          <th>Expected Completion</th>
-          <th style="text-align:center">Items</th>
-          <th style="text-align:right">Dispatched</th>
-          <th></th>
+          <th>Order</th><th>Supplier</th><th>Expected Completion</th>
+          <th style="text-align:center">Items</th><th style="text-align:right">Dispatched</th><th></th>
         </tr>
       </thead>
       <tbody>
         {% for po in pos_due_soon %}
         <tr>
           <td class="fw-700">
-            <a href="{{ url_for('production.detail', po_id=po.id) }}" style="color:var(--accent);text-decoration:none">{{ po.name }}</a>
+            <a href="{{ url_for('production.detail', po_id=po.id) }}"
+               style="color:var(--accent);text-decoration:none">{{ po.name }}</a>
           </td>
           <td class="muted">{{ po.supplier_name or '—' }}</td>
-          <td>
-            <span style="font-weight:600;color:var(--warning)">{{ po.expected_completion or '—' }}</span>
-          </td>
+          <td><span style="font-weight:600;color:var(--warning)">{{ po.expected_completion or '—' }}</span></td>
           <td style="text-align:center" class="muted">{{ po.item_count or '—' }}</td>
           <td style="text-align:right">
             {% if po.total_qty and po.total_qty > 0 %}
@@ -157,9 +244,9 @@
 </div>
 {% endif %}
 
-<!-- Stock alert cards -->
-{% set low = alerts.low_stock %}
-{% set prod = alerts.in_production %}
+<!-- ── Stock alert cards ────────────────────────────────────────── -->
+{% set low     = alerts.low_stock %}
+{% set prod    = alerts.in_production %}
 {% set transit = alerts.in_transit %}
 {% set show_low     = 'low_stock'     in dash_sections and low %}
 {% set show_prod    = 'in_production' in dash_sections and prod %}
@@ -172,9 +259,7 @@
   {% if show_low %}
   <div class="card">
     <div class="card-header" style="border-left:3px solid var(--danger);padding-left:17px">
-      <span class="card-title" style="color:var(--danger)">
-        Low Stock{% if low %} ({{ low|length }}){% endif %}
-      </span>
+      <span class="card-title" style="color:var(--danger)">Low Stock ({{ low|length }})</span>
       <a href="{{ url_for('products.list_products') }}" class="btn btn-ghost btn-sm">View all</a>
     </div>
     <ul style="list-style:none">
@@ -201,9 +286,7 @@
   {% if show_prod %}
   <div class="card">
     <div class="card-header" style="border-left:3px solid var(--success);padding-left:17px">
-      <span class="card-title" style="color:var(--success)">
-        In Production{% if prod %} ({{ prod|length }}){% endif %}
-      </span>
+      <span class="card-title" style="color:var(--success)">In Production ({{ prod|length }})</span>
     </div>
     <ul style="list-style:none">
       {% for item in prod %}
@@ -229,9 +312,7 @@
   {% if show_transit %}
   <div class="card">
     <div class="card-header" style="border-left:3px solid var(--warning);padding-left:17px">
-      <span class="card-title" style="color:var(--warning)">
-        In Transit{% if transit %} ({{ transit|length }}){% endif %}
-      </span>
+      <span class="card-title" style="color:var(--warning)">In Transit ({{ transit|length }})</span>
     </div>
     <ul style="list-style:none">
       {% for item in transit %}
@@ -257,7 +338,7 @@
 </div>
 {% endif %}
 
-<!-- Empty state if nothing is visible -->
+<!-- Empty state -->
 {% if not show_any_stat and not show_chart and not show_invoices
    and ('production_due' not in dash_sections or not pos_due_soon)
    and not show_low and not show_prod and not show_transit %}
@@ -271,6 +352,19 @@
 {% endblock %}
 
 {% block scripts %}
+<!-- Auto-submit on preset change, show custom pickers only for Custom -->
+<script>
+function dashWinChange(sel) {
+  const wrap = document.getElementById('dashCustomRange');
+  if (sel.value === 'custom') {
+    wrap.style.display = 'flex';
+  } else {
+    wrap.style.display = 'none';
+    document.getElementById('dashWinForm').submit();
+  }
+}
+</script>
+
 {% if 'revenue_chart' in dash_sections %}
 <script>
 const monthlyData = {{ stats.monthly_revenue | tojson }};
@@ -279,7 +373,6 @@ const labels = monthlyData.map(d => {
   return new Date(y, m-1).toLocaleString('default', {month:'short', year:'2-digit'});
 });
 const values = monthlyData.map(d => d.total);
-
 const ctx = document.getElementById('revenueChart');
 if (ctx && typeof Chart !== 'undefined') {
   new Chart(ctx, {
@@ -310,7 +403,7 @@ if (ctx && typeof Chart !== 'undefined') {
     }
   });
 } else if (ctx) {
-  ctx.parentElement.innerHTML = '<p style="color:var(--text-muted);font-size:13px;text-align:center;padding-top:80px">No revenue data yet.</p>';
+  ctx.parentElement.innerHTML = '<p style="color:var(--text-muted);font-size:13px;text-align:center;padding-top:80px">No revenue data for this period.</p>';
 }
 </script>
 {% endif %}

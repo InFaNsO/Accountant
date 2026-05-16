@@ -176,42 +176,84 @@ def get_client_payments(client_id):
 
 # ── Dashboard stats (unchanged) ───────────────────────────────────────────────
 
-def get_dashboard_stats():
+def get_dashboard_stats(date_from=None, date_to=None):
     db = get_db()
-    total_revenue = db.execute(
-        "SELECT COALESCE(SUM(amount),0) AS v FROM payments"
-    ).fetchone()["v"]
+    windowed = bool(date_from and date_to)
 
+    # ── Revenue: payments received in the window (or all-time) ──────────────
+    if windowed:
+        total_revenue = db.execute(
+            "SELECT COALESCE(SUM(amount),0) AS v FROM payments WHERE payment_date BETWEEN ? AND ?",
+            (date_from, date_to),
+        ).fetchone()["v"]
+        total_invoiced = db.execute(
+            "SELECT COALESCE(SUM(total),0) AS v FROM invoices "
+            "WHERE issue_date BETWEEN ? AND ? AND status != 'cancelled'",
+            (date_from, date_to),
+        ).fetchone()["v"]
+        invoice_count = db.execute(
+            "SELECT COUNT(*) AS v FROM invoices "
+            "WHERE issue_date BETWEEN ? AND ? AND status != 'cancelled'",
+            (date_from, date_to),
+        ).fetchone()["v"]
+    else:
+        total_revenue  = db.execute(
+            "SELECT COALESCE(SUM(amount),0) AS v FROM payments"
+        ).fetchone()["v"]
+        total_invoiced = None
+        invoice_count  = None
+
+    # ── Always-current stats ─────────────────────────────────────────────────
     outstanding = db.execute(
-        """SELECT COALESCE(SUM(total - amount_paid),0) AS v
-           FROM invoices WHERE status NOT IN ('paid','cancelled')"""
+        "SELECT COALESCE(SUM(total - amount_paid),0) AS v "
+        "FROM invoices WHERE status NOT IN ('paid','cancelled')"
     ).fetchone()["v"]
 
     overdue = db.execute(
-        """SELECT COUNT(*) AS v FROM invoices
-           WHERE status NOT IN ('paid','cancelled') AND due_date < date('now')"""
+        "SELECT COUNT(*) AS v FROM invoices "
+        "WHERE status NOT IN ('paid','cancelled') AND due_date < date('now')"
     ).fetchone()["v"]
 
     total_clients = db.execute("SELECT COUNT(*) AS v FROM clients").fetchone()["v"]
 
-    monthly = db.execute(
-        """SELECT strftime('%Y-%m', payment_date) AS month, SUM(amount) AS total
-           FROM payments
-           WHERE payment_date >= date('now','-12 months')
-           GROUP BY month ORDER BY month"""
-    ).fetchall()
+    # ── Monthly revenue for chart ────────────────────────────────────────────
+    if windowed:
+        monthly = db.execute(
+            "SELECT strftime('%Y-%m', payment_date) AS month, SUM(amount) AS total "
+            "FROM payments WHERE payment_date BETWEEN ? AND ? "
+            "GROUP BY month ORDER BY month",
+            (date_from, date_to),
+        ).fetchall()
+    else:
+        monthly = db.execute(
+            "SELECT strftime('%Y-%m', payment_date) AS month, SUM(amount) AS total "
+            "FROM payments WHERE payment_date >= date('now','-12 months') "
+            "GROUP BY month ORDER BY month"
+        ).fetchall()
 
-    recent_invoices = db.execute(
-        """SELECT i.*, c.name AS client_name
-           FROM invoices i JOIN clients c ON i.client_id = c.id
-           ORDER BY i.created_at DESC LIMIT 5"""
-    ).fetchall()
+    # ── Recent / windowed invoices ───────────────────────────────────────────
+    if windowed:
+        recent_invoices = db.execute(
+            "SELECT i.*, c.name AS client_name FROM invoices i "
+            "JOIN clients c ON i.client_id = c.id "
+            "WHERE i.issue_date BETWEEN ? AND ? "
+            "ORDER BY i.issue_date DESC, i.id DESC LIMIT 10",
+            (date_from, date_to),
+        ).fetchall()
+    else:
+        recent_invoices = db.execute(
+            "SELECT i.*, c.name AS client_name FROM invoices i "
+            "JOIN clients c ON i.client_id = c.id "
+            "ORDER BY i.created_at DESC LIMIT 5"
+        ).fetchall()
 
     return {
-        "total_revenue":    total_revenue,
-        "outstanding":      outstanding,
-        "overdue_count":    overdue,
-        "total_clients":    total_clients,
-        "monthly_revenue":  [dict(r) for r in monthly],
-        "recent_invoices":  recent_invoices,
+        "total_revenue":   total_revenue,
+        "total_invoiced":  total_invoiced,
+        "invoice_count":   invoice_count,
+        "outstanding":     outstanding,
+        "overdue_count":   overdue,
+        "total_clients":   total_clients,
+        "monthly_revenue": [dict(r) for r in monthly],
+        "recent_invoices": recent_invoices,
     }
