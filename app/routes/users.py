@@ -2,7 +2,7 @@ from flask import Blueprint, render_template, request, redirect, url_for, flash
 from flask_login import current_user
 from ..services.auth_service import (
     god_required, get_all_users, get_user, create_user,
-    update_user, delete_user, MODULES,
+    update_user, delete_user, MODULES, DASHBOARD_SECTIONS,
 )
 
 bp = Blueprint("users", __name__, url_prefix="/users")
@@ -21,6 +21,11 @@ def _parse_permissions(form):
     return perms
 
 
+def _parse_dashboard_sections(form):
+    """Extract dashboard section checkboxes from the submitted form."""
+    return [key for key, _ in DASHBOARD_SECTIONS if form.get(f"dash_{key}")]
+
+
 @bp.route("/")
 @god_required
 def list_users():
@@ -34,22 +39,29 @@ def new_user():
     if request.method == "POST":
         data  = request.form.to_dict()
         perms = _parse_permissions(request.form)
+        dash  = _parse_dashboard_sections(request.form)
         if not data.get("name") or not data.get("email") or not data.get("password"):
             flash("Name, email and password are required.", "error")
             return render_template("users/form.html", user=data, perms=perms,
-                                   modules=MODULES, action="new")
+                                   modules=MODULES, action="new",
+                                   dash_sections=DASHBOARD_SECTIONS,
+                                   user_dash_sections=set(dash))
         try:
-            create_user(data, perms)
+            create_user(data, perms, dash)
             flash(f"User {data['name']} created.", "success")
             return redirect(url_for("users.list_users"))
         except Exception as e:
             flash(f"Error: {e}", "error")
             return render_template("users/form.html", user=data, perms=perms,
-                                   modules=MODULES, action="new")
+                                   modules=MODULES, action="new",
+                                   dash_sections=DASHBOARD_SECTIONS,
+                                   user_dash_sections=set(dash))
     empty_perms = {m: {"view": False, "create": False, "edit": False, "delete": False}
                    for m in MODULES}
     return render_template("users/form.html", user={}, perms=empty_perms,
-                           modules=MODULES, action="new")
+                           modules=MODULES, action="new",
+                           dash_sections=DASHBOARD_SECTIONS,
+                           user_dash_sections=set())
 
 
 @bp.route("/<int:user_id>/edit", methods=["GET", "POST"])
@@ -64,20 +76,26 @@ def edit_user(user_id):
     if request.method == "POST":
         data  = request.form.to_dict()
         perms = _parse_permissions(request.form)
+        dash  = _parse_dashboard_sections(request.form)
         if not data.get("name") or not data.get("email"):
             flash("Name and email are required.", "error")
             return render_template("users/form.html", user=data, perms=perms,
-                                   modules=MODULES, action="edit", user_id=user_id)
+                                   modules=MODULES, action="edit", user_id=user_id,
+                                   dash_sections=DASHBOARD_SECTIONS,
+                                   user_dash_sections=set(dash))
         # Prevent demoting or deactivating the god account
         if row["role"] == "god":
             data["role"] = "god"
             data["is_active"] = "1"
-        update_user(user_id, data, perms)
+        update_user(user_id, data, perms, dash)
         flash("User updated.", "success")
         return redirect(url_for("users.list_users"))
     perms = user_obj.get_all_permissions()
+    user_dash = user_obj.get_dashboard_sections()
     return render_template("users/form.html", user=dict(row), perms=perms,
-                           modules=MODULES, action="edit", user_id=user_id)
+                           modules=MODULES, action="edit", user_id=user_id,
+                           dash_sections=DASHBOARD_SECTIONS,
+                           user_dash_sections=user_dash)
 
 
 @bp.route("/<int:user_id>/delete", methods=["POST"])

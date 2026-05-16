@@ -328,6 +328,13 @@ def _create_schema(db):
             UNIQUE(user_id, module),
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         );
+
+        CREATE TABLE IF NOT EXISTS user_dashboard_sections (
+            user_id INTEGER NOT NULL,
+            section TEXT NOT NULL,
+            PRIMARY KEY (user_id, section),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
     """)
 
     # ── Column-level migrations for existing installs ─────────

@@ -98,6 +98,37 @@
   </div>
   {% endif %}
 
+  <!-- Dashboard sections -->
+  {% if user.get('role') != 'god' %}
+  <div class="card" style="margin-bottom:18px">
+    <div class="card-header">
+      <span class="card-title">Dashboard Sections</span>
+      <div style="display:flex;gap:8px">
+        <button type="button" class="btn btn-secondary btn-sm" onclick="setAllDash(true)">Grant All</button>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="setAllDash(false)">Revoke All</button>
+      </div>
+    </div>
+    <div class="card-body">
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px">
+        {% for section_key, section_label in dash_sections %}
+        <label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-size:13px;padding:9px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);transition:border-color .15s">
+          <input type="checkbox" name="dash_{{ section_key }}" class="dash-cb" value="1"
+                 style="width:auto;flex-shrink:0"
+                 {{ 'checked' if section_key in user_dash_sections }}>
+          {{ section_label }}
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% else %}
+  <div class="card" style="margin-bottom:18px">
+    <div class="card-body">
+      <p style="color:var(--text-muted);font-size:14px">⚡ The god account sees all dashboard sections.</p>
+    </div>
+  </div>
+  {% endif %}
+
   <div class="form-actions">
     <button type="submit" class="btn btn-primary">{{ 'Save Changes' if action == 'edit' else 'Create User' }}</button>
     <a href="{{ url_for('users.list_users') }}" class="btn btn-secondary">Cancel</a>
@@ -123,6 +154,10 @@ document.querySelectorAll('.row-all').forEach(rowCb => {
 
 function setAll(val) {
   document.querySelectorAll('.perm-cb, .row-all').forEach(cb => cb.checked = val);
+}
+
+function setAllDash(val) {
+  document.querySelectorAll('.dash-cb').forEach(cb => cb.checked = val);
 }
 </script>
 {% endblock %}

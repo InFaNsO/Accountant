@@ -15,6 +15,21 @@ MODULES = [
     "transit",
 ]
 
+# Dashboard sections (key, display label)
+DASHBOARD_SECTIONS = [
+    ("stat_revenue",     "Total Revenue"),
+    ("stat_outstanding", "Outstanding"),
+    ("stat_clients",     "Active Clients"),
+    ("stat_overdue",     "Overdue Count"),
+    ("revenue_chart",    "Revenue Chart"),
+    ("recent_invoices",  "Recent Invoices"),
+    ("production_due",   "Production Due Soon"),
+    ("low_stock",        "Low Stock Alerts"),
+    ("in_production",    "In Production"),
+    ("in_transit",       "In Transit"),
+]
+_ALL_DASH_KEYS = {k for k, _ in DASHBOARD_SECTIONS}
+
 
 class User(UserMixin):
     def __init__(self, row):
@@ -62,6 +77,27 @@ class User(UserMixin):
                     "delete": bool(r["can_delete"]),
                 }
         return perms
+
+    def has_dashboard_section(self, section):
+        """Return True if user can see this dashboard section."""
+        if self.is_god():
+            return True
+        db = get_db()
+        row = db.execute(
+            "SELECT 1 FROM user_dashboard_sections WHERE user_id=? AND section=?",
+            (self.id, section),
+        ).fetchone()
+        return row is not None
+
+    def get_dashboard_sections(self):
+        """Return set of section keys this user can see."""
+        if self.is_god():
+            return _ALL_DASH_KEYS.copy()
+        db = get_db()
+        rows = db.execute(
+            "SELECT section FROM user_dashboard_sections WHERE user_id=?", (self.id,)
+        ).fetchall()
+        return {r["section"] for r in rows}
 
 
 # ── Loader ────────────────────────────────────────────────────────────────────
@@ -121,7 +157,7 @@ def get_user_by_email(email):
     ).fetchone()
 
 
-def create_user(data, permissions):
+def create_user(data, permissions, dash_sections=None):
     """Create user and set per-module permissions. permissions = {module: {view,create,edit,delete}}"""
     db = get_db()
     pw_hash = generate_password_hash(data["password"])
@@ -131,11 +167,12 @@ def create_user(data, permissions):
     )
     user_id = cur.lastrowid
     _save_permissions(db, user_id, permissions)
+    _save_dashboard_sections(db, user_id, dash_sections or [])
     db.commit()
     return user_id
 
 
-def update_user(user_id, data, permissions):
+def update_user(user_id, data, permissions, dash_sections=None):
     db = get_db()
     if data.get("password"):
         db.execute(
@@ -150,6 +187,7 @@ def update_user(user_id, data, permissions):
              1 if data.get("is_active") else 0, user_id),
         )
     _save_permissions(db, user_id, permissions)
+    _save_dashboard_sections(db, user_id, dash_sections or [])
     db.commit()
 
 
@@ -201,3 +239,14 @@ def _save_permissions(db, user_id, permissions):
              1 if perms.get("edit")   else 0,
              1 if perms.get("delete") else 0),
         )
+
+
+def _save_dashboard_sections(db, user_id, sections):
+    """Replace dashboard section grants for a user."""
+    db.execute("DELETE FROM user_dashboard_sections WHERE user_id=?", (user_id,))
+    for section in sections:
+        if section in _ALL_DASH_KEYS:
+            db.execute(
+                "INSERT OR IGNORE INTO user_dashboard_sections (user_id, section) VALUES (?,?)",
+                (user_id, section),
+            )
