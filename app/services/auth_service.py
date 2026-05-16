@@ -18,12 +18,16 @@ MODULES = [
 
 class User(UserMixin):
     def __init__(self, row):
-        self.id           = row["id"]
-        self.name         = row["name"]
-        self.email        = row["email"]
-        self.password_hash= row["password_hash"]
-        self.role         = row["role"]
-        self.is_active    = bool(row["is_active"])
+        self.id            = row["id"]
+        self.name          = row["name"]
+        self.email         = row["email"]
+        self.password_hash = row["password_hash"]
+        self.role          = row["role"]
+        self._is_active    = bool(row["is_active"])
+
+    @property
+    def is_active(self):
+        return self._is_active
 
     def is_god(self):
         return self.role == "god"
