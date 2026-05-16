@@ -255,6 +255,7 @@ td.muted { color: var(--text-muted); }
 }
 .badge-draft    { background: #F1F5F9; color: var(--text-secondary); }
 .badge-sent     { background: var(--info-light);    color: #1D4ED8; }
+.badge-issued   { background: var(--info-light);    color: #1D4ED8; }
 .badge-paid     { background: var(--success-light); color: #065F46; }
 .badge-partial  { background: var(--warning-light); color: #92400E; }
 .badge-overdue  { background: var(--danger-light);  color: #991B1B; }

@@ -181,8 +181,8 @@
 
   <!-- In Production -->
   <div class="card">
-    <div class="card-header" style="border-left:3px solid var(--warning);padding-left:17px">
-      <span class="card-title" style="color:var(--warning)">
+    <div class="card-header" style="border-left:3px solid var(--success);padding-left:17px">
+      <span class="card-title" style="color:var(--success)">
         In Production{% if prod %} ({{ prod|length }}){% endif %}
       </span>
     </div>
@@ -198,7 +198,10 @@
           <div style="font-size:11px;color:var(--text-muted)">{{ item.category_name }}</div>
           {% endif %}
         </div>
-        <span style="color:var(--warning);font-weight:700;font-size:13px">{{ item.production_qty }}</span>
+        <div style="text-align:right;font-size:13px">
+          <span style="color:var(--success);font-weight:700">{{ item.production_qty }}</span>
+          <span style="color:var(--text-muted)"> in production</span>
+        </div>
       </li>
       {% endfor %}
     </ul>
@@ -209,8 +212,8 @@
 
   <!-- In Transit -->
   <div class="card">
-    <div class="card-header" style="border-left:3px solid var(--primary);padding-left:17px">
-      <span class="card-title" style="color:var(--primary)">
+    <div class="card-header" style="border-left:3px solid var(--warning);padding-left:17px">
+      <span class="card-title" style="color:var(--warning)">
         In Transit{% if transit %} ({{ transit|length }}){% endif %}
       </span>
     </div>
@@ -226,7 +229,10 @@
           <div style="font-size:11px;color:var(--text-muted)">Expected: {{ item.expected_arrival }}</div>
           {% endif %}
         </div>
-        <span style="color:var(--primary);font-weight:700;font-size:13px">{{ item.in_transit_qty }}</span>
+        <div style="text-align:right;font-size:13px">
+          <span style="color:var(--warning);font-weight:700">{{ item.in_transit_qty }}</span>
+          <span style="color:var(--text-muted)"> in transit</span>
+        </div>
       </li>
       {% endfor %}
     </ul>

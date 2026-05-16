@@ -18,10 +18,10 @@ def _build_product_choices():
                     "product_id":     p["id"],
                     "sub_product_id": s["id"],
                     "name":           f"{p['name']} — {s['name']}",
-                    # SKU: sub's own SKU first, fall back to parent SKU
                     "sku":            s["sku"] or p["sku"] or "",
                     "unit_price":     p["unit_price"] if s["use_parent_price"] else (s["unit_price"] or 0),
                     "tax_rate":       p["tax_rate"] or 0,
+                    "stock_qty":      s["stock_qty"] or 0,
                 })
         else:
             choices.append({
@@ -32,6 +32,7 @@ def _build_product_choices():
                 "sku":            p["sku"] or "",
                 "unit_price":     p["unit_price"] or 0,
                 "tax_rate":       p["tax_rate"] or 0,
+                "stock_qty":      p["stock_qty"] or 0,
             })
     return choices
 
@@ -126,7 +127,7 @@ def edit_invoice(invoice_id):
 @bp.route("/<int:invoice_id>/status", methods=["POST"])
 def update_status(invoice_id):
     status = request.form.get("status")
-    if status in ("draft", "sent", "paid", "cancelled"):
+    if status in ("issued", "paid", "cancelled", "partial"):
         invoice_service.update_invoice_status(invoice_id, status)
         flash(f"Status updated to {status}.", "success")
     return redirect(url_for("invoices.detail", invoice_id=invoice_id))

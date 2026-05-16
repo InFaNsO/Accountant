@@ -149,7 +149,19 @@ function cbSelectShared(e, optEl) {
 }
 
 function cbKey(e, inp) {
-  if (_cbDD.style.display === 'none' || _cbInput !== inp) { cbOpen(inp); return; }
+  if (_cbDD.style.display === 'none' || _cbInput !== inp) {
+    cbOpen(inp);
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const opts = _cbDD.querySelectorAll('.cb-option');
+      if (opts.length) {
+        _cbDD._cursor = e.key === 'ArrowDown' ? 0 : opts.length - 1;
+        opts[_cbDD._cursor].classList.add('cb-active');
+        opts[_cbDD._cursor].scrollIntoView({ block: 'nearest' });
+      }
+    }
+    return;
+  }
   const opts = _cbDD.querySelectorAll('.cb-option');
   if (!opts.length) return;
   if (e.key === 'Escape') { _cbDD.style.display = 'none'; _cbInput = null; return; }

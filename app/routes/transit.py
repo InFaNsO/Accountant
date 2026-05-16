@@ -57,6 +57,27 @@ def new_dispatch():
             flash("Add at least one product line.", "error")
             return render_template("transit/form.html", dispatch=data, action="new",
                                    suppliers=suppliers, products=products)
+        # Validate dispatch qty does not exceed available production qty
+        errors = []
+        for it in items:
+            pid = int(it["product_id"]) if it.get("product_id") else None
+            sid = int(it["sub_product_id"]) if it.get("sub_product_id") else None
+            qty = float(it["quantity"])
+            if sid:
+                row = product_service.get_sub_product(sid)
+                available = float(row["production_qty"] or 0) if row else 0
+                name = f"{row['parent_name']} — {row['name']}" if row else f"Sub-product #{sid}"
+            else:
+                row = product_service.get_product(pid)
+                available = float(row["production_qty"] or 0) if row else 0
+                name = row["name"] if row else f"Product #{pid}"
+            if qty > available:
+                errors.append(f"{name}: dispatch qty {qty} exceeds production qty {available}.")
+        if errors:
+            for e in errors:
+                flash(e, "error")
+            return render_template("transit/form.html", dispatch=data, action="new",
+                                   suppliers=suppliers, products=products)
         did, warnings = transit_service.create_dispatch(data, items)
         for w in warnings:
             flash(w, "warning")

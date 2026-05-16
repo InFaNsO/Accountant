@@ -133,7 +133,15 @@
           <tr>
             <td class="muted font-mono" style="font-size:12px">{{ m.created_at[:16] if m.created_at else '—' }}</td>
             <td>
-              {% if m.movement_type in ('arrival', 'transit_arrival', 'warehouse_add') %}
+              {% if m.movement_type == 'opening' %}
+                <span class="badge" style="background:rgba(99,102,241,.15);color:#6366f1">Opening Stock</span>
+              {% elif m.movement_type == 'sale' %}
+                <span class="badge" style="background:rgba(239,68,68,.12);color:var(--danger)">▼ Sale</span>
+                {% if m.invoice_number %}<span class="muted" style="font-size:12px;margin-left:6px">{{ m.client_name or '' }} — {{ m.invoice_number }}</span>{% endif %}
+              {% elif m.movement_type == 'sale_cancelled' %}
+                <span class="badge badge-active">▲ Sale Reversed</span>
+                {% if m.invoice_number %}<span class="muted" style="font-size:12px;margin-left:6px">{{ m.invoice_number }}</span>{% endif %}
+              {% elif m.movement_type in ('arrival', 'transit_arrival', 'warehouse_add') %}
                 {% if m.dispatch_name %}
                   <span class="badge" style="background:rgba(16,185,129,.15);color:#10b981">Dispatch Received</span>
                   <span class="muted" style="font-size:12px;margin-left:6px">{{ m.dispatch_name }}</span>
@@ -144,9 +152,6 @@
                 <span class="badge" style="background:rgba(239,68,68,.12);color:var(--danger)">▼ Reduced</span>
               {% elif m.movement_type == 'add' %}
                 <span class="badge badge-active">Correction / Added</span>
-              {% elif m.invoice_number %}
-                <span class="badge badge-sent">Sale</span>
-                <span class="muted" style="font-size:12px;margin-left:6px">{{ m.client_name or '' }} — {{ m.invoice_number }}</span>
               {% else %}
                 <span class="badge">{{ m.movement_type }}</span>
               {% endif %}

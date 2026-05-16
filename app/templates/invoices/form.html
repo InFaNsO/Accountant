@@ -15,13 +15,16 @@
       <div class="form-grid form-grid-3">
 
         <div class="form-group">
-          <label for="client_id">Client *</label>
-          <select id="client_id" name="client_id" required>
-            <option value="">— Select client —</option>
-            {% for c in clients %}
-            <option value="{{ c.id }}" {{ 'selected' if invoice.get('client_id')|string == c.id|string }}>{{ c.name }}{% if c.company %} — {{ c.company }}{% endif %}</option>
-            {% endfor %}
-          </select>
+          <label for="client_search">Client *</label>
+          <input type="text" id="client_search"
+                 placeholder="Search by name or company…"
+                 autocomplete="off"
+                 oninput="clientCbFilter(this)"
+                 onfocus="clientCbOpen(this)"
+                 onblur="clientCbBlur(this)"
+                 onkeydown="clientCbKey(event,this)">
+          <input type="hidden" id="client_id" name="client_id" value="{{ invoice.get('client_id', '') }}">
+          <div id="client_error" style="font-size:11px;color:var(--danger);margin-top:3px;display:none">Please select a client.</div>
         </div>
 
         <div class="form-group">
@@ -37,9 +40,8 @@
         <div class="form-group">
           <label for="status">Status</label>
           <select id="status" name="status">
-            <option value="draft"   {{ 'selected' if invoice.get('status','draft') == 'draft' }}>Draft</option>
-            <option value="sent"    {{ 'selected' if invoice.get('status') == 'sent' }}>Sent</option>
-            <option value="paid"    {{ 'selected' if invoice.get('status') == 'paid' }}>Paid</option>
+            <option value="issued"    {{ 'selected' if invoice.get('status','issued') in ('issued','sent','draft','') or not invoice.get('status') }}>Issued</option>
+            <option value="paid"      {{ 'selected' if invoice.get('status') == 'paid' }}>Paid</option>
             <option value="cancelled" {{ 'selected' if invoice.get('status') == 'cancelled' }}>Cancelled</option>
           </select>
         </div>
@@ -105,7 +107,7 @@
                      placeholder="SKU (optional)">
             </td>
             <td class="col-qty" style="vertical-align:top;padding-top:10px">
-              <input type="number" name="items[{{ loop.index0 }}][quantity]"   value="{{ item.get('quantity',1) }}"   min="0.01" step="any"  oninput="recalcTotals()" style="text-align:right">
+              <input type="number" name="items[{{ loop.index0 }}][quantity]"   value="{{ item.get('quantity',1) }}"   min="0.01" step="any"  oninput="recalcTotals();validateInvQty(this)" style="text-align:right">
             </td>
             <td class="col-price" style="vertical-align:top;padding-top:10px">
               <input type="number" name="items[{{ loop.index0 }}][unit_price]" value="{{ item.get('unit_price',0) }}" min="0"    step="0.01" oninput="recalcTotals()" style="text-align:right">
@@ -144,6 +146,96 @@
 
 {% block scripts %}
 <script>
+// ── Client list ────────────────────────────────────────────────────────────────
+const CLIENT_LIST = [{% for c in clients %}{"id":{{ c.id }},"name":{{ c.name|tojson }},"company":{{ (c.company or '')|tojson }}}{% if not loop.last %},{% endif %}{% endfor %}];
+
+// ── Client combobox ────────────────────────────────────────────────────────────
+const _clientDD = (() => {
+  const el = document.createElement('div');
+  el.style.cssText =
+    'display:none;position:fixed;z-index:9600;background:var(--bg);' +
+    'border:1px solid var(--border);border-radius:var(--radius-sm);' +
+    'box-shadow:0 8px 32px rgba(0,0,0,.22);overflow-y:auto;max-height:310px;min-width:280px';
+  el._cursor = -1; el._matches = [];
+  document.body.appendChild(el);
+  return el;
+})();
+let _clientInput = null;
+
+function _clientPos(inp) {
+  const r = inp.getBoundingClientRect();
+  _clientDD.style.top   = (r.bottom + 3) + 'px';
+  _clientDD.style.left  = r.left + 'px';
+  _clientDD.style.width = Math.max(r.width, 280) + 'px';
+}
+function _clientMatches(q) {
+  return q ? CLIENT_LIST.filter(c =>
+    c.name.toLowerCase().includes(q) || c.company.toLowerCase().includes(q)
+  ) : CLIENT_LIST;
+}
+function clientCbRender(inp, matches) {
+  _clientInput = inp; _clientDD._matches = matches; _clientDD._cursor = -1;
+  _clientDD.innerHTML = matches.length
+    ? matches.map((c, i) => `<div class="cb-option" data-idx="${i}" onmousedown="clientCbSelect(event,this)">
+        <div style="font-weight:600;font-size:13px">${escHtml(c.name)}</div>
+        ${c.company ? `<div style="font-size:11px;color:var(--text-muted)">${escHtml(c.company)}</div>` : ''}
+      </div>`).join('')
+    : '<div style="padding:10px 14px;color:var(--text-muted);font-size:13px;font-style:italic">No clients found</div>';
+  _clientPos(inp);
+  _clientDD.style.display = '';
+}
+function clientCbOpen(inp)   { clientCbRender(inp, _clientMatches(inp.value.toLowerCase())); }
+function clientCbFilter(inp) {
+  document.getElementById('client_id').value = '';
+  clientCbRender(inp, _clientMatches(inp.value.toLowerCase()));
+}
+function clientCbBlur(inp) {
+  setTimeout(() => { if (_clientInput === inp) { _clientDD.style.display = 'none'; _clientInput = null; } }, 180);
+}
+function clientCbSelect(e, optEl) {
+  e.preventDefault();
+  const c = _clientDD._matches[parseInt(optEl.dataset.idx, 10)];
+  if (!c || !_clientInput) return;
+  _clientInput.value = c.name + (c.company ? ' — ' + c.company : '');
+  document.getElementById('client_id').value = c.id;
+  document.getElementById('client_error').style.display = 'none';
+  _clientDD.style.display = 'none'; _clientInput = null;
+}
+function clientCbKey(e, inp) {
+  if (_clientDD.style.display === 'none' || _clientInput !== inp) {
+    clientCbOpen(inp);
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const opts = _clientDD.querySelectorAll('.cb-option');
+      if (opts.length) {
+        _clientDD._cursor = e.key === 'ArrowDown' ? 0 : opts.length - 1;
+        opts[_clientDD._cursor].classList.add('cb-active');
+        opts[_clientDD._cursor].scrollIntoView({ block: 'nearest' });
+      }
+    }
+    return;
+  }
+  const opts = _clientDD.querySelectorAll('.cb-option');
+  if (!opts.length) return;
+  if (e.key === 'Escape') { _clientDD.style.display = 'none'; _clientInput = null; return; }
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    _clientDD._cursor = Math.min(_clientDD._cursor + 1, opts.length - 1);
+    opts.forEach((o, i) => o.classList.toggle('cb-active', i === _clientDD._cursor));
+    opts[_clientDD._cursor]?.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    _clientDD._cursor = Math.max(_clientDD._cursor - 1, 0);
+    opts.forEach((o, i) => o.classList.toggle('cb-active', i === _clientDD._cursor));
+    opts[_clientDD._cursor]?.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (_clientDD._cursor >= 0 && opts[_clientDD._cursor]) clientCbSelect(e, opts[_clientDD._cursor]);
+  }
+}
+window.addEventListener('scroll', () => { if (_clientInput) _clientPos(_clientInput); }, true);
+window.addEventListener('resize', () => { if (_clientInput) _clientPos(_clientInput); });
+
 // ── Catalog data (injected from server) ────────────────────────────────────────
 const CATALOG = {{ products | tojson }};
 
@@ -173,11 +265,28 @@ function _cbPos(input) {
   _cbDD.style.width = Math.max(r.width, 400) + 'px';
 }
 
-function cbBuildOptions(query) {
+function getSelectedKeys(excludeInput) {
+  const keys = new Set();
+  document.querySelectorAll('#lineItems tr').forEach(tr => {
+    const cbInp = tr.querySelector('.cb-input');
+    if (cbInp === excludeInput) return;
+    const pid  = tr.querySelector('.cb-pid')?.value;
+    const spid = tr.querySelector('.cb-spid')?.value;
+    if (pid || spid) keys.add(spid ? `p${pid}_s${spid}` : `p${pid}`);
+  });
+  return keys;
+}
+
+function cbBuildOptions(query, excludeInput) {
+  const selectedKeys = getSelectedKeys(excludeInput);
   const q = query.trim().toLowerCase();
+  const catalog = CATALOG.filter(p => {
+    const key = p.sub_product_id ? `p${p.product_id}_s${p.sub_product_id}` : `p${p.product_id}`;
+    return !selectedKeys.has(key);
+  });
   return q === ''
-    ? CATALOG
-    : CATALOG.filter(p =>
+    ? catalog
+    : catalog.filter(p =>
         p.name.toLowerCase().includes(q) ||
         (p.sku && p.sku.toLowerCase().includes(q))
       );
@@ -202,14 +311,14 @@ function cbRender(input, matches) {
 }
 
 function cbOpen(input) {
-  cbRender(input, cbBuildOptions(input.value));
+  cbRender(input, cbBuildOptions(input.value, input));
 }
 
 function cbFilter(input) {
   const wrap = input.closest('.cb-wrap');
   wrap.querySelector('.cb-pid').value  = '';
   wrap.querySelector('.cb-spid').value = '';
-  cbRender(input, cbBuildOptions(input.value));
+  cbRender(input, cbBuildOptions(input.value, input));
   recalcTotals();
 }
 
@@ -240,12 +349,40 @@ function cbSelect(event, optEl) {
 
   const priceInp = row.querySelector('[name$="[unit_price]"]');
   const taxInp   = row.querySelector('[name$="[tax_rate]"]');
+  const qtyInp   = row.querySelector('[name$="[quantity]"]');
   if (priceInp) priceInp.value = (p.unit_price || 0).toFixed(2);
   if (taxInp)   taxInp.value   = p.tax_rate || 0;
+  if (qtyInp)   { qtyInp.dataset.stockQty = p.stock_qty != null ? p.stock_qty : ''; validateInvQty(qtyInp); }
 
   _cbDD.style.display = 'none';
   _cbInput = null;
   recalcTotals();
+
+  // Add a blank row if this was the last row
+  const rows = document.querySelectorAll('#lineItems tr');
+  if (wrap.closest('tr') === rows[rows.length - 1]) {
+    addLineItem();
+  }
+}
+
+function validateInvQty(inp) {
+  const stock = parseFloat(inp.dataset.stockQty);
+  if (isNaN(stock)) return;
+  const val = parseFloat(inp.value) || 0;
+  let hint = inp.parentNode.querySelector('.inv-qty-hint');
+  if (!hint) {
+    hint = document.createElement('div');
+    hint.className = 'inv-qty-hint';
+    hint.style.cssText = 'font-size:11px;color:var(--danger);margin-top:2px';
+    inp.parentNode.appendChild(hint);
+  }
+  if (val > stock) {
+    inp.style.outline = '2px solid var(--danger)';
+    hint.textContent  = `Exceeds warehouse stock (${stock})`;
+  } else {
+    inp.style.outline = '';
+    hint.textContent  = '';
+  }
 }
 
 function cbKey(event, input) {
@@ -312,7 +449,7 @@ function addLineItem(desc='', sku='', qty=1, price=0, tax=0, pid='', spid='') {
              placeholder="SKU (optional)">
     </td>
     <td class="col-qty"   style="vertical-align:top;padding-top:10px">
-      <input type="number" name="items[${idx}][quantity]"   value="${qty}"   min="0.01" step="any"  oninput="recalcTotals()" style="text-align:right">
+      <input type="number" name="items[${idx}][quantity]"   value="${qty}"   min="0.01" step="any"  oninput="recalcTotals();validateInvQty(this)" style="text-align:right">
     </td>
     <td class="col-price" style="vertical-align:top;padding-top:10px">
       <input type="number" name="items[${idx}][unit_price]" value="${price}" min="0"    step="0.01" oninput="recalcTotals()" style="text-align:right">
@@ -374,9 +511,38 @@ function recalcTotals() {
 
 // ── Init ───────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
-  // Set today's date if blank
+  // Pre-populate client combobox in edit mode
+  const clientIdVal = document.getElementById('client_id').value;
+  if (clientIdVal) {
+    const found = CLIENT_LIST.find(c => String(c.id) === String(clientIdVal));
+    if (found) document.getElementById('client_search').value = found.name + (found.company ? ' — ' + found.company : '');
+  }
+
+  // Validate client selection on submit
+  document.getElementById('invoiceForm').addEventListener('submit', function(e) {
+    if (!document.getElementById('client_id').value) {
+      e.preventDefault();
+      const errEl = document.getElementById('client_error');
+      errEl.style.display = '';
+      document.getElementById('client_search').focus();
+    }
+  }, true);
+
+  // Set today's date if blank; auto-set due date to +60 days
   const issueDate = document.getElementById('issue_date');
-  if (!issueDate.value) issueDate.value = new Date().toISOString().slice(0,10);
+  const dueDate   = document.getElementById('due_date');
+  function syncDueDate() {
+    if (issueDate.value && !dueDate._userSet) {
+      const d = new Date(issueDate.value);
+      d.setDate(d.getDate() + 60);
+      dueDate.value = d.toISOString().slice(0, 10);
+    }
+  }
+  if (!issueDate.value) issueDate.value = new Date().toISOString().slice(0, 10);
+  dueDate._userSet = !!dueDate.value;
+  dueDate.addEventListener('change', () => { dueDate._userSet = true; });
+  issueDate.addEventListener('change', syncDueDate);
+  if (!dueDate.value) syncDueDate();
 
   // If no rows exist yet, add a blank one
   if (document.querySelectorAll('#lineItems tr').length === 0) addLineItem();
@@ -388,6 +554,25 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   recalcTotals();
+
+  // Stock qty submit validation
+  document.getElementById('invoiceForm').addEventListener('submit', function(e) {
+    const bad = [];
+    document.querySelectorAll('#lineItems tr').forEach(tr => {
+      const qtyInp  = tr.querySelector('[name$="[quantity]"]');
+      const descInp = tr.querySelector('[name$="[description]"]');
+      if (!qtyInp || !descInp?.value.trim()) return;
+      const stock = parseFloat(qtyInp.dataset.stockQty);
+      if (!isNaN(stock) && (parseFloat(qtyInp.value) || 0) > stock) {
+        bad.push(`${descInp.value.trim()} (stock: ${stock})`);
+      }
+    });
+    if (bad.length) {
+      e.stopImmediatePropagation();
+      e.preventDefault();
+      alert('Quantity exceeds available warehouse stock for:\n\n' + bad.map(s => '• ' + s).join('\n'));
+    }
+  });
 
   // Dirty tracking — flag any change to the form
   let _invFormDirty = false;

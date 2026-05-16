@@ -291,6 +291,20 @@ def _create_schema(db):
         PRAGMA foreign_keys = ON;
     """)
 
+    # ── Manual ledger entries ─────────────────────────────────
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS ledger_entries (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id   INTEGER NOT NULL,
+            entry_date  DATE NOT NULL,
+            description TEXT,
+            debit       REAL DEFAULT 0,
+            credit      REAL DEFAULT 0,
+            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (client_id) REFERENCES clients(id)
+        );
+    """)
+
     # ── Column-level migrations for existing installs ─────────
     _add_column(db, "clients",          "opening_balance", "REAL DEFAULT 0")
     _add_column(db, "products",         "category_id",     "INTEGER")

@@ -68,6 +68,19 @@
   </div>
 </div>
 {% endblock %}
+<!-- Qty error modal -->
+<div id="qtyModal" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.45);align-items:center;justify-content:center">
+  <div style="background:var(--bg);border-radius:var(--radius);padding:28px;max-width:540px;width:100%;box-shadow:0 8px 40px rgba(0,0,0,.3)">
+    <div style="font-size:16px;font-weight:700;margin-bottom:4px;color:var(--danger)">Quantity Exceeds Production Stock</div>
+    <div style="font-size:13px;color:var(--text-muted);margin-bottom:18px">These products exceed their available production quantity. Correct them below or cancel to go back.</div>
+    <div id="qtyModalList"></div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px">
+      <button type="button" class="btn btn-secondary" onclick="qtyModalClose()">Cancel</button>
+      <button type="button" class="btn btn-primary" onclick="qtyModalApply()">Update & Save</button>
+    </div>
+  </div>
+</div>
+
 {% block scripts %}
 <script>
 const CATALOG = {{ products | tojson }};
@@ -152,12 +165,26 @@ function cbSelectShared(e, optEl) {
   wrap.querySelector('[name^="sub_product_id_"]').value = p.sub_product_id || '';
   const prodCell = row.querySelector('.prod-qty-cell');
   if (prodCell) prodCell.textContent = p.production_qty > 0 ? p.production_qty : '—';
+  const qtyInp = row.querySelector('[name^="quantity_"]');
+  if (qtyInp) { qtyInp.dataset.productionQty = p.production_qty != null ? p.production_qty : 0; validateQty(qtyInp); }
   _cbDD.style.display = 'none'; _cbInput = null;
   markFormDirty();
 }
 
 function cbKey(e, inp) {
-  if (_cbDD.style.display === 'none' || _cbInput !== inp) { cbOpen(inp); return; }
+  if (_cbDD.style.display === 'none' || _cbInput !== inp) {
+    cbOpen(inp);
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const opts = _cbDD.querySelectorAll('.cb-option');
+      if (opts.length) {
+        _cbDD._cursor = e.key === 'ArrowDown' ? 0 : opts.length - 1;
+        opts[_cbDD._cursor].classList.add('cb-active');
+        opts[_cbDD._cursor].scrollIntoView({ block: 'nearest' });
+      }
+    }
+    return;
+  }
   const opts = _cbDD.querySelectorAll('.cb-option');
   if (!opts.length) return;
   if (e.key === 'Escape') { _cbDD.style.display = 'none'; _cbInput = null; return; }
@@ -199,7 +226,7 @@ function addRow(nameVal, pidVal, sidVal, qtyVal, priceVal, cbmVal, gwVal) {
       </div>
     </td>
     <td class="prod-qty-cell" style="text-align:center;font-weight:700;color:var(--warning)">—</td>
-    <td><input type="number" name="quantity_${i}"     step="0.01" min="0.01" value="${qtyVal   || ''}" placeholder="0"    style="width:100%" oninput="markFormDirty()"></td>
+    <td><input type="number" name="quantity_${i}" step="0.01" min="0.01" value="${qtyVal || ''}" placeholder="0" style="width:100%" data-production-qty="0" oninput="markFormDirty();validateQty(this)"><div class="qty-hint"></div></td>
     <td><input type="number" name="price_${i}"        step="0.01" min="0"    value="${priceVal || ''}" placeholder="opt." style="width:100%" oninput="markFormDirty()"></td>
     <td><input type="number" name="cbm_${i}"          step="0.001" min="0"   value="${cbmVal   || ''}" placeholder="opt." style="width:100%" oninput="markFormDirty()"></td>
     <td><input type="number" name="gross_weight_${i}" step="0.01" min="0"    value="${gwVal    || ''}" placeholder="opt." style="width:100%" oninput="markFormDirty()"></td>
@@ -224,12 +251,86 @@ window.__dirtyCheck = () => ({
   label: 'Dispatch',
   save: null,
 });
-document.getElementById('dispatchForm').addEventListener('submit', () => { _formDirty = false; });
+/* ── Inline qty validation ────────────────────────────────────────────────── */
+function validateQty(inp) {
+  const row    = inp.closest('tr');
+  const pidInp = row.querySelector('[name^="product_id_"]');
+  const sidInp = row.querySelector('[name^="sub_product_id_"]');
+  if (!pidInp?.value && !sidInp?.value) return; // no product selected yet
+  const prodQty = parseFloat(inp.dataset.productionQty);
+  const val     = parseFloat(inp.value) || 0;
+  const hint    = inp.parentNode.querySelector('.qty-hint');
+  if (val > prodQty) {
+    inp.style.outline = '2px solid var(--danger)';
+    if (hint) { hint.style.display = ''; hint.textContent = `Exceeds production stock (${prodQty})`; }
+  } else {
+    inp.style.outline = '';
+    if (hint) { hint.style.display = 'none'; hint.textContent = ''; }
+  }
+}
+
+/* ── Submit: check all rows, show modal if any are over production qty ─────── */
+document.getElementById('dispatchForm').addEventListener('submit', function(e) {
+  _formDirty = false;
+  const bad = [];
+  document.querySelectorAll('#itemsBody tr').forEach(row => {
+    const qtyInp  = row.querySelector('[name^="quantity_"]');
+    const nameInp = row.querySelector('.cb-inp');
+    const pidInp  = row.querySelector('[name^="product_id_"]');
+    const sidInp  = row.querySelector('[name^="sub_product_id_"]');
+    if (!qtyInp || (!pidInp?.value && !sidInp?.value)) return;
+    const prodQty = parseFloat(qtyInp.dataset.productionQty);
+    const val     = parseFloat(qtyInp.value) || 0;
+    if (val > prodQty) bad.push({ name: nameInp?.value || 'Unknown', available: prodQty, entered: val, qtyInp });
+  });
+  if (bad.length) {
+    e.preventDefault();
+    _formDirty = true;
+    showQtyModal(bad);
+  }
+});
+
+/* ── Qty error modal ──────────────────────────────────────────────────────── */
+function showQtyModal(errors) {
+  const list = document.getElementById('qtyModalList');
+  list.innerHTML = errors.map((err, i) => `
+    <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border)">
+      <div style="flex:1;font-size:14px;font-weight:600">${err.name}</div>
+      <div style="font-size:12px;color:var(--text-muted);white-space:nowrap">
+        Available: <strong style="color:var(--warning)">${err.available}</strong>
+      </div>
+      <input type="number" class="modal-qty-inp" step="0.01" min="0.01" max="${err.available}"
+             value="${err.entered}" style="width:88px"
+             oninput="this.style.outline=parseFloat(this.value)>parseFloat(this.max)||parseFloat(this.value)<=0?'2px solid var(--danger)':''">
+    </div>`
+  ).join('');
+  document.getElementById('qtyModal')._errors = errors;
+  document.getElementById('qtyModal').style.display = 'flex';
+}
+
+function qtyModalApply() {
+  const modal  = document.getElementById('qtyModal');
+  const inputs = modal.querySelectorAll('.modal-qty-inp');
+  const errors = modal._errors;
+  let ok = true;
+  inputs.forEach((inp, i) => {
+    const val = parseFloat(inp.value) || 0;
+    const max = errors[i].available;
+    if (val <= 0 || val > max) { inp.style.outline = '2px solid var(--danger)'; ok = false; }
+    else { inp.style.outline = ''; errors[i].qtyInp.value = val; validateQty(errors[i].qtyInp); }
+  });
+  if (ok) { modal.style.display = 'none'; _formDirty = false; document.getElementById('dispatchForm').submit(); }
+}
+
+function qtyModalClose() {
+  document.getElementById('qtyModal').style.display = 'none';
+}
 </script>
 
 <style>
 .cb-option { padding:10px 14px; cursor:pointer; border-bottom:1px solid var(--border); }
 .cb-option:last-child { border-bottom:none; }
 .cb-option:hover, .cb-option.cb-active { background:var(--bg-alt); }
+.qty-hint { font-size:11px; color:var(--danger); margin-top:2px; display:none; }
 </style>
 {% endblock %}

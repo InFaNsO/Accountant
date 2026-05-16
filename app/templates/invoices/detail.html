@@ -22,7 +22,7 @@
       {% set balance = invoice.total - invoice.amount_paid %}
       <span style="font-size:14px;color:var(--text-secondary)">
         {{ invoice.amount_paid|inr }} paid of {{ invoice.total|inr }}
-        {% if balance > 0 %} — <strong style="color:var(--danger)">{{ balance|inr }} remaining</strong>{% endif %}
+        {% if balance > 0 %} — <strong onclick="showClientLedger({{ invoice.client_id }}, {{ invoice.client_name|tojson }})" style="color:var(--danger);cursor:pointer" title="View client ledger">{{ balance|inr }} remaining</strong>{% endif %}
       </span>
     </div>
     <div class="progress-bar-wrap" style="width:220px">
@@ -32,8 +32,7 @@
     <!-- Quick status change -->
     <form method="post" action="{{ url_for('invoices.update_status', invoice_id=invoice.id) }}" style="display:flex;gap:6px;align-items:center">
       <select name="status" style="width:130px;padding:6px 10px;font-size:13px">
-        <option value="draft"     {{ 'selected' if invoice.status=='draft' }}>Draft</option>
-        <option value="sent"      {{ 'selected' if invoice.status=='sent' }}>Sent</option>
+        <option value="issued"    {{ 'selected' if invoice.status in ('draft','sent','issued') }}>Issued</option>
         <option value="paid"      {{ 'selected' if invoice.status=='paid' }}>Paid</option>
         <option value="cancelled" {{ 'selected' if invoice.status=='cancelled' }}>Cancelled</option>
       </select>
@@ -46,7 +45,12 @@
 <div class="invoice-header-box">
   <!-- Client info -->
   <div class="card">
-    <div class="card-header"><span class="card-title">Bill To</span></div>
+    <div class="card-header">
+      <span class="card-title">Bill To</span>
+      <span onclick="showClientLedger({{ invoice.client_id }}, {{ invoice.client_name|tojson }})"
+            style="font-size:11px;color:var(--text-muted);margin-left:auto;cursor:pointer"
+            title="View client ledger">View ledger</span>
+    </div>
     <div class="card-body">
       <div class="info-list">
         <div class="info-row"><span class="info-label">Client</span><a href="{{ url_for('clients.detail', client_id=invoice.client_id) }}" style="font-weight:700;color:var(--accent);text-decoration:none">{{ invoice.client_name }}</a></div>

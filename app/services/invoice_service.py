@@ -1,5 +1,6 @@
 from datetime import date
 from ..database import get_db
+from . import product_service
 
 
 def _next_invoice_number(db):
@@ -117,7 +118,7 @@ def create_invoice(data, items):
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             invoice_number, data["client_id"],
-            data.get("status", "draft"),
+            data.get("status", "issued"),
             data.get("issue_date", str(date.today())),
             data.get("due_date"),
             data.get("notes"),
@@ -127,23 +128,33 @@ def create_invoice(data, items):
     invoice_id = cur.lastrowid
 
     for it in items:
-        line_total = float(it["unit_price"]) * float(it["quantity"])
+        pid  = it.get("product_id") or None
+        spid = it.get("sub_product_id") or None
+        qty  = float(it["quantity"])
+        line_total = float(it["unit_price"]) * qty
         db.execute(
             """INSERT INTO invoice_items
                (invoice_id, product_id, sub_product_id, sku, description, quantity, unit_price, tax_rate, line_total)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                invoice_id,
-                it.get("product_id") or None,
-                it.get("sub_product_id") or None,
+                invoice_id, pid, spid,
                 it.get("sku") or None,
                 it["description"],
-                float(it["quantity"]),
+                qty,
                 float(it["unit_price"]),
                 float(it.get("tax_rate", 0)),
                 line_total,
             ),
         )
+        # Deduct from warehouse stock for catalog items
+        if pid or spid:
+            tbl = "sub_products" if spid else "products"
+            pk  = spid if spid else pid
+            db.execute(f"UPDATE {tbl} SET stock_qty = stock_qty - ? WHERE id = ?", (qty, pk))
+            db.execute(
+                "INSERT INTO stock_movements (product_id, sub_product_id, movement_type, quantity, notes, invoice_id) VALUES (?,?,?,?,?,?)",
+                (pid, spid, "sale", qty, f"Invoice {invoice_number}", invoice_id),
+            )
     db.commit()
 
     # Auto-apply any existing client credit to this new invoice
@@ -154,7 +165,31 @@ def create_invoice(data, items):
 
 def update_invoice_status(invoice_id, status):
     db = get_db()
+    inv = db.execute("SELECT status, invoice_number FROM invoices WHERE id=?", (invoice_id,)).fetchone()
+    if not inv:
+        return
+    prev_status = inv["status"]
     db.execute("UPDATE invoices SET status=? WHERE id=?", (status, invoice_id))
+
+    # Restore warehouse stock when cancelling a non-cancelled invoice
+    if status == "cancelled" and prev_status != "cancelled":
+        items = db.execute(
+            "SELECT product_id, sub_product_id, quantity FROM invoice_items WHERE invoice_id=?",
+            (invoice_id,),
+        ).fetchall()
+        for it in items:
+            pid  = it["product_id"]
+            spid = it["sub_product_id"]
+            qty  = it["quantity"]
+            if pid or spid:
+                tbl = "sub_products" if spid else "products"
+                pk  = spid if spid else pid
+                db.execute(f"UPDATE {tbl} SET stock_qty = stock_qty + ? WHERE id = ?", (qty, pk))
+                db.execute(
+                    "INSERT INTO stock_movements (product_id, sub_product_id, movement_type, quantity, notes, invoice_id) VALUES (?,?,?,?,?,?)",
+                    (pid, spid, "sale_cancelled", qty,
+                     f"Cancelled: Invoice {inv['invoice_number']}", invoice_id),
+                )
     db.commit()
 
 
@@ -174,7 +209,7 @@ def update_invoice(invoice_id, data, items):
            notes=?, subtotal=?, tax_total=?, discount_amount=?, total=?
            WHERE id=?""",
         (
-            data["client_id"], data.get("status", "draft"),
+            data["client_id"], data.get("status", "issued"),
             data.get("issue_date"), data.get("due_date"),
             data.get("notes"), subtotal, tax_total, discount, total,
             invoice_id,
@@ -221,7 +256,7 @@ def refresh_invoice_paid(invoice_id):
     total = inv["total"]
     inv = db.execute("SELECT status FROM invoices WHERE id=?", (invoice_id,)).fetchone()
     if paid <= 0:
-        status = inv["status"] if inv and inv["status"] == "draft" else "sent"
+        status = "issued"
     elif paid >= total:
         status = "paid"
     else:

@@ -43,7 +43,7 @@ def _refresh_invoice_paid(db, invoice_id):
     if not inv:
         return
     if paid <= 0:
-        status = inv["status"] if inv["status"] == "draft" else "sent"
+        status = inv["status"] if inv["status"] == "draft" else "issued"
     elif paid >= inv["total"]:
         status = "paid"
     else:

@@ -84,8 +84,8 @@ def product_detail(product_id):
     if not subs:
         warehouse_history  = product_service.get_stock_history(
             product_id=product_id,
-            movement_types=["add", "arrival", "transit_arrival", "correction",
-                            "warehouse_add", "warehouse_deduct"])
+            movement_types=["opening", "add", "arrival", "transit_arrival", "correction",
+                            "warehouse_add", "warehouse_deduct", "sale", "sale_cancelled"])
         production_history = product_service.get_stock_history(
             product_id=product_id,
             movement_types=["production", "production_add", "production_deduct"])
@@ -163,9 +163,9 @@ def new_sub_product(product_id):
         if not data.get("name"):
             flash("Sub-product name is required.", "error")
             return render_template("products/sub_form.html", sub=data, action="new", product=product)
-        if data.get("sku_has_prefix") and product.get("sku") and data.get("sku_suffix"):
+        if data.get("sku_has_prefix") and product["sku"] and data.get("sku_suffix"):
             data["sku"] = f"{product['sku']}-{data['sku_suffix'].strip()}"
-        elif data.get("sku_has_prefix") and product.get("sku"):
+        elif data.get("sku_has_prefix") and product["sku"]:
             data["sku"] = None
         product_service.create_sub_product(data)
         flash("Sub-product created.", "success")
@@ -240,8 +240,8 @@ def sub_detail(product_id, sub_id):
         return redirect(url_for("products.list_products"))
     warehouse_history  = product_service.get_stock_history(
         sub_id=sub_id,
-        movement_types=["add", "arrival", "transit_arrival", "correction",
-                        "warehouse_add", "warehouse_deduct"])
+        movement_types=["opening", "add", "arrival", "transit_arrival", "correction",
+                        "warehouse_add", "warehouse_deduct", "sale", "sale_cancelled"])
     production_history = product_service.get_stock_history(
         sub_id=sub_id,
         movement_types=["production", "production_add", "production_deduct"])

@@ -70,9 +70,19 @@ def ledger(client_id):
     ).fetchall()
 
     opening = float(client["opening_balance"] or 0)
+
+    inv_list  = [{"sort": (r["issue_date"] or ""),    "kind": "invoice",  "row": dict(r)} for r in invoices]
+    pay_list  = [{"sort": (r["payment_date"] or ""),  "kind": "payment",  "row": dict(r)} for r in payments]
+
+    manual = db.execute(
+        "SELECT * FROM ledger_entries WHERE client_id=? ORDER BY entry_date, id",
+        (client_id,),
+    ).fetchall()
+    manual_list = [{"sort": r["entry_date"] or "", "kind": "manual", "row": dict(r)} for r in manual]
+    combined = sorted(inv_list + pay_list + manual_list, key=lambda x: x["sort"])
+
     entries = []
     running = 0.0
-
     if opening != 0:
         if opening > 0:
             running -= opening
@@ -83,11 +93,6 @@ def ledger(client_id):
             entries.append({"date": "", "type": "opening", "label": "Opening Balance (credit)",
                             "debit": 0, "credit": abs(opening), "running": running})
 
-    # merge invoices and payments chronologically
-    inv_list  = [{"sort": (r["issue_date"] or ""), "kind": "invoice",  "row": dict(r)} for r in invoices]
-    pay_list  = [{"sort": (r["payment_date"] or ""), "kind": "payment", "row": dict(r)} for r in payments]
-    combined  = sorted(inv_list + pay_list, key=lambda x: x["sort"])
-
     for item in combined:
         if item["kind"] == "invoice":
             r = item["row"]
@@ -95,7 +100,7 @@ def ledger(client_id):
             entries.append({"date": r["issue_date"] or "", "type": "invoice",
                             "label": r["invoice_number"],
                             "debit": r["total"], "credit": 0, "running": running})
-        else:
+        elif item["kind"] == "payment":
             r = item["row"]
             running += r["amount"]
             ref_parts = [r["method"]] if r["method"] else []
@@ -105,12 +110,40 @@ def ledger(client_id):
                             "label": " — ".join(ref_parts) if ref_parts else "Payment",
                             "invoice_id": r["invoice_id"],
                             "debit": 0, "credit": r["amount"], "running": running})
+        else:
+            r = item["row"]
+            debit  = float(r["debit"]  or 0)
+            credit = float(r["credit"] or 0)
+            running += credit - debit
+            entries.append({"date": r["entry_date"] or "", "type": "manual",
+                            "label": r["description"] or "Manual Entry",
+                            "debit": debit, "credit": credit, "running": running})
 
     return jsonify({
         "client_name": client["name"],
         "entries": entries,
         "final_balance": running,
     })
+
+
+@bp.route("/<int:client_id>/ledger/entry", methods=["POST"])
+def add_ledger_entry(client_id):
+    data        = request.get_json(silent=True) or {}
+    entry_date  = data.get("entry_date")
+    description = data.get("description", "")
+    debit       = float(data.get("debit")  or 0)
+    credit      = float(data.get("credit") or 0)
+    if not entry_date:
+        return jsonify({"error": "Date is required"}), 400
+    if debit == 0 and credit == 0:
+        return jsonify({"error": "Enter a debit or credit amount"}), 400
+    db = get_db()
+    db.execute(
+        "INSERT INTO ledger_entries (client_id, entry_date, description, debit, credit) VALUES (?,?,?,?,?)",
+        (client_id, entry_date, description, debit, credit),
+    )
+    db.commit()
+    return jsonify({"ok": True})
 
 
 @bp.route("/<int:client_id>/delete", methods=["POST"])

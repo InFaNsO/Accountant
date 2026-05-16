@@ -1,4 +1,5 @@
 import os
+from datetime import date
 from flask import Flask
 from .database import init_db
 
@@ -35,6 +36,10 @@ def create_app():
 
     app.jinja_env.filters["inr"]       = _format_inr
     app.jinja_env.filters["enumerate"] = enumerate
+
+    @app.context_processor
+    def inject_today():
+        return {"today": date.today().isoformat()}
 
     with app.app_context():
         init_db(app)

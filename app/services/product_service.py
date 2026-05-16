@@ -76,6 +76,7 @@ def get_product(product_id):
 
 def create_product(data):
     db = get_db()
+    opening_qty = _to_float(data.get("stock_qty"))
     cur = db.execute(
         """INSERT INTO products
                (category_id, name, sku, description, unit_price, tax_rate,
@@ -86,13 +87,19 @@ def create_product(data):
             data["name"], data.get("sku"), data.get("description"),
             _to_float(data.get("unit_price")),
             _to_float(data.get("tax_rate"), 18.0),
-            1,  # always track inventory
-            _to_float(data.get("stock_qty")),
+            1,
+            opening_qty,
             _to_float(data.get("min_quantity")),
         ),
     )
+    product_id = cur.lastrowid
+    if opening_qty > 0:
+        db.execute(
+            "INSERT INTO stock_movements (product_id, sub_product_id, movement_type, quantity, notes) VALUES (?,?,?,?,?)",
+            (product_id, None, "opening", opening_qty, "Opening stock"),
+        )
     db.commit()
-    return cur.lastrowid
+    return product_id
 
 
 def update_product(product_id, data):
@@ -152,6 +159,7 @@ def create_sub_product(data):
     use_parent = 1 if data.get("use_parent_price") else 0
     parent = get_product(data["product_id"])
     parent_tax = _to_float(parent["tax_rate"], 18.0) if parent else 18.0
+    opening_qty = _to_float(data.get("stock_qty"))
     cur = db.execute(
         """INSERT INTO sub_products
                (product_id, name, sku, description, use_parent_price, unit_price,
@@ -162,12 +170,18 @@ def create_sub_product(data):
             use_parent,
             _to_float(data.get("unit_price")),
             parent_tax,
-            _to_float(data.get("stock_qty")),
+            opening_qty,
             _to_float(data.get("min_quantity")),
         ),
     )
+    sub_id = cur.lastrowid
+    if opening_qty > 0:
+        db.execute(
+            "INSERT INTO stock_movements (product_id, sub_product_id, movement_type, quantity, notes) VALUES (?,?,?,?,?)",
+            (data["product_id"], sub_id, "opening", opening_qty, "Opening stock"),
+        )
     db.commit()
-    return cur.lastrowid
+    return sub_id
 
 
 def update_sub_product(sub_id, data):
@@ -386,7 +400,8 @@ def get_stock_alerts():
                   m.expected_arrival, m.quantity AS dispatch_qty
            FROM products p
            LEFT JOIN categories c ON p.category_id=c.id
-           JOIN stock_movements m ON m.product_id=p.id AND m.sub_product_id IS NULL AND m.movement_type='dispatch'
+           JOIN stock_movements m ON m.product_id=p.id AND m.sub_product_id IS NULL
+                                 AND m.movement_type IN ('dispatch', 'transit_dispatch')
            WHERE p.in_transit_qty>0
            GROUP BY p.id ORDER BY m.expected_arrival ASC"""
     ).fetchall()
@@ -395,7 +410,8 @@ def get_stock_alerts():
                   m.expected_arrival, m.quantity AS dispatch_qty
            FROM sub_products s
            JOIN products p ON s.product_id=p.id
-           JOIN stock_movements m ON m.sub_product_id=s.id AND m.movement_type='dispatch'
+           JOIN stock_movements m ON m.sub_product_id=s.id
+                                 AND m.movement_type IN ('dispatch', 'transit_dispatch')
            WHERE s.in_transit_qty>0
            GROUP BY s.id ORDER BY m.expected_arrival ASC"""
     ).fetchall()
