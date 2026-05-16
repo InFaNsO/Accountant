@@ -1,6 +1,8 @@
 import re
 from flask import Blueprint, render_template, request, redirect, url_for, flash
+from flask_login import login_required
 from ..services import invoice_service, client_service, product_service
+from ..services.auth_service import permission_required
 
 bp = Blueprint("invoices", __name__, url_prefix="/invoices")
 
@@ -63,12 +65,16 @@ def _parse_items(form):
 
 
 @bp.route("/")
+@login_required
+@permission_required("invoices", "view")
 def list_invoices():
     invoices = invoice_service.get_all_invoices()
     return render_template("invoices/list.html", invoices=invoices)
 
 
 @bp.route("/new", methods=["GET", "POST"])
+@login_required
+@permission_required("invoices", "create")
 def new_invoice():
     clients  = client_service.get_all_clients()
     products = _build_product_choices()
@@ -88,6 +94,8 @@ def new_invoice():
 
 
 @bp.route("/<int:invoice_id>")
+@login_required
+@permission_required("invoices", "view")
 def detail(invoice_id):
     invoice = invoice_service.get_invoice(invoice_id)
     if not invoice:
@@ -99,6 +107,8 @@ def detail(invoice_id):
 
 
 @bp.route("/<int:invoice_id>/edit", methods=["GET", "POST"])
+@login_required
+@permission_required("invoices", "edit")
 def edit_invoice(invoice_id):
     invoice = invoice_service.get_invoice(invoice_id)
     if not invoice:
@@ -125,6 +135,8 @@ def edit_invoice(invoice_id):
 
 
 @bp.route("/<int:invoice_id>/status", methods=["POST"])
+@login_required
+@permission_required("invoices", "edit")
 def update_status(invoice_id):
     status = request.form.get("status")
     if status in ("issued", "paid", "cancelled", "partial"):
@@ -134,6 +146,8 @@ def update_status(invoice_id):
 
 
 @bp.route("/<int:invoice_id>/delete", methods=["POST"])
+@login_required
+@permission_required("invoices", "delete")
 def delete_invoice(invoice_id):
     invoice_service.delete_invoice(invoice_id)
     flash("Invoice deleted.", "success")

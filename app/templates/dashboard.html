@@ -10,7 +10,10 @@
 
 {% block content %}
 <!-- Stat Cards -->
+{% set show_any_stat = 'stat_revenue' in dash_sections or 'stat_outstanding' in dash_sections or 'stat_clients' in dash_sections or 'stat_overdue' in dash_sections %}
+{% if show_any_stat %}
 <div class="stats-grid">
+  {% if 'stat_revenue' in dash_sections %}
   <div class="stat-card">
     <div class="stat-icon stat-icon-indigo" style="float:right">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
@@ -19,7 +22,9 @@
     <div class="stat-value">{{ stats.total_revenue|inr }}</div>
     <div class="stat-sub">All time collected</div>
   </div>
+  {% endif %}
 
+  {% if 'stat_outstanding' in dash_sections %}
   <div class="stat-card">
     <div class="stat-icon stat-icon-amber" style="float:right">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
@@ -28,7 +33,9 @@
     <div class="stat-value">{{ stats.outstanding|inr }}</div>
     <div class="stat-sub">Pending collection</div>
   </div>
+  {% endif %}
 
+  {% if 'stat_clients' in dash_sections %}
   <div class="stat-card">
     <div class="stat-icon stat-icon-green" style="float:right">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
@@ -37,7 +44,9 @@
     <div class="stat-value">{{ stats.total_clients }}</div>
     <div class="stat-sub">Active clients</div>
   </div>
+  {% endif %}
 
+  {% if 'stat_overdue' in dash_sections %}
   <div class="stat-card">
     <div class="stat-icon stat-icon-blue" style="float:right">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
@@ -46,11 +55,16 @@
     <div class="stat-value">{{ stats.overdue_count }}</div>
     <div class="stat-sub">Invoices past due date</div>
   </div>
+  {% endif %}
 </div>
+{% endif %}
 
-<!-- Main Grid -->
-<div class="dashboard-grid">
-  <!-- Revenue Chart -->
+<!-- Main Grid: Revenue Chart + Recent Invoices -->
+{% set show_chart = 'revenue_chart' in dash_sections %}
+{% set show_invoices = 'recent_invoices' in dash_sections %}
+{% if show_chart or show_invoices %}
+<div class="dashboard-grid" style="{% if not (show_chart and show_invoices) %}grid-template-columns:1fr{% endif %}">
+  {% if show_chart %}
   <div class="card">
     <div class="card-header">
       <span class="card-title">Revenue — Last 12 Months</span>
@@ -61,8 +75,9 @@
       </div>
     </div>
   </div>
+  {% endif %}
 
-  <!-- Recent Invoices -->
+  {% if show_invoices %}
   <div class="card">
     <div class="card-header">
       <span class="card-title">Recent Invoices</span>
@@ -91,18 +106,16 @@
       </div>
     {% endif %}
   </div>
+  {% endif %}
 </div>
+{% endif %}
 
-<!-- Stock Alerts Row -->
-{% set low = alerts.low_stock %}
-{% set prod = alerts.in_production %}
-{% set transit = alerts.in_transit %}
-
-{% if pos_due_soon %}
+<!-- Production Orders Due Soon -->
+{% if 'production_due' in dash_sections and pos_due_soon %}
 <div class="card" style="margin-top:18px">
   <div class="card-header" style="border-left:3px solid var(--warning);padding-left:17px">
-    <span class="card-title" style="color:var(--warning)">POs Due Soon ({{ pos_due_soon|length }})</span>
-    <a href="{{ url_for('purchases.list_purchases') }}" class="btn btn-ghost btn-sm">View all</a>
+    <span class="card-title" style="color:var(--warning)">Production Orders Due Soon ({{ pos_due_soon|length }})</span>
+    <a href="{{ url_for('production.list_production') }}" class="btn btn-ghost btn-sm">View all</a>
   </div>
   <div class="table-wrap">
     <table>
@@ -120,7 +133,7 @@
         {% for po in pos_due_soon %}
         <tr>
           <td class="fw-700">
-            <a href="{{ url_for('purchases.detail', po_id=po.id) }}" style="color:var(--accent);text-decoration:none">{{ po.name }}</a>
+            <a href="{{ url_for('production.detail', po_id=po.id) }}" style="color:var(--accent);text-decoration:none">{{ po.name }}</a>
           </td>
           <td class="muted">{{ po.supplier_name or '—' }}</td>
           <td>
@@ -134,7 +147,7 @@
             {% else %}—{% endif %}
           </td>
           <td style="text-align:right">
-            <a href="{{ url_for('purchases.detail', po_id=po.id) }}" class="btn btn-secondary btn-sm">View</a>
+            <a href="{{ url_for('production.detail', po_id=po.id) }}" class="btn btn-secondary btn-sm">View</a>
           </td>
         </tr>
         {% endfor %}
@@ -144,10 +157,19 @@
 </div>
 {% endif %}
 
-{% if low or prod or transit %}
-<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:18px;margin-top:18px">
+<!-- Stock alert cards -->
+{% set low = alerts.low_stock %}
+{% set prod = alerts.in_production %}
+{% set transit = alerts.in_transit %}
+{% set show_low     = 'low_stock'     in dash_sections and low %}
+{% set show_prod    = 'in_production' in dash_sections and prod %}
+{% set show_transit = 'in_transit'    in dash_sections and transit %}
 
-  <!-- Low Stock -->
+{% if show_low or show_prod or show_transit %}
+{% set col_count = (1 if show_low else 0) + (1 if show_prod else 0) + (1 if show_transit else 0) %}
+<div style="display:grid;grid-template-columns:repeat({{ col_count }},1fr);gap:18px;margin-top:18px">
+
+  {% if show_low %}
   <div class="card">
     <div class="card-header" style="border-left:3px solid var(--danger);padding-left:17px">
       <span class="card-title" style="color:var(--danger)">
@@ -155,7 +177,6 @@
       </span>
       <a href="{{ url_for('products.list_products') }}" class="btn btn-ghost btn-sm">View all</a>
     </div>
-    {% if low %}
     <ul style="list-style:none">
       {% for item in low %}
       <li style="padding:10px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
@@ -174,19 +195,16 @@
       </li>
       {% endfor %}
     </ul>
-    {% else %}
-    <div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px">All stock levels healthy</div>
-    {% endif %}
   </div>
+  {% endif %}
 
-  <!-- In Production -->
+  {% if show_prod %}
   <div class="card">
     <div class="card-header" style="border-left:3px solid var(--success);padding-left:17px">
       <span class="card-title" style="color:var(--success)">
         In Production{% if prod %} ({{ prod|length }}){% endif %}
       </span>
     </div>
-    {% if prod %}
     <ul style="list-style:none">
       {% for item in prod %}
       <li style="padding:10px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
@@ -205,19 +223,16 @@
       </li>
       {% endfor %}
     </ul>
-    {% else %}
-    <div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px">Nothing in production</div>
-    {% endif %}
   </div>
+  {% endif %}
 
-  <!-- In Transit -->
+  {% if show_transit %}
   <div class="card">
     <div class="card-header" style="border-left:3px solid var(--warning);padding-left:17px">
       <span class="card-title" style="color:var(--warning)">
         In Transit{% if transit %} ({{ transit|length }}){% endif %}
       </span>
     </div>
-    {% if transit %}
     <ul style="list-style:none">
       {% for item in transit %}
       <li style="padding:10px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
@@ -236,17 +251,27 @@
       </li>
       {% endfor %}
     </ul>
-    {% else %}
-    <div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px">Nothing in transit</div>
-    {% endif %}
   </div>
+  {% endif %}
 
+</div>
+{% endif %}
+
+<!-- Empty state if nothing is visible -->
+{% if not show_any_stat and not show_chart and not show_invoices
+   and ('production_due' not in dash_sections or not pos_due_soon)
+   and not show_low and not show_prod and not show_transit %}
+<div class="card" style="max-width:480px;margin:60px auto;text-align:center;padding:48px 40px">
+  <div style="font-size:48px;margin-bottom:16px">📊</div>
+  <h2 style="font-size:18px;font-weight:700;margin-bottom:10px">No dashboard sections enabled</h2>
+  <p style="color:var(--text-muted);font-size:14px">Contact your administrator to enable dashboard sections for your account.</p>
 </div>
 {% endif %}
 
 {% endblock %}
 
 {% block scripts %}
+{% if 'revenue_chart' in dash_sections %}
 <script>
 const monthlyData = {{ stats.monthly_revenue | tojson }};
 const labels = monthlyData.map(d => {
@@ -288,4 +313,5 @@ if (ctx && typeof Chart !== 'undefined') {
   ctx.parentElement.innerHTML = '<p style="color:var(--text-muted);font-size:13px;text-align:center;padding-top:80px">No revenue data yet.</p>';
 }
 </script>
+{% endif %}
 {% endblock %}

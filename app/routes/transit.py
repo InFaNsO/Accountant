@@ -1,5 +1,7 @@
 from flask import Blueprint, render_template, request, redirect, url_for, flash
+from flask_login import login_required
 from ..services import transit_service, supplier_service, product_service
+from ..services.auth_service import permission_required
 
 bp = Blueprint("transit", __name__, url_prefix="/transit")
 
@@ -37,12 +39,16 @@ def _parse_items(form):
 
 
 @bp.route("/")
+@login_required
+@permission_required("transit", "view")
 def list_transit():
     dispatches = transit_service.get_all_dispatches()
     return render_template("transit/list.html", dispatches=dispatches)
 
 
 @bp.route("/new", methods=["GET", "POST"])
+@login_required
+@permission_required("transit", "create")
 def new_dispatch():
     suppliers = supplier_service.get_all_suppliers()
     products  = _build_product_choices()
@@ -88,6 +94,8 @@ def new_dispatch():
 
 
 @bp.route("/<int:dispatch_id>")
+@login_required
+@permission_required("transit", "view")
 def detail(dispatch_id):
     dispatch = transit_service.get_dispatch(dispatch_id)
     if not dispatch:
@@ -98,6 +106,8 @@ def detail(dispatch_id):
 
 
 @bp.route("/<int:dispatch_id>/receive", methods=["POST"])
+@login_required
+@permission_required("transit", "edit")
 def receive(dispatch_id):
     received = {}
     for key, val in request.form.items():
@@ -118,6 +128,8 @@ def receive(dispatch_id):
 
 
 @bp.route("/<int:dispatch_id>/delete", methods=["POST"])
+@login_required
+@permission_required("transit", "delete")
 def delete_dispatch(dispatch_id):
     transit_service.delete_dispatch(dispatch_id)
     flash("Dispatch deleted and quantities reversed.", "success")

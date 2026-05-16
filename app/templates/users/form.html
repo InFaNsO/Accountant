@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit User' if action == 'edit' else 'New User' }}{% endblock %}
+{% block page_title %}{{ 'Edit User' if action == 'edit' else 'New User' }}{% endblock %}
+{% block topbar_actions %}
+  <a href="{{ url_for('users.list_users') }}" class="btn btn-secondary">Cancel</a>
+{% endblock %}
+
+{% block content %}
+<form method="post">
+  <!-- Basic info -->
+  <div class="card" style="margin-bottom:18px">
+    <div class="card-header"><span class="card-title">Account Details</span></div>
+    <div class="card-body">
+      <div class="form-grid form-grid-3">
+        <div class="form-group">
+          <label for="name">Name *</label>
+          <input type="text" id="name" name="name" value="{{ user.get('name','') }}" required>
+        </div>
+        <div class="form-group">
+          <label for="email">Email *</label>
+          <input type="email" id="email" name="email" value="{{ user.get('email','') }}" required
+                 {{ 'readonly' if user.get('role') == 'god' }}>
+        </div>
+        <div class="form-group">
+          <label for="password">Password {{ '(leave blank to keep)' if action == 'edit' else '*' }}</label>
+          <input type="password" id="password" name="password"
+                 {{ 'required' if action == 'new' }}
+                 placeholder="{{ '••••••••' if action == 'edit' else 'Set password' }}">
+        </div>
+        {% if user.get('role') != 'god' %}
+        <div class="form-group">
+          <label for="role">Role</label>
+          <select id="role" name="role">
+            <option value="user" {{ 'selected' if user.get('role','user') == 'user' }}>User</option>
+          </select>
+        </div>
+        <div class="form-group" style="display:flex;align-items:center;gap:10px;padding-top:24px">
+          <input type="checkbox" id="is_active" name="is_active" value="1"
+                 style="width:auto" {{ 'checked' if user.get('is_active', 1) }}>
+          <label for="is_active" style="margin:0;font-size:14px">Active account</label>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Permissions grid -->
+  {% if user.get('role') != 'god' %}
+  <div class="card" style="margin-bottom:18px">
+    <div class="card-header">
+      <span class="card-title">Module Permissions</span>
+      <div style="display:flex;gap:8px">
+        <button type="button" class="btn btn-secondary btn-sm" onclick="setAll(true)">Grant All</button>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="setAll(false)">Revoke All</button>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:160px">Module</th>
+            <th style="text-align:center;width:80px">View</th>
+            <th style="text-align:center;width:80px">Create</th>
+            <th style="text-align:center;width:80px">Edit</th>
+            <th style="text-align:center;width:80px">Delete</th>
+            <th style="text-align:center;width:100px">Financials</th>
+            <th style="text-align:center;width:90px">All</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for module in modules %}
+          {% set mp = perms.get(module, {}) %}
+          <tr>
+            <td class="fw-700" style="text-transform:capitalize">{{ module }}</td>
+            {% for action in ['view','create','edit','delete'] %}
+            <td style="text-align:center">
+              <input type="checkbox" name="perm_{{ module }}_{{ action }}"
+                     class="perm-cb mod-{{ module }}"
+                     value="1" style="width:auto"
+                     {{ 'checked' if mp.get(action) }}>
+            </td>
+            {% endfor %}
+            <td style="text-align:center">
+              {% if module == 'clients' %}
+              <input type="checkbox" name="perm_clients_financials"
+                     class="perm-cb mod-clients" id="perm_clients_financials"
+                     value="1" style="width:auto"
+                     title="Access to balance, ledger and payment status"
+                     {{ 'checked' if mp.get('financials') }}>
+              {% else %}
+              <span style="color:var(--border)">—</span>
+              {% endif %}
+            </td>
+            <td style="text-align:center">
+              <input type="checkbox" class="row-all" data-module="{{ module }}"
+                     style="width:auto" title="Toggle all for {{ module }}"
+                     {{ 'checked' if mp.get('view') and mp.get('create') and mp.get('edit') and mp.get('delete') and (mp.get('financials', True) if module == 'clients' else True) }}>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% else %}
+  <div class="card" style="margin-bottom:18px">
+    <div class="card-body">
+      <p style="color:var(--text-muted);font-size:14px">⚡ The god account has unrestricted access to all modules.</p>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Dashboard sections -->
+  {% if user.get('role') != 'god' %}
+  <div class="card" style="margin-bottom:18px">
+    <div class="card-header">
+      <span class="card-title">Dashboard Sections</span>
+      <div style="display:flex;gap:8px">
+        <button type="button" class="btn btn-secondary btn-sm" onclick="setAllDash(true)">Grant All</button>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="setAllDash(false)">Revoke All</button>
+      </div>
+    </div>
+    <div class="card-body">
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px">
+        {% for section_key, section_label in dash_sections %}
+        <label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-size:13px;padding:9px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);transition:border-color .15s">
+          <input type="checkbox" name="dash_{{ section_key }}" class="dash-cb" value="1"
+                 style="width:auto;flex-shrink:0"
+                 {{ 'checked' if section_key in user_dash_sections }}>
+          {{ section_label }}
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% else %}
+  <div class="card" style="margin-bottom:18px">
+    <div class="card-body">
+      <p style="color:var(--text-muted);font-size:14px">⚡ The god account sees all dashboard sections.</p>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">{{ 'Save Changes' if action == 'edit' else 'Create User' }}</button>
+    <a href="{{ url_for('users.list_users') }}" class="btn btn-secondary">Cancel</a>
+  </div>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Row-level "toggle all" checkboxes
+document.querySelectorAll('.row-all').forEach(rowCb => {
+  const module = rowCb.dataset.module;
+  const cbs = document.querySelectorAll(`.mod-${module}`);
+
+  rowCb.addEventListener('change', () => {
+    cbs.forEach(cb => cb.checked = rowCb.checked);
+  });
+
+  cbs.forEach(cb => cb.addEventListener('change', () => {
+    rowCb.checked = [...cbs].every(c => c.checked);
+  }));
+});
+
+function setAll(val) {
+  document.querySelectorAll('.perm-cb, .row-all').forEach(cb => cb.checked = val);
+}
+
+// Highlight financials cell on hover
+const finCell = document.getElementById('perm_clients_financials');
+if (finCell) {
+  finCell.closest('td').title = 'Balance, ledger & payment status visibility';
+}
+
+function setAllDash(val) {
+  document.querySelectorAll('.dash-cb').forEach(cb => cb.checked = val);
+}
+</script>
+{% endblock %}

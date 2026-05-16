@@ -1,7 +1,13 @@
 import os
 from datetime import date
 from flask import Flask
+from flask_login import LoginManager
 from .database import init_db
+
+login_manager = LoginManager()
+login_manager.login_view      = "auth.login"
+login_manager.login_message   = "Please sign in to continue."
+login_manager.login_message_category = "error"
 
 
 def _format_inr(value):
@@ -16,7 +22,7 @@ def _format_inr(value):
         formatted = integer_part
     else:
         last_three = integer_part[-3:]
-        remaining = integer_part[:-3]
+        remaining  = integer_part[:-3]
         groups = []
         while remaining:
             groups.append(remaining[-2:])
@@ -41,25 +47,50 @@ def create_app():
     def inject_today():
         return {"today": date.today().isoformat()}
 
+    # ── Flask-Login ───────────────────────────────────────────
+    login_manager.init_app(app)
+
+    @login_manager.user_loader
+    def load_user(user_id):
+        from .services.auth_service import load_user as _load
+        return _load(user_id)
+
     with app.app_context():
         init_db(app)
 
-        from .routes.dashboard import bp as dashboard_bp
-        from .routes.clients import bp as clients_bp
-        from .routes.products import bp as products_bp
-        from .routes.invoices import bp as invoices_bp
-        from .routes.payments import bp as payments_bp
-        from .routes.suppliers import bp as suppliers_bp
-        from .routes.purchases import bp as purchases_bp
-        from .routes.transit import bp as transit_bp
+        # Seed god account on first run
+        from .services.auth_service import ensure_god_account
+        ensure_god_account(
+            email    = "bhavilg101@gmail.com",
+            password = "Mymomisgr8",
+            name     = "God",
+        )
 
+        from .routes.auth       import bp as auth_bp
+        from .routes.users      import bp as users_bp
+        from .routes.dashboard  import bp as dashboard_bp
+        from .routes.clients    import bp as clients_bp
+        from .routes.products   import bp as products_bp
+        from .routes.invoices   import bp as invoices_bp
+        from .routes.payments   import bp as payments_bp
+        from .routes.suppliers  import bp as suppliers_bp
+        from .routes.production import bp as production_bp
+        from .routes.transit    import bp as transit_bp
+
+        app.register_blueprint(auth_bp)
+        app.register_blueprint(users_bp)
         app.register_blueprint(dashboard_bp)
         app.register_blueprint(clients_bp)
         app.register_blueprint(products_bp)
         app.register_blueprint(invoices_bp)
         app.register_blueprint(payments_bp)
         app.register_blueprint(suppliers_bp)
-        app.register_blueprint(purchases_bp)
+        app.register_blueprint(production_bp)
         app.register_blueprint(transit_bp)
+
+    @app.errorhandler(403)
+    def forbidden(e):
+        from flask import render_template as rt
+        return rt("403.html"), 403
 
     return app

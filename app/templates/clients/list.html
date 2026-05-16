@@ -20,30 +20,33 @@
       <thead>
         <tr>
           <th>Name / Company</th>
+          {% if can_financials %}
           <th style="text-align:right">Balance</th>
           <th style="text-align:right">Purchases (60d)</th>
           <th style="text-align:right">Payments (60d)</th>
+          {% endif %}
           <th></th>
         </tr>
       </thead>
       <tbody>
         {% for c in clients %}
-        {% set ob = (c.opening_balance or 0) %}
-        {% set ob_paid = c.ob_paid or 0 %}
-        {% if ob >= 0 %}
-          {% set ob_remaining = [ob - ob_paid, 0]|max %}
-          {% set ob_excess = [ob_paid - ob, 0]|max %}
-        {% else %}
-          {% set ob_remaining = 0 %}
-          {% set ob_excess = ob_paid + (ob * -1) %}
-        {% endif %}
-        {% set balance = -(ob_remaining + (c.invoice_balance or 0)) + ob_excess %}
         <tr>
           <td>
             <a href="{{ url_for('clients.detail', client_id=c.id) }}"
                style="font-weight:600;color:var(--accent);text-decoration:none;">{{ c.name }}</a>
             {% if c.company %}<div style="font-size:12px;color:var(--text-muted)">{{ c.company }}</div>{% endif %}
           </td>
+          {% if can_financials %}
+          {% set ob = (c.opening_balance or 0) %}
+          {% set ob_paid = c.ob_paid or 0 %}
+          {% if ob >= 0 %}
+            {% set ob_remaining = [ob - ob_paid, 0]|max %}
+            {% set ob_excess = [ob_paid - ob, 0]|max %}
+          {% else %}
+            {% set ob_remaining = 0 %}
+            {% set ob_excess = ob_paid + (ob * -1) %}
+          {% endif %}
+          {% set balance = -(ob_remaining + (c.invoice_balance or 0)) + ob_excess %}
           <td style="text-align:right">
             <span onclick="showClientLedger({{ c.id }}, '{{ c.name|replace("'", "\\'") }}')"
                   style="cursor:pointer;text-decoration:underline dotted"
@@ -66,6 +69,7 @@
           <td style="text-align:right;font-weight:600;color:var(--success)">
             {{ c.payments_60d|inr }}
           </td>
+          {% endif %}
           <td style="text-align:right">
             <a href="{{ url_for('clients.detail', client_id=c.id) }}" class="btn btn-secondary btn-sm">View</a>
             <a href="{{ url_for('clients.edit_client', client_id=c.id) }}" class="btn btn-secondary btn-sm">Edit</a>
