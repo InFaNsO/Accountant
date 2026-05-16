@@ -12,7 +12,8 @@ bp = Blueprint("clients", __name__, url_prefix="/clients")
 @permission_required("clients", "view")
 def list_clients():
     clients = client_service.get_all_clients()
-    return render_template("clients/list.html", clients=clients)
+    can_financials = current_user.has_permission("clients", "financials")
+    return render_template("clients/list.html", clients=clients, can_financials=can_financials)
 
 
 @bp.route("/new", methods=["GET", "POST"])
