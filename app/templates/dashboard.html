@@ -3,58 +3,6 @@
 {% block page_title %}Dashboard{% endblock %}
 
 {% block topbar_actions %}
-<!-- ── Time-window picker ──────────────────────────────────────── -->
-<form id="dashWinForm" method="get" action="{{ url_for('dashboard.index') }}"
-      style="display:flex;align-items:center;gap:8px">
-
-  <div style="display:flex;align-items:center;gap:6px;background:var(--bg-alt);
-              border:1px solid var(--border);border-radius:var(--radius);padding:5px 10px">
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-         stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-         style="color:var(--text-muted);flex-shrink:0">
-      <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
-      <line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/>
-      <line x1="3" y1="10" x2="21" y2="10"/>
-    </svg>
-    <select name="window" id="dashWinSel" onchange="dashWinChange(this)"
-            style="background:transparent;border:none;outline:none;font-size:13px;
-                   cursor:pointer;color:var(--text);font-weight:500;max-width:160px">
-      {% for val, lbl in [
-          ('today','Today'), ('yesterday','Yesterday'),
-          ('this_week','This Week'), ('last_week','Last Week'),
-          ('last_15','Last 15 Days'), ('this_month','This Month'),
-          ('last_2_months','Last 2 Months'), ('60_days','60 Days'),
-          ('90_days','90 Days'), ('this_year','This Year'),
-          ('current_fy','Current FY (Apr–Mar)'), ('last_fy','Last FY (Apr–Mar)'),
-          ('all','All Time'), ('custom','Custom…')
-      ] %}
-      <option value="{{ val }}" {% if window == val %}selected{% endif %}>{{ lbl }}</option>
-      {% endfor %}
-    </select>
-  </div>
-
-  <!-- Custom date inputs — shown only when Custom is selected -->
-  <div id="dashCustomRange"
-       style="display:{% if window == 'custom' %}flex{% else %}none{% endif %};
-              align-items:center;gap:6px">
-    <input type="date" name="from" value="{{ custom_from }}"
-           style="font-size:13px;padding:4px 8px;border:1px solid var(--border);
-                  border-radius:var(--radius);background:var(--bg);color:var(--text)">
-    <span style="color:var(--text-muted)">—</span>
-    <input type="date" name="to" value="{{ custom_to }}"
-           style="font-size:13px;padding:4px 8px;border:1px solid var(--border);
-                  border-radius:var(--radius);background:var(--bg);color:var(--text)">
-    <button type="submit" class="btn btn-primary btn-sm">Apply</button>
-  </div>
-
-  <!-- Resolved date range label (shown for all non-custom presets) -->
-  {% if date_from and date_to and window != 'custom' %}
-  <span style="font-size:11px;color:var(--text-muted);white-space:nowrap">
-    {{ date_from }} — {{ date_to }}
-  </span>
-  {% endif %}
-</form>
-
 <a href="{{ url_for('invoices.new_invoice') }}" class="btn btn-primary">
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
        stroke-linecap="round" stroke-linejoin="round">
@@ -65,6 +13,91 @@
 {% endblock %}
 
 {% block content %}
+<!-- ── Time-window filter bar ──────────────────────────────────── -->
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+            padding:12px 18px;margin-bottom:20px;box-shadow:var(--shadow-sm)">
+  <form id="dashWinForm" method="get" action="{{ url_for('dashboard.index') }}">
+    <!-- Pill buttons row -->
+    <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+           style="color:var(--text-muted);flex-shrink:0;margin-right:2px">
+        <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+        <line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/>
+        <line x1="3" y1="10" x2="21" y2="10"/>
+      </svg>
+      {% for val, lbl in [
+          ('today','Today'), ('yesterday','Yesterday'),
+          ('this_week','This Week'), ('last_week','Last Week'),
+          ('last_15','Last 15 Days'), ('this_month','This Month'),
+          ('last_2_months','Last 2 Months'), ('60_days','60 Days'),
+          ('90_days','90 Days'), ('this_year','This Year'),
+          ('current_fy','Current FY'), ('last_fy','Last FY'),
+          ('all','All Time'), ('custom','Custom…')
+      ] %}
+      <button type="button"
+              class="dw-btn{% if window == val %} dw-active{% endif %}"
+              data-w="{{ val }}"
+              onclick="dashWinClick('{{ val }}')">{{ lbl }}</button>
+      {% endfor %}
+
+      <!-- Hidden input carries the selected window value on submit -->
+      <input type="hidden" name="window" id="dashWinVal" value="{{ window }}">
+    </div>
+
+    <!-- Custom date pickers — shown only when Custom is active -->
+    <div id="dashCustomRange"
+         style="display:{% if window == 'custom' %}flex{% else %}none{% endif %};
+                margin-top:10px;gap:8px;align-items:center;flex-wrap:wrap">
+      <span style="font-size:12px;color:var(--text-muted);font-weight:600">From</span>
+      <input type="date" name="from" id="dashFrom" value="{{ custom_from }}"
+             style="font-size:13px;padding:5px 10px;border:1px solid var(--border);
+                    border-radius:var(--radius-sm);background:var(--bg);color:var(--text)">
+      <span style="color:var(--text-muted)">—</span>
+      <span style="font-size:12px;color:var(--text-muted);font-weight:600">To</span>
+      <input type="date" name="to" id="dashTo" value="{{ custom_to }}"
+             style="font-size:13px;padding:5px 10px;border:1px solid var(--border);
+                    border-radius:var(--radius-sm);background:var(--bg);color:var(--text)">
+      <button type="submit" class="btn btn-primary btn-sm">Apply</button>
+    </div>
+
+    <!-- Resolved date range label -->
+    {% if date_from and date_to %}
+    <div style="margin-top:6px;font-size:11px;color:var(--text-muted)">
+      Showing: <strong>{{ window_label }}</strong>
+      &nbsp;·&nbsp; {{ date_from }} — {{ date_to }}
+    </div>
+    {% elif window == 'all' %}
+    <div style="margin-top:6px;font-size:11px;color:var(--text-muted)">
+      Showing: <strong>All Time</strong>
+    </div>
+    {% endif %}
+  </form>
+</div>
+
+<style>
+.dw-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .15s, color .15s, border-color .15s;
+  line-height: 1.4;
+}
+.dw-btn:hover { background: var(--bg); color: var(--text-primary); border-color: var(--accent); }
+.dw-btn.dw-active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+  font-weight: 600;
+}
+</style>
+
 <!-- ── Stat Cards ───────────────────────────────────────────────── -->
 {% set show_any_stat = 'stat_revenue' in dash_sections or 'stat_outstanding' in dash_sections
    or 'stat_clients' in dash_sections or 'stat_overdue' in dash_sections %}
@@ -352,14 +385,18 @@
 {% endblock %}
 
 {% block scripts %}
-<!-- Auto-submit on preset change, show custom pickers only for Custom -->
+<!-- Pill-button handler — updates hidden input, toggles active, auto-submits for presets -->
 <script>
-function dashWinChange(sel) {
-  const wrap = document.getElementById('dashCustomRange');
-  if (sel.value === 'custom') {
-    wrap.style.display = 'flex';
+function dashWinClick(w) {
+  document.getElementById('dashWinVal').value = w;
+  document.querySelectorAll('.dw-btn').forEach(b =>
+    b.classList.toggle('dw-active', b.dataset.w === w)
+  );
+  const customWrap = document.getElementById('dashCustomRange');
+  if (w === 'custom') {
+    customWrap.style.display = 'flex';
   } else {
-    wrap.style.display = 'none';
+    customWrap.style.display = 'none';
     document.getElementById('dashWinForm').submit();
   }
 }
