@@ -18,7 +18,8 @@ source venv/bin/activate
 pip install -r requirements.txt --quiet
 
 echo "[deploy] Creating logs directory if missing..."
-mkdir -p logs
+mkdir -p /home/ledger/app/logs
+chown ledger:ledger /home/ledger/app/logs 2>/dev/null || true
 
 echo "[deploy] Restarting service..."
 sudo systemctl restart ledger

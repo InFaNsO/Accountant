@@ -72,8 +72,9 @@ sudo -u $APP_USER $PYTHON -m venv venv
 sudo -u $APP_USER venv/bin/pip install --upgrade pip --quiet
 sudo -u $APP_USER venv/bin/pip install -r requirements.txt --quiet
 
-# Create data directory for SQLite
+# Create data and logs directories
 sudo -u $APP_USER mkdir -p "$APP_DIR/data"
+sudo -u $APP_USER mkdir -p "$APP_DIR/logs"
 
 # ── 6. Environment file ───────────────────────────────────────────────────────
 echo "[6/9] Writing environment config..."
