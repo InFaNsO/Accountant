@@ -50,7 +50,7 @@ def create_app():
         from .routes.invoices import bp as invoices_bp
         from .routes.payments import bp as payments_bp
         from .routes.suppliers import bp as suppliers_bp
-        from .routes.purchases import bp as purchases_bp
+        from .routes.production import bp as production_bp
         from .routes.transit import bp as transit_bp
 
         app.register_blueprint(dashboard_bp)
@@ -59,7 +59,7 @@ def create_app():
         app.register_blueprint(invoices_bp)
         app.register_blueprint(payments_bp)
         app.register_blueprint(suppliers_bp)
-        app.register_blueprint(purchases_bp)
+        app.register_blueprint(production_bp)
         app.register_blueprint(transit_bp)
 
     return app

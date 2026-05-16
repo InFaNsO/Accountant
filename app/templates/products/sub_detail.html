@@ -156,7 +156,9 @@
                 <span class="badge">{{ m.movement_type }}</span>
               {% endif %}
             </td>
-            <td style="text-align:right;font-weight:700;color:var(--success)">+{{ m.quantity }}</td>
+            <td style="text-align:right;font-weight:700;color:{% if m.movement_type in ('sale','warehouse_deduct') %}#ef9a9a{% else %}var(--success){% endif %}">
+              {% if m.movement_type in ('sale','warehouse_deduct') %}-{% else %}+{% endif %}{{ m.quantity }}
+            </td>
             <td class="muted" style="font-size:12px">{{ m.notes or '—' }}</td>
           </tr>
           {% endfor %}

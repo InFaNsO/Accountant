@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Production Orders{% endblock %}
+{% block page_title %}Production Orders{% endblock %}
+{% block topbar_actions %}
+  <a href="{{ url_for('production.new_production') }}" class="btn btn-primary">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    New Production Order
+  </a>
+{% endblock %}
+{% block content %}
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">All Production Orders ({{ orders|length }})</span>
+    <input type="search" placeholder="Search…" style="width:200px" oninput="filterTable(this.value,'poTable')">
+  </div>
+  {% if orders %}
+  <div class="table-wrap">
+    <table id="poTable">
+      <thead>
+        <tr>
+          <th>Order Name</th>
+          <th>Supplier</th>
+          <th>Expected Completion</th>
+          <th style="text-align:center">Items</th>
+          <th>Status</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for po in orders %}
+        {% set days = po.days_remaining if po.days_remaining is defined else none %}
+        <tr>
+          <td class="fw-700">
+            <a href="{{ url_for('production.detail', po_id=po.id) }}" style="color:var(--accent);text-decoration:none">{{ po.name }}</a>
+          </td>
+          <td class="muted">{{ po.supplier_name or '—' }}</td>
+          <td>
+            {% if po.expected_completion %}
+              <span style="font-weight:600">{{ po.expected_completion }}</span>
+            {% else %}—{% endif %}
+          </td>
+          <td style="text-align:center" class="muted">{{ po.item_count }}</td>
+          <td>
+            {% if po.status == 'open' %}
+              <span class="badge badge-sent">Open</span>
+            {% elif po.status == 'closed' %}
+              <span class="badge badge-active">Closed</span>
+            {% else %}
+              <span class="badge badge-inactive">{{ po.status|capitalize }}</span>
+            {% endif %}
+          </td>
+          <td style="text-align:right;white-space:nowrap">
+            <a href="{{ url_for('production.detail', po_id=po.id) }}" class="btn btn-secondary btn-sm">View</a>
+            <form method="post" action="{{ url_for('production.delete_production', po_id=po.id) }}" style="display:inline"
+                  onsubmit="return confirm('Delete {{ po.name }}? This will reverse production quantities.')">
+              <button class="btn btn-danger btn-sm">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <h3>No production orders yet</h3>
+    <p>Create a production order to track production with your suppliers.</p>
+    <a href="{{ url_for('production.new_production') }}" class="btn btn-primary">Create First Order</a>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

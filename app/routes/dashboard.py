@@ -1,7 +1,7 @@
 from flask import Blueprint, render_template
 from ..services.payment_service import get_dashboard_stats
 from ..services.product_service import get_stock_alerts
-from ..services.purchase_service import get_pos_due_soon
+from ..services.production_service import get_pos_due_soon
 
 bp = Blueprint("dashboard", __name__)
 

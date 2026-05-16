@@ -11,6 +11,13 @@
 
 {% block content %}
 {% if groups %}
+<div style="margin-bottom:14px;display:flex;gap:10px;align-items:center">
+  <input type="search" id="productSearch" placeholder="Search products, sub-products or SKU…"
+         oninput="filterProducts(this.value)"
+         style="max-width:360px;width:100%">
+  <span id="productCount" style="font-size:13px;color:var(--text-muted)"></span>
+</div>
+{% endif %}
   {% set ns = namespace(current_cat=None, cat_id=0) %}
   {% for g in groups %}
     {% set p = g.product %}
@@ -39,7 +46,8 @@
     %}
 
     <!-- Product row -->
-    <div style="display:flex;align-items:center;gap:8px;padding:14px 20px;border-bottom:1px solid var(--border)">
+    <div class="product-row" data-search="{{ p.name|lower }} {{ (p.sku or '')|lower }} {{ (p.category_name or '')|lower }}"
+         style="display:flex;align-items:center;gap:8px;padding:14px 20px;border-bottom:1px solid var(--border)">
       {% if subs %}
       <button class="sub-toggle" data-pid="{{ p.id }}" data-cat="{{ ns.cat_id }}"
               onclick="toggleSubs({{ p.id }})"
@@ -86,7 +94,7 @@
       %}
       <div style="display:flex;align-items:center;gap:8px;padding:10px 20px 10px 52px;border-bottom:1px solid var(--border);background:var(--bg-alt)">
         <div style="flex:1;min-width:0">
-          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <div class="sub-search-text" data-search="{{ s.name|lower }} {{ (s.sku or '')|lower }}" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
             <span style="color:var(--text-muted);font-size:12px">↳</span>
             <a href="{{ url_for('products.sub_detail', product_id=p.id, sub_id=s.id) }}"
                style="font-weight:600;font-size:14px;color:var(--text);text-decoration:none"
@@ -151,6 +159,33 @@ function setCatExpand(catId, expand) {
   document.querySelectorAll(`.sub-toggle[data-cat="${catId}"]`).forEach(btn => {
     btn.textContent = expand ? '▼' : '▶';
   });
+}
+
+function filterProducts(q) {
+  q = q.trim().toLowerCase();
+  let visible = 0;
+
+  document.querySelectorAll('.product-row').forEach(row => {
+    const productText = row.dataset.search || '';
+    // Check if any sub-products match the query
+    const subGroup = row.nextElementSibling?.classList.contains('sub-group')
+      ? row.nextElementSibling : null;
+    let subMatch = false;
+    if (subGroup) {
+      subGroup.querySelectorAll('[data-search]').forEach(sub => {
+        const match = !q || sub.dataset.search.includes(q);
+        sub.closest('div[style*="padding:10px"]').style.display = match ? '' : 'none';
+        if (match) subMatch = true;
+      });
+    }
+    const productMatch = !q || productText.includes(q) || subMatch;
+    row.style.display = productMatch ? '' : 'none';
+    if (subGroup) subGroup.style.display = productMatch ? '' : 'none';
+    if (productMatch) visible++;
+  });
+
+  const countEl = document.getElementById('productCount');
+  if (countEl) countEl.textContent = q ? `${visible} result${visible !== 1 ? 's' : ''}` : '';
 }
 
 // Hide category expand/collapse buttons if the category has no sub-groups

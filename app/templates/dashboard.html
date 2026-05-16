@@ -101,8 +101,8 @@
 {% if pos_due_soon %}
 <div class="card" style="margin-top:18px">
   <div class="card-header" style="border-left:3px solid var(--warning);padding-left:17px">
-    <span class="card-title" style="color:var(--warning)">POs Due Soon ({{ pos_due_soon|length }})</span>
-    <a href="{{ url_for('purchases.list_purchases') }}" class="btn btn-ghost btn-sm">View all</a>
+    <span class="card-title" style="color:var(--warning)">Production Orders Due Soon ({{ pos_due_soon|length }})</span>
+    <a href="{{ url_for('production.list_production') }}" class="btn btn-ghost btn-sm">View all</a>
   </div>
   <div class="table-wrap">
     <table>
@@ -120,7 +120,7 @@
         {% for po in pos_due_soon %}
         <tr>
           <td class="fw-700">
-            <a href="{{ url_for('purchases.detail', po_id=po.id) }}" style="color:var(--accent);text-decoration:none">{{ po.name }}</a>
+            <a href="{{ url_for('production.detail', po_id=po.id) }}" style="color:var(--accent);text-decoration:none">{{ po.name }}</a>
           </td>
           <td class="muted">{{ po.supplier_name or '—' }}</td>
           <td>
@@ -134,7 +134,7 @@
             {% else %}—{% endif %}
           </td>
           <td style="text-align:right">
-            <a href="{{ url_for('purchases.detail', po_id=po.id) }}" class="btn btn-secondary btn-sm">View</a>
+            <a href="{{ url_for('production.detail', po_id=po.id) }}" class="btn btn-secondary btn-sm">View</a>
           </td>
         </tr>
         {% endfor %}
