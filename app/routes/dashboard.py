@@ -1,4 +1,5 @@
 from flask import Blueprint, render_template
+from flask_login import login_required
 from ..services.payment_service import get_dashboard_stats
 from ..services.product_service import get_stock_alerts
 from ..services.production_service import get_pos_due_soon
@@ -7,6 +8,7 @@ bp = Blueprint("dashboard", __name__)
 
 
 @bp.route("/")
+@login_required
 def index():
     stats        = get_dashboard_stats()
     alerts       = get_stock_alerts()

@@ -305,6 +305,31 @@ def _create_schema(db):
         );
     """)
 
+    # ── Users & permissions ───────────────────────────────────
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS users (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            name          TEXT NOT NULL,
+            email         TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            role          TEXT DEFAULT 'user',
+            is_active     INTEGER DEFAULT 1,
+            created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS user_permissions (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id    INTEGER NOT NULL,
+            module     TEXT NOT NULL,
+            can_view   INTEGER DEFAULT 0,
+            can_create INTEGER DEFAULT 0,
+            can_edit   INTEGER DEFAULT 0,
+            can_delete INTEGER DEFAULT 0,
+            UNIQUE(user_id, module),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+    """)
+
     # ── Column-level migrations for existing installs ─────────
     _add_column(db, "clients",          "opening_balance", "REAL DEFAULT 0")
     _add_column(db, "products",         "category_id",     "INTEGER")

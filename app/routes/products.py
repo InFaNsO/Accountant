@@ -1,5 +1,7 @@
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
+from flask_login import login_required
 from ..services import product_service
+from ..services.auth_service import permission_required
 
 bp = Blueprint("products", __name__, url_prefix="/products")
 
@@ -7,12 +9,16 @@ bp = Blueprint("products", __name__, url_prefix="/products")
 # ── Categories ────────────────────────────────────────────────────────────────
 
 @bp.route("/categories")
+@login_required
+@permission_required("products", "view")
 def list_categories():
     categories = product_service.get_all_categories()
     return render_template("products/categories.html", categories=categories)
 
 
 @bp.route("/categories/new", methods=["GET", "POST"])
+@login_required
+@permission_required("products", "create")
 def new_category():
     if request.method == "POST":
         data = request.form.to_dict()
@@ -26,6 +32,8 @@ def new_category():
 
 
 @bp.route("/categories/<int:cat_id>/edit", methods=["GET", "POST"])
+@login_required
+@permission_required("products", "edit")
 def edit_category(cat_id):
     cat = product_service.get_category(cat_id)
     if not cat:
@@ -43,6 +51,8 @@ def edit_category(cat_id):
 
 
 @bp.route("/categories/<int:cat_id>/delete", methods=["POST"])
+@login_required
+@permission_required("products", "delete")
 def delete_category(cat_id):
     product_service.delete_category(cat_id)
     flash("Category deleted.", "success")
@@ -52,6 +62,8 @@ def delete_category(cat_id):
 # ── Products ──────────────────────────────────────────────────────────────────
 
 @bp.route("/")
+@login_required
+@permission_required("products", "view")
 def list_products():
     groups = product_service.get_products_with_subs()
     categories = product_service.get_all_categories()
@@ -59,6 +71,8 @@ def list_products():
 
 
 @bp.route("/new", methods=["GET", "POST"])
+@login_required
+@permission_required("products", "create")
 def new_product():
     categories = product_service.get_all_categories()
     if request.method == "POST":
@@ -73,6 +87,8 @@ def new_product():
 
 
 @bp.route("/<int:product_id>")
+@login_required
+@permission_required("products", "view")
 def product_detail(product_id):
     product = product_service.get_product(product_id)
     if not product:
@@ -99,6 +115,8 @@ def product_detail(product_id):
 
 
 @bp.route("/<int:product_id>/edit", methods=["GET", "POST"])
+@login_required
+@permission_required("products", "edit")
 def edit_product(product_id):
     product = product_service.get_product(product_id)
     if not product:
@@ -119,6 +137,8 @@ def edit_product(product_id):
 
 
 @bp.route("/<int:product_id>/delete", methods=["POST"])
+@login_required
+@permission_required("products", "delete")
 def delete_product(product_id):
     product_service.delete_product(product_id)
     flash("Product deleted.", "success")
@@ -128,6 +148,8 @@ def delete_product(product_id):
 # ── Stock movement (product level) ────────────────────────────────────────────
 
 @bp.route("/<int:product_id>/stock", methods=["POST"])
+@login_required
+@permission_required("products", "edit")
 def stock_action(product_id):
     bucket    = request.form.get("bucket", "warehouse")
     direction = request.form.get("direction", "increase")
@@ -152,6 +174,8 @@ def stock_action(product_id):
 # ── Sub-products ──────────────────────────────────────────────────────────────
 
 @bp.route("/<int:product_id>/sub/new", methods=["GET", "POST"])
+@login_required
+@permission_required("products", "create")
 def new_sub_product(product_id):
     product = product_service.get_product(product_id)
     if not product:
@@ -174,6 +198,8 @@ def new_sub_product(product_id):
 
 
 @bp.route("/<int:product_id>/sub/<int:sub_id>/edit", methods=["GET", "POST"])
+@login_required
+@permission_required("products", "edit")
 def edit_sub_product(product_id, sub_id):
     product = product_service.get_product(product_id)
     sub     = product_service.get_sub_product(sub_id)
@@ -195,6 +221,8 @@ def edit_sub_product(product_id, sub_id):
 
 
 @bp.route("/<int:product_id>/sub/<int:sub_id>/delete", methods=["POST"])
+@login_required
+@permission_required("products", "delete")
 def delete_sub_product(product_id, sub_id):
     product_service.delete_sub_product(sub_id)
     flash("Sub-product deleted.", "success")
@@ -202,6 +230,8 @@ def delete_sub_product(product_id, sub_id):
 
 
 @bp.route("/<int:product_id>/sub/<int:sub_id>/stock", methods=["POST"])
+@login_required
+@permission_required("products", "edit")
 def sub_stock_action(product_id, sub_id):
     bucket    = request.form.get("bucket", "warehouse")
     direction = request.form.get("direction", "increase")
@@ -232,6 +262,8 @@ def sub_stock_action(product_id, sub_id):
 # ── Sub-product detail page ───────────────────────────────────────────────────
 
 @bp.route("/<int:product_id>/sub/<int:sub_id>")
+@login_required
+@permission_required("products", "view")
 def sub_detail(product_id, sub_id):
     product = product_service.get_product(product_id)
     sub     = product_service.get_sub_product(sub_id)
@@ -258,6 +290,8 @@ def sub_detail(product_id, sub_id):
 # ── Inline sub-product save ───────────────────────────────────────────────────
 
 @bp.route("/<int:product_id>/sub/<int:sub_id>/inline", methods=["POST"])
+@login_required
+@permission_required("products", "edit")
 def inline_sub_save(product_id, sub_id):
     data = request.get_json(silent=True) or {}
     allowed = {"name", "unit_price", "tax_rate", "min_quantity", "use_parent_price"}
@@ -272,6 +306,8 @@ def inline_sub_save(product_id, sub_id):
 # ── JSON API for invoice builder ──────────────────────────────────────────────
 
 @bp.route("/api/list")
+@login_required
+@permission_required("products", "view")
 def api_list():
     products = product_service.get_all_products(active_only=True)
     result = []

@@ -1,16 +1,22 @@
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
+from flask_login import login_required
 from ..services import supplier_service, product_service
+from ..services.auth_service import permission_required
 
 bp = Blueprint("suppliers", __name__, url_prefix="/suppliers")
 
 
 @bp.route("/")
+@login_required
+@permission_required("suppliers", "view")
 def list_suppliers():
     suppliers = supplier_service.get_all_suppliers()
     return render_template("suppliers/list.html", suppliers=suppliers)
 
 
 @bp.route("/new", methods=["GET", "POST"])
+@login_required
+@permission_required("suppliers", "create")
 def new_supplier():
     if request.method == "POST":
         data = request.form.to_dict()
@@ -24,6 +30,8 @@ def new_supplier():
 
 
 @bp.route("/<int:supplier_id>")
+@login_required
+@permission_required("suppliers", "view")
 def detail(supplier_id):
     supplier = supplier_service.get_supplier(supplier_id)
     if not supplier:
@@ -53,6 +61,8 @@ def detail(supplier_id):
 
 
 @bp.route("/<int:supplier_id>/edit", methods=["GET", "POST"])
+@login_required
+@permission_required("suppliers", "edit")
 def edit_supplier(supplier_id):
     supplier = supplier_service.get_supplier(supplier_id)
     if not supplier:
@@ -72,6 +82,8 @@ def edit_supplier(supplier_id):
 
 
 @bp.route("/<int:supplier_id>/delete", methods=["POST"])
+@login_required
+@permission_required("suppliers", "delete")
 def delete_supplier(supplier_id):
     supplier_service.delete_supplier(supplier_id)
     flash("Supplier deleted.", "success")
@@ -79,6 +91,8 @@ def delete_supplier(supplier_id):
 
 
 @bp.route("/<int:supplier_id>/products/add", methods=["POST"])
+@login_required
+@permission_required("suppliers", "edit")
 def add_product(supplier_id):
     data = request.form.to_dict()
     pid  = data.get("product_id")
@@ -121,6 +135,8 @@ def add_product(supplier_id):
 
 
 @bp.route("/<int:supplier_id>/products/<int:sp_id>/update", methods=["POST"])
+@login_required
+@permission_required("suppliers", "edit")
 def update_product(supplier_id, sp_id):
     data  = request.get_json(silent=True) or {}
     price_raw = data.get("price", "")
@@ -133,6 +149,8 @@ def update_product(supplier_id, sp_id):
 
 
 @bp.route("/<int:supplier_id>/products/<int:sp_id>/delete", methods=["POST"])
+@login_required
+@permission_required("suppliers", "delete")
 def remove_product(supplier_id, sp_id):
     supplier_service.remove_supplier_product(sp_id)
     flash("Removed from supplier.", "success")
@@ -140,5 +158,7 @@ def remove_product(supplier_id, sp_id):
 
 
 @bp.route("/api/list")
+@login_required
+@permission_required("suppliers", "view")
 def api_list():
     return jsonify([dict(s) for s in supplier_service.get_all_suppliers()])

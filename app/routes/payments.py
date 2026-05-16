@@ -1,16 +1,22 @@
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
+from flask_login import login_required
 from ..services import payment_service, invoice_service, client_service
+from ..services.auth_service import permission_required
 
 bp = Blueprint("payments", __name__, url_prefix="/payments")
 
 
 @bp.route("/")
+@login_required
+@permission_required("payments", "view")
 def list_payments():
     payments = payment_service.get_all_payments()
     return render_template("payments/list.html", payments=payments)
 
 
 @bp.route("/new", methods=["GET", "POST"])
+@login_required
+@permission_required("payments", "create")
 def new_payment():
     clients  = client_service.get_all_clients()
     invoices = invoice_service.get_all_invoices()
@@ -54,6 +60,8 @@ def new_payment():
 
 
 @bp.route("/<int:payment_id>/delete", methods=["POST"])
+@login_required
+@permission_required("payments", "delete")
 def delete_payment(payment_id):
     pmt = payment_service.get_payment(payment_id)
     invoice_id = pmt["invoice_id"] if pmt else None
@@ -66,6 +74,8 @@ def delete_payment(payment_id):
 
 # ── Client invoice list for JS (used by payment form) ────────────────────────
 @bp.route("/api/client-invoices/<int:client_id>")
+@login_required
+@permission_required("payments", "view")
 def api_client_invoices(client_id):
     invoices = invoice_service.get_all_invoices()
     client_invs = [
@@ -85,6 +95,8 @@ def api_client_invoices(client_id):
 
 # ── Batch import ──────────────────────────────────────────────────────────────
 @bp.route("/import", methods=["GET", "POST"])
+@login_required
+@permission_required("payments", "create")
 def import_payments():
     import io, xlrd
     from datetime import datetime

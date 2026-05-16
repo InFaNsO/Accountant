@@ -1,5 +1,7 @@
 from flask import Blueprint, render_template, request, redirect, url_for, flash
+from flask_login import login_required
 from ..services import production_service, supplier_service, product_service
+from ..services.auth_service import permission_required
 
 bp = Blueprint("production", __name__, url_prefix="/production")
 
@@ -35,12 +37,16 @@ def _parse_items(form):
 
 
 @bp.route("/")
+@login_required
+@permission_required("production", "view")
 def list_production():
     orders = production_service.get_all_production_orders()
     return render_template("production/list.html", orders=orders)
 
 
 @bp.route("/new", methods=["GET", "POST"])
+@login_required
+@permission_required("production", "create")
 def new_production():
     suppliers = supplier_service.get_all_suppliers()
     products  = _build_product_choices()
@@ -63,6 +69,8 @@ def new_production():
 
 
 @bp.route("/<int:po_id>")
+@login_required
+@permission_required("production", "view")
 def detail(po_id):
     po = production_service.get_production_order(po_id)
     if not po:
@@ -73,6 +81,8 @@ def detail(po_id):
 
 
 @bp.route("/<int:po_id>/edit", methods=["GET", "POST"])
+@login_required
+@permission_required("production", "edit")
 def edit_production(po_id):
     po = production_service.get_production_order(po_id)
     if not po:
@@ -93,6 +103,8 @@ def edit_production(po_id):
 
 
 @bp.route("/<int:po_id>/close", methods=["POST"])
+@login_required
+@permission_required("production", "edit")
 def close_production(po_id):
     production_service.close_production_order(po_id)
     flash("Production order closed.", "success")
@@ -100,6 +112,8 @@ def close_production(po_id):
 
 
 @bp.route("/<int:po_id>/delete", methods=["POST"])
+@login_required
+@permission_required("production", "delete")
 def delete_production(po_id):
     production_service.delete_production_order(po_id)
     flash("Production order deleted.", "success")

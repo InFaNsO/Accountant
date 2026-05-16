@@ -1,17 +1,23 @@
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
+from flask_login import login_required
 from ..services import client_service
+from ..services.auth_service import permission_required
 from ..database import get_db
 
 bp = Blueprint("clients", __name__, url_prefix="/clients")
 
 
 @bp.route("/")
+@login_required
+@permission_required("clients", "view")
 def list_clients():
     clients = client_service.get_all_clients()
     return render_template("clients/list.html", clients=clients)
 
 
 @bp.route("/new", methods=["GET", "POST"])
+@login_required
+@permission_required("clients", "create")
 def new_client():
     if request.method == "POST":
         data = request.form.to_dict()
@@ -25,6 +31,8 @@ def new_client():
 
 
 @bp.route("/<int:client_id>")
+@login_required
+@permission_required("clients", "view")
 def detail(client_id):
     client = client_service.get_client(client_id)
     if not client:
@@ -36,6 +44,8 @@ def detail(client_id):
 
 
 @bp.route("/<int:client_id>/edit", methods=["GET", "POST"])
+@login_required
+@permission_required("clients", "edit")
 def edit_client(client_id):
     client = client_service.get_client(client_id)
     if not client:
@@ -53,6 +63,8 @@ def edit_client(client_id):
 
 
 @bp.route("/<int:client_id>/ledger")
+@login_required
+@permission_required("clients", "view")
 def ledger(client_id):
     client = client_service.get_client(client_id)
     if not client:
@@ -127,6 +139,8 @@ def ledger(client_id):
 
 
 @bp.route("/<int:client_id>/ledger/entry", methods=["POST"])
+@login_required
+@permission_required("clients", "edit")
 def add_ledger_entry(client_id):
     data        = request.get_json(silent=True) or {}
     entry_date  = data.get("entry_date")
@@ -147,6 +161,8 @@ def add_ledger_entry(client_id):
 
 
 @bp.route("/<int:client_id>/delete", methods=["POST"])
+@login_required
+@permission_required("clients", "delete")
 def delete_client(client_id):
     client_service.delete_client(client_id)
     flash("Client deleted.", "success")
