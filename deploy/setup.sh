@@ -37,6 +37,8 @@ echo "[2/9] Creating app user '$APP_USER'..."
 if ! id "$APP_USER" &>/dev/null; then
     useradd -m -s /bin/bash "$APP_USER"
 fi
+# Allow nginx (www-data) to traverse the home directory to serve static files
+chmod 755 /home/$APP_USER
 # Allow ledger to restart its own service without a password
 echo "$APP_USER ALL=(ALL) NOPASSWD: /bin/systemctl restart ledger, /bin/systemctl start ledger, /bin/systemctl stop ledger" \
     > /etc/sudoers.d/ledger
