@@ -377,7 +377,7 @@ def get_stock_alerts():
     ).fetchall()
 
     low_subs = db.execute(
-        """SELECT s.*, p.name AS parent_name, p.min_quantity AS parent_min_qty,
+        """SELECT s.*, p.name AS parent_name, p.min_quantity AS parent_min_qty, p.pcs_per_carton,
                   c.name AS category_name
            FROM sub_products s
            JOIN products p ON s.product_id=p.id
@@ -393,7 +393,7 @@ def get_stock_alerts():
         "SELECT p.*, c.name AS category_name FROM products p LEFT JOIN categories c ON p.category_id=c.id WHERE p.production_qty>0"
     ).fetchall()
     in_production_s = db.execute(
-        "SELECT s.*, p.name AS parent_name FROM sub_products s JOIN products p ON s.product_id=p.id WHERE s.production_qty>0"
+        "SELECT s.*, p.name AS parent_name, p.pcs_per_carton FROM sub_products s JOIN products p ON s.product_id=p.id WHERE s.production_qty>0"
     ).fetchall()
 
     # In transit
@@ -408,7 +408,7 @@ def get_stock_alerts():
            GROUP BY p.id ORDER BY m.expected_arrival ASC"""
     ).fetchall()
     in_transit_s = db.execute(
-        """SELECT s.*, p.name AS parent_name,
+        """SELECT s.*, p.name AS parent_name, p.pcs_per_carton,
                   m.expected_arrival, m.quantity AS dispatch_qty
            FROM sub_products s
            JOIN products p ON s.product_id=p.id

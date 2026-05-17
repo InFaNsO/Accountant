@@ -29,6 +29,11 @@ function formatIndian(value) {
 // ── Stock unit toggle (pieces ↔ boxes) ──────────────────────
 // Call initStockUnit() on DOMContentLoaded on any page with [data-pcs] elements.
 // Products have data-ppb (pieces-per-box) on a container; stock numbers have data-pcs.
+function toggleStockUnit() {
+  const current = localStorage.getItem('stockUnit') || 'boxes';
+  setStockUnit(current === 'boxes' ? 'pcs' : 'boxes');
+}
+
 function setStockUnit(unit) {
   localStorage.setItem('stockUnit', unit);
   _applyStockUnit(unit);
@@ -44,8 +49,9 @@ function _applyStockUnit(unit) {
       ? formatIndian(pcs / ppb)
       : formatIndian(pcs);
   });
-  document.querySelectorAll('.unit-btn').forEach(btn => {
-    btn.classList.toggle('unit-active', btn.dataset.unit === unit);
+  // Update all toggle buttons on the page
+  document.querySelectorAll('.stock-unit-toggle').forEach(btn => {
+    btn.textContent = unit === 'boxes' ? '⇄ Boxes' : '⇄ Pcs';
   });
 }
 

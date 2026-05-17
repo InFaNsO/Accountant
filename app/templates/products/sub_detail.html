@@ -47,10 +47,7 @@
   <div class="card" data-ppb="{{ product.pcs_per_carton or 0 }}">
     <div class="card-header">
       <span class="card-title">Stock</span>
-      <div class="stock-unit-pill">
-        <button class="unit-btn" data-unit="boxes" onclick="setStockUnit('boxes')">Boxes</button>
-        <button class="unit-btn" data-unit="pcs" onclick="setStockUnit('pcs')">Pcs</button>
-      </div>
+      <button class="stock-unit-toggle" onclick="toggleStockUnit()">⇄ Boxes</button>
     </div>
     <div class="card-body">
       {% set eff_min = sub.min_quantity or product.min_quantity or 0 %}
@@ -111,7 +108,7 @@
 </div>
 
 <!-- 3-tab stock history -->
-<div class="card">
+<div class="card" data-ppb="{{ product.pcs_per_carton or 0 }}">
   <div class="card-header" style="gap:0;padding:0">
     <div style="display:flex;width:100%">
       <button class="stock-tab-btn active" onclick="switchTab('warehouse')"
@@ -164,7 +161,7 @@
               {% endif %}
             </td>
             <td style="text-align:right;font-weight:700;color:{% if m.movement_type in ('sale','warehouse_deduct') %}#ef9a9a{% else %}var(--success){% endif %}">
-              {% if m.movement_type in ('sale','warehouse_deduct') %}-{% else %}+{% endif %}{{ m.quantity | indian }}
+              {% if m.movement_type in ('sale','warehouse_deduct') %}-{% else %}+{% endif %}<span data-pcs="{{ m.quantity }}">{{ m.quantity | indian }}</span>
             </td>
             <td class="muted" style="font-size:12px">{{ m.notes or '—' }}</td>
           </tr>
@@ -194,7 +191,7 @@
                 <span class="badge" style="background:rgba(245,158,11,.15);color:#d97706">▲ {{ 'Added' if m.movement_type == 'production_add' else 'Sent to Production' }}</span>
               {% endif %}
             </td>
-            <td style="text-align:right;font-weight:700;color:var(--warning)">{{ m.quantity | indian }}</td>
+            <td style="text-align:right;font-weight:700;color:var(--warning)"><span data-pcs="{{ m.quantity }}">{{ m.quantity | indian }}</span></td>
             <td class="muted" style="font-size:12px">{{ m.notes or '—' }}</td>
           </tr>
           {% endfor %}
@@ -226,7 +223,7 @@
                 {% if m.dispatch_name %}<span class="muted" style="font-size:12px;margin-left:6px">{{ m.dispatch_name }}</span>{% endif %}
               {% endif %}
             </td>
-            <td style="text-align:right;font-weight:700;color:var(--primary)">{{ m.quantity | indian }}</td>
+            <td style="text-align:right;font-weight:700;color:var(--primary)"><span data-pcs="{{ m.quantity }}">{{ m.quantity | indian }}</span></td>
             <td class="muted" style="font-size:12px">{{ m.expected_arrival or '—' }}</td>
             <td class="muted" style="font-size:12px">{{ m.notes or '—' }}</td>
           </tr>
