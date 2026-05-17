@@ -5,7 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{% block title %}Ledger{% endblock %} — Ledger</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}" />
-  <script>if(localStorage.getItem('theme')==='dark')document.body.classList.add('dark');</script>
+  <!-- Apply theme & stock unit preference before first paint to avoid flash -->
+  <script>
+    if(localStorage.getItem('theme')==='dark') document.body.classList.add('dark');
+    if(localStorage.getItem('stockUnit')!=='pcs') document.documentElement.classList.add('show-boxes');
+  </script>
 </head>
 <body>
 

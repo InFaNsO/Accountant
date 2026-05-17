@@ -27,37 +27,11 @@ function formatIndian(value) {
 }
 
 // ── Stock unit toggle (pieces ↔ boxes) ──────────────────────
-// Call initStockUnit() on DOMContentLoaded on any page with [data-pcs] elements.
-// Products have data-ppb (pieces-per-box) on a container; stock numbers have data-pcs.
+// CSS-driven: toggling 'show-boxes' on <html> switches .u-pcs / .u-box visibility.
+// Preference is saved to localStorage and applied before first paint in base.html <head>.
 function toggleStockUnit() {
-  const current = localStorage.getItem('stockUnit') || 'boxes';
-  setStockUnit(current === 'boxes' ? 'pcs' : 'boxes');
-}
-
-function setStockUnit(unit) {
-  localStorage.setItem('stockUnit', unit);
-  _applyStockUnit(unit);
-}
-
-function _applyStockUnit(unit) {
-  document.querySelectorAll('[data-pcs]').forEach(el => {
-    const pcs = parseFloat(el.dataset.pcs);
-    if (isNaN(pcs)) return;
-    const container = el.closest('[data-ppb]');
-    const ppb = container ? (parseFloat(container.dataset.ppb) || 0) : 0;
-    el.textContent = (unit === 'boxes' && ppb > 0)
-      ? formatIndian(pcs / ppb)
-      : formatIndian(pcs);
-  });
-  // Update all toggle buttons on the page
-  document.querySelectorAll('.stock-unit-toggle').forEach(btn => {
-    btn.textContent = unit === 'boxes' ? '⇄ Boxes' : '⇄ Pcs';
-  });
-}
-
-function initStockUnit() {
-  const unit = localStorage.getItem('stockUnit') || 'boxes';
-  _applyStockUnit(unit);
+  const isBoxes = document.documentElement.classList.toggle('show-boxes');
+  localStorage.setItem('stockUnit', isBoxes ? 'boxes' : 'pcs');
 }
 
 // Shared table search utility

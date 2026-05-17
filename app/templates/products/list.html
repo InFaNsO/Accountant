@@ -17,7 +17,11 @@
          style="max-width:360px;width:100%">
   <span id="productCount" style="font-size:13px;color:var(--text-muted)"></span>
   <div style="margin-left:auto;flex-shrink:0">
-    <button class="stock-unit-toggle" onclick="toggleStockUnit()">⇄ Boxes</button>
+    <button class="unit-toggle" onclick="toggleStockUnit()">
+      <span class="unit-knob"></span>
+      <span class="unit-opt">Boxes</span>
+      <span class="unit-opt">Pcs</span>
+    </button>
   </div>
 </div>
 
@@ -56,7 +60,7 @@
     %}
 
     <!-- Product block (data-ppb for unit conversion; inherited by all sub-products) -->
-    <div class="product-block" data-ppb="{{ p.pcs_per_carton or 0 }}">
+    <div class="product-block">
 
       <!-- Product row -->
       <div class="product-row" data-search="{{ p.name|lower }} {{ (p.sku or '')|lower }} {{ (p.category_name or '')|lower }}"
@@ -80,10 +84,10 @@
             <span>Price: <strong style="color:var(--text)">{{ p.unit_price|inr }}</strong></span>
             <span>Tax: {{ p.tax_rate }}%</span>
             {% if not subs %}
-            <span>Stock: <strong data-pcs="{{ p.stock_qty }}" style="color:{{ p_color }}">{{ p.stock_qty | indian }}</strong>{% if p.min_quantity > 0 %}<span style="color:var(--text-muted)"> / min <span data-pcs="{{ p.min_quantity }}">{{ p.min_quantity | indian }}</span></span>{% endif %}</span>
+            <span>Stock: <strong style="color:{{ p_color }}">{{ stock_val(p.stock_qty, p.pcs_per_carton) }}</strong>{% if p.min_quantity > 0 %}<span style="color:var(--text-muted)"> / min {{ stock_val(p.min_quantity, p.pcs_per_carton) }}</span>{% endif %}</span>
             {% endif %}
-            {% if p.production_qty > 0 %}<span style="color:var(--warning)">In production: <span data-pcs="{{ p.production_qty }}">{{ p.production_qty | indian }}</span></span>{% endif %}
-            {% if p.in_transit_qty > 0 %}<span style="color:var(--primary)">In transit: <span data-pcs="{{ p.in_transit_qty }}">{{ p.in_transit_qty | indian }}</span></span>{% endif %}
+            {% if p.production_qty > 0 %}<span style="color:var(--warning)">In production: {{ stock_val(p.production_qty, p.pcs_per_carton) }}</span>{% endif %}
+            {% if p.in_transit_qty > 0 %}<span style="color:var(--primary)">In transit: {{ stock_val(p.in_transit_qty, p.pcs_per_carton) }}</span>{% endif %}
           </div>
         </div>
         <div style="display:flex;gap:6px;flex-shrink:0">
@@ -122,9 +126,9 @@
               {% else %}
                 <span>Price: <strong style="color:var(--text)">{{ s.unit_price|inr }}</strong></span>
               {% endif %}
-              <span>Stock: <strong data-pcs="{{ s.stock_qty }}" style="color:{{ s_color }}">{{ s.stock_qty | indian }}</strong>{% if min_q > 0 %}<span style="color:var(--text-muted)"> / min <span data-pcs="{{ min_q }}">{{ min_q | indian }}</span></span>{% endif %}</span>
-              {% if s.production_qty > 0 %}<span style="color:var(--warning)">In production: <span data-pcs="{{ s.production_qty }}">{{ s.production_qty | indian }}</span></span>{% endif %}
-              {% if s.in_transit_qty > 0 %}<span style="color:var(--primary)">In transit: <span data-pcs="{{ s.in_transit_qty }}">{{ s.in_transit_qty | indian }}</span></span>{% endif %}
+              <span>Stock: <strong style="color:{{ s_color }}">{{ stock_val(s.stock_qty, p.pcs_per_carton) }}</strong>{% if min_q > 0 %}<span style="color:var(--text-muted)"> / min {{ stock_val(min_q, p.pcs_per_carton) }}</span>{% endif %}</span>
+              {% if s.production_qty > 0 %}<span style="color:var(--warning)">In production: {{ stock_val(s.production_qty, p.pcs_per_carton) }}</span>{% endif %}
+              {% if s.in_transit_qty > 0 %}<span style="color:var(--primary)">In transit: {{ stock_val(s.in_transit_qty, p.pcs_per_carton) }}</span>{% endif %}
             </div>
           </div>
           <div style="display:flex;gap:6px;flex-shrink:0">
@@ -241,7 +245,6 @@ function filterProducts(q) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  initStockUnit();
   // Show Expand/Collapse All buttons only for categories that have sub-products
   document.querySelectorAll('.cat-ctrl').forEach(ctrl => {
     const catId = ctrl.dataset.cat;

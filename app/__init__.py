@@ -2,6 +2,7 @@ import os
 from datetime import date
 from flask import Flask
 from flask_login import LoginManager
+from markupsafe import Markup
 from .database import init_db
 
 login_manager = LoginManager()
@@ -56,6 +57,28 @@ def _format_indian(value):
     return f"-{formatted}" if negative else formatted
 
 
+def _stock_val(pcs, ppb=0):
+    """Render a stock quantity as dual spans for the Boxes/Pcs CSS toggle.
+    Usage in templates: {{ stock_val(product.stock_qty, product.pcs_per_carton) }}
+    Produces: <span class="u-pcs">1,200</span><span class="u-box">50</span>
+    If ppb is 0/None the box span shows '—'.
+    """
+    try:
+        pcs_f = float(pcs or 0)
+    except (TypeError, ValueError):
+        pcs_f = 0.0
+    try:
+        ppb_i = int(ppb or 0)
+    except (TypeError, ValueError):
+        ppb_i = 0
+    pcs_str = _format_indian(pcs_f)
+    box_str = _format_indian(pcs_f / ppb_i) if ppb_i > 0 else '—'
+    return Markup(
+        f'<span class="u-pcs">{pcs_str}</span>'
+        f'<span class="u-box">{box_str}</span>'
+    )
+
+
 def create_app():
     app = Flask(__name__, instance_relative_config=False)
     app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-in-prod")
@@ -66,6 +89,7 @@ def create_app():
     app.jinja_env.filters["inr"]       = _format_inr
     app.jinja_env.filters["indian"]    = _format_indian
     app.jinja_env.filters["enumerate"] = enumerate
+    app.jinja_env.globals["stock_val"] = _stock_val
 
     @app.context_processor
     def inject_today():

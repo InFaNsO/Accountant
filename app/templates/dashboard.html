@@ -231,7 +231,11 @@
 {% if show_low or show_prod or show_transit %}
 {% set col_count = (1 if show_low else 0) + (1 if show_prod else 0) + (1 if show_transit else 0) %}
 <div style="display:flex;justify-content:flex-end;margin-top:18px;margin-bottom:6px">
-  <button class="stock-unit-toggle" onclick="toggleStockUnit()">⇄ Boxes</button>
+  <button class="unit-toggle" onclick="toggleStockUnit()">
+    <span class="unit-knob"></span>
+    <span class="unit-opt">Boxes</span>
+    <span class="unit-opt">Pcs</span>
+  </button>
 </div>
 <div style="display:grid;grid-template-columns:repeat({{ col_count }},1fr);gap:18px;margin-top:0">
 
@@ -243,7 +247,7 @@
     </div>
     <ul style="list-style:none">
       {% for item in low %}
-      <li style="padding:10px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center" data-ppb="{{ item.pcs_per_carton or 0 }}">
+      <li style="padding:10px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
         <div>
           <div style="font-weight:600;font-size:13px">
             {% if item.get('parent_name') %}{{ item.parent_name }} — {% endif %}{{ item.name }}
@@ -253,9 +257,9 @@
           {% endif %}
         </div>
         <div style="text-align:right;font-size:13px">
-          <span data-pcs="{{ item.stock_qty }}" style="color:var(--danger);font-weight:700">{{ item.stock_qty | indian }}</span>
+          <span style="color:var(--danger);font-weight:700">{{ stock_val(item.stock_qty, item.pcs_per_carton) }}</span>
           {% set min_qty = item.get('min_quantity') or item.get('parent_min_qty') %}
-          <span style="color:var(--text-muted)"> / <span data-pcs="{{ min_qty }}">{{ min_qty | indian }}</span></span>
+          <span style="color:var(--text-muted)"> / {{ stock_val(min_qty, item.pcs_per_carton) }}</span>
         </div>
       </li>
       {% endfor %}
@@ -270,7 +274,7 @@
     </div>
     <ul style="list-style:none">
       {% for item in prod %}
-      <li style="padding:10px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center" data-ppb="{{ item.pcs_per_carton or 0 }}">
+      <li style="padding:10px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
         <div>
           <div style="font-weight:600;font-size:13px">
             {% if item.get('parent_name') %}{{ item.parent_name }} — {% endif %}{{ item.name }}
@@ -280,7 +284,7 @@
           {% endif %}
         </div>
         <div style="text-align:right;font-size:13px">
-          <span data-pcs="{{ item.production_qty }}" style="color:var(--success);font-weight:700">{{ item.production_qty | indian }}</span>
+          <span style="color:var(--success);font-weight:700">{{ stock_val(item.production_qty, item.pcs_per_carton) }}</span>
           <span style="color:var(--text-muted)"> in production</span>
         </div>
       </li>
@@ -296,7 +300,7 @@
     </div>
     <ul style="list-style:none">
       {% for item in transit %}
-      <li style="padding:10px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center" data-ppb="{{ item.pcs_per_carton or 0 }}">
+      <li style="padding:10px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
         <div>
           <div style="font-weight:600;font-size:13px">
             {% if item.get('parent_name') %}{{ item.parent_name }} — {% endif %}{{ item.name }}
@@ -306,7 +310,7 @@
           {% endif %}
         </div>
         <div style="text-align:right;font-size:13px">
-          <span data-pcs="{{ item.in_transit_qty }}" style="color:var(--warning);font-weight:700">{{ item.in_transit_qty | indian }}</span>
+          <span style="color:var(--warning);font-weight:700">{{ stock_val(item.in_transit_qty, item.pcs_per_carton) }}</span>
           <span style="color:var(--text-muted)"> in transit</span>
         </div>
       </li>
@@ -375,7 +379,6 @@ function dashDateChange() {
   document.getElementById('dashWinSel').value = 'custom';
 }
 
-document.addEventListener('DOMContentLoaded', initStockUnit);
 </script>
 
 {% if 'revenue_chart' in dash_sections %}

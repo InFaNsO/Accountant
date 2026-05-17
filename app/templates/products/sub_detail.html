@@ -44,26 +44,30 @@
   </div>
 
   <!-- Stock summary card -->
-  <div class="card" data-ppb="{{ product.pcs_per_carton or 0 }}">
+  <div class="card">
     <div class="card-header">
       <span class="card-title">Stock</span>
-      <button class="stock-unit-toggle" onclick="toggleStockUnit()">⇄ Boxes</button>
+      <button class="unit-toggle" onclick="toggleStockUnit()">
+        <span class="unit-knob"></span>
+        <span class="unit-opt">Boxes</span>
+        <span class="unit-opt">Pcs</span>
+      </button>
     </div>
     <div class="card-body">
       {% set eff_min = sub.min_quantity or product.min_quantity or 0 %}
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
         <div style="text-align:center;padding:14px;background:var(--bg-alt);border-radius:var(--radius-sm)">
           <div style="font-size:22px;font-weight:700;color:{% if eff_min > 0 and sub.stock_qty < eff_min %}var(--danger){% elif eff_min > 0 and sub.stock_qty <= (eff_min * 1.2) %}var(--warning){% else %}var(--success){% endif %}">
-            <span data-pcs="{{ sub.stock_qty }}">{{ sub.stock_qty | indian }}</span>
+            {{ stock_val(sub.stock_qty, product.pcs_per_carton) }}
           </div>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:2px">Available{% if eff_min > 0 %} / min <span data-pcs="{{ eff_min }}">{{ eff_min | indian }}</span>{% endif %}</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px">Available{% if eff_min > 0 %} / min {{ stock_val(eff_min, product.pcs_per_carton) }}{% endif %}</div>
         </div>
         <div style="text-align:center;padding:14px;background:var(--bg-alt);border-radius:var(--radius-sm)">
-          <div style="font-size:22px;font-weight:700;color:var(--warning)"><span data-pcs="{{ sub.production_qty }}">{{ sub.production_qty | indian }}</span></div>
+          <div style="font-size:22px;font-weight:700;color:var(--warning)">{{ stock_val(sub.production_qty, product.pcs_per_carton) }}</div>
           <div style="font-size:11px;color:var(--text-muted);margin-top:2px">In Production</div>
         </div>
         <div style="text-align:center;padding:14px;background:var(--bg-alt);border-radius:var(--radius-sm)">
-          <div style="font-size:22px;font-weight:700;color:var(--primary)"><span data-pcs="{{ sub.in_transit_qty }}">{{ sub.in_transit_qty | indian }}</span></div>
+          <div style="font-size:22px;font-weight:700;color:var(--primary)">{{ stock_val(sub.in_transit_qty, product.pcs_per_carton) }}</div>
           <div style="font-size:11px;color:var(--text-muted);margin-top:2px">In Transit</div>
         </div>
       </div>
@@ -108,7 +112,7 @@
 </div>
 
 <!-- 3-tab stock history -->
-<div class="card" data-ppb="{{ product.pcs_per_carton or 0 }}">
+<div class="card">
   <div class="card-header" style="gap:0;padding:0">
     <div style="display:flex;width:100%">
       <button class="stock-tab-btn active" onclick="switchTab('warehouse')"
@@ -161,7 +165,7 @@
               {% endif %}
             </td>
             <td style="text-align:right;font-weight:700;color:{% if m.movement_type in ('sale','warehouse_deduct') %}#ef9a9a{% else %}var(--success){% endif %}">
-              {% if m.movement_type in ('sale','warehouse_deduct') %}-{% else %}+{% endif %}<span data-pcs="{{ m.quantity }}">{{ m.quantity | indian }}</span>
+              {% if m.movement_type in ('sale','warehouse_deduct') %}-{% else %}+{% endif %}{{ stock_val(m.quantity, product.pcs_per_carton) }}
             </td>
             <td class="muted" style="font-size:12px">{{ m.notes or '—' }}</td>
           </tr>
@@ -191,7 +195,7 @@
                 <span class="badge" style="background:rgba(245,158,11,.15);color:#d97706">▲ {{ 'Added' if m.movement_type == 'production_add' else 'Sent to Production' }}</span>
               {% endif %}
             </td>
-            <td style="text-align:right;font-weight:700;color:var(--warning)"><span data-pcs="{{ m.quantity }}">{{ m.quantity | indian }}</span></td>
+            <td style="text-align:right;font-weight:700;color:var(--warning)">{{ stock_val(m.quantity, product.pcs_per_carton) }}</td>
             <td class="muted" style="font-size:12px">{{ m.notes or '—' }}</td>
           </tr>
           {% endfor %}
@@ -223,7 +227,7 @@
                 {% if m.dispatch_name %}<span class="muted" style="font-size:12px;margin-left:6px">{{ m.dispatch_name }}</span>{% endif %}
               {% endif %}
             </td>
-            <td style="text-align:right;font-weight:700;color:var(--primary)"><span data-pcs="{{ m.quantity }}">{{ m.quantity | indian }}</span></td>
+            <td style="text-align:right;font-weight:700;color:var(--primary)">{{ stock_val(m.quantity, product.pcs_per_carton) }}</td>
             <td class="muted" style="font-size:12px">{{ m.expected_arrival or '—' }}</td>
             <td class="muted" style="font-size:12px">{{ m.notes or '—' }}</td>
           </tr>
@@ -240,8 +244,6 @@
 
 {% block scripts %}
 <script>
-document.addEventListener('DOMContentLoaded', initStockUnit);
-
 function switchTab(name) {
   document.querySelectorAll('.stock-tab-pane').forEach(p => p.style.display = 'none');
   document.querySelectorAll('.stock-tab-btn').forEach(b => {
