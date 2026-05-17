@@ -713,6 +713,6 @@ if __name__ == "__main__":
         mcp.settings.transport_security = TransportSecuritySettings(
             enable_dns_rebinding_protection=False
         )
-        mcp.run(transport="sse")
+        mcp.run(transport="streamable-http")
     else:
         mcp.run()
