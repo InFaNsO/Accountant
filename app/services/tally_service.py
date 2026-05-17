@@ -37,7 +37,7 @@ def create_tally(name, notes):
 
 
 def get_tally(tally_id):
-    db  = get_db()
+    db    = get_db()
     tally = db.execute("SELECT * FROM stock_tallies WHERE id=?", (tally_id,)).fetchone()
     if not tally:
         return None, []
@@ -45,31 +45,46 @@ def get_tally(tally_id):
     rows = db.execute("""
         SELECT ti.*,
                p.name AS product_name, p.sku AS product_sku, p.pcs_per_carton,
+               COALESCE(c.name, 'Uncategorized') AS category_name,
                s.name AS sub_name, s.sku AS sub_sku
         FROM stock_tally_items ti
         JOIN products p ON ti.product_id = p.id
+        LEFT JOIN categories c ON p.category_id = c.id
         LEFT JOIN sub_products s ON ti.sub_id = s.id
         WHERE ti.tally_id = ?
-        ORDER BY p.name, COALESCE(NULLIF(s.sku,''), s.name)
+        ORDER BY COALESCE(c.name, 'Uncategorized'), p.name, COALESCE(NULLIF(s.sku,''), s.name)
     """, (tally_id,)).fetchall()
 
-    groups = {}
-    order  = []
+    # Build flat product groups
+    product_groups = {}
+    product_order  = []
     for row in rows:
         pid = row["product_id"]
-        if pid not in groups:
-            groups[pid] = {
+        if pid not in product_groups:
+            product_groups[pid] = {
                 "product_id":    pid,
                 "product_name":  row["product_name"],
                 "product_sku":   row["product_sku"],
                 "pcs_per_carton": row["pcs_per_carton"],
+                "category_name": row["category_name"],
                 "refreshed_at":  row["refreshed_at"],
-                "items":         [],
+                "rows":          [],
             }
-            order.append(pid)
-        groups[pid]["items"].append(dict(row))
+            product_order.append(pid)
+        product_groups[pid]["rows"].append(dict(row))
 
-    return tally, [groups[pid] for pid in order]
+    # Organise by category
+    categories    = {}
+    category_order = []
+    for pid in product_order:
+        group = product_groups[pid]
+        cat   = group["category_name"]
+        if cat not in categories:
+            categories[cat] = {"category_name": cat, "groups": []}
+            category_order.append(cat)
+        categories[cat]["groups"].append(group)
+
+    return tally, [categories[cat] for cat in category_order]
 
 
 def save_tally_items(tally_id, form_data):

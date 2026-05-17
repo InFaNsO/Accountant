@@ -34,11 +34,11 @@ def new_tally():
 @login_required
 @permission_required("products", "view")
 def tally_detail(tally_id):
-    tally, groups = tally_service.get_tally(tally_id)
+    tally, categories = tally_service.get_tally(tally_id)
     if not tally:
         flash("Tally not found.", "error")
         return redirect(url_for("tallies.list_tallies"))
-    return render_template("tallies/detail.html", tally=tally, groups=groups)
+    return render_template("tallies/detail.html", tally=tally, categories=categories)
 
 
 @bp.route("/<int:tally_id>/save", methods=["POST"])
