@@ -368,10 +368,12 @@ def create_product(
     min_quantity: float = 0.0,
     opening_stock: float = 0.0,
     category_id: int = None,
+    pcs_per_carton: int = 0,
 ) -> str:
     """
     Create a new product. ONLY call after explicit user confirmation.
     Use list_categories() to get valid category_id values.
+    pcs_per_carton: pieces per carton (inherited by all sub-products).
     """
     return _call("POST", "products", body={k: v for k, v in locals().items() if k != "self"})
 
@@ -387,10 +389,12 @@ def update_product(
     min_quantity: float = None,
     category_id: int = None,
     is_active: bool = True,
+    pcs_per_carton: int = None,
 ) -> str:
     """
     Update an existing product. ONLY call after explicit user confirmation.
     Pass None for numeric fields to keep existing values.
+    pcs_per_carton: pieces per carton (inherited by all sub-products). Pass None to keep existing.
     """
     return _call("PUT", f"products/{product_id}", body={k: v for k, v in locals().items() if k not in ("self", "product_id")})
 

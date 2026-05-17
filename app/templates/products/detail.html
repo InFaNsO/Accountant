@@ -28,6 +28,7 @@
         {{ row('Unit Price', product.unit_price|inr) }}
         {{ row('Tax Rate', product.tax_rate ~ '%') }}
         {{ row('Min Quantity', product.min_quantity if product.min_quantity else '—') }}
+        {{ row('Pcs / Carton', product.pcs_per_carton if product.pcs_per_carton else '—') }}
         {{ row('Status', 'Active' if product.is_active else 'Inactive') }}
         {% if product.description %}
         <tr>

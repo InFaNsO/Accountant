@@ -1125,11 +1125,12 @@ def create_product():
         cat = db.execute("SELECT id FROM categories WHERE id=?", (category_id,)).fetchone()
         if not cat:
             return jsonify({"error": f"Category ID {category_id} not found."}), 400
+    pcs_per_carton = int(data.get("pcs_per_carton") or 0)
     cur = db.execute(
         """INSERT INTO products (category_id, name, sku, description, unit_price, tax_rate,
-           track_inventory, stock_qty, min_quantity, is_active)
-           VALUES (?,?,?,?,?,?,1,?,?,1)""",
-        (category_id, name, sku, description, unit_price, tax_rate, opening_stock, min_quantity),
+           track_inventory, stock_qty, min_quantity, pcs_per_carton, is_active)
+           VALUES (?,?,?,?,?,?,1,?,?,?,1)""",
+        (category_id, name, sku, description, unit_price, tax_rate, opening_stock, min_quantity, pcs_per_carton),
     )
     product_id = cur.lastrowid
     if opening_stock > 0:
@@ -1161,11 +1162,13 @@ def update_product(product_id):
     new_tax = _f(tax_rate) if tax_rate is not None else _f(p["tax_rate"])
     new_min = _f(min_quantity) if min_quantity is not None else _f(p["min_quantity"])
     new_cat = category_id if category_id is not None else p["category_id"]
+    pcs_per_carton = data.get("pcs_per_carton")
+    new_pcs = int(pcs_per_carton) if pcs_per_carton is not None else int(p["pcs_per_carton"] or 0)
     db.execute(
         """UPDATE products SET category_id=?, name=?, sku=?, description=?,
-           unit_price=?, tax_rate=?, track_inventory=1, min_quantity=?, is_active=? WHERE id=?""",
+           unit_price=?, tax_rate=?, track_inventory=1, min_quantity=?, pcs_per_carton=?, is_active=? WHERE id=?""",
         (new_cat, name, data.get("sku") or None, data.get("description") or None,
-         new_price, new_tax, new_min, 1 if is_active else 0, product_id),
+         new_price, new_tax, new_min, new_pcs, 1 if is_active else 0, product_id),
     )
     db.execute("UPDATE sub_products SET tax_rate=? WHERE product_id=?", (new_tax, product_id))
     db.commit()

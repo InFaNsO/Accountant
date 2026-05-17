@@ -80,8 +80,8 @@ def create_product(data):
     cur = db.execute(
         """INSERT INTO products
                (category_id, name, sku, description, unit_price, tax_rate,
-                track_inventory, stock_qty, min_quantity, is_active)
-           VALUES (?,?,?,?,?,?,?,?,?,1)""",
+                track_inventory, stock_qty, min_quantity, pcs_per_carton, is_active)
+           VALUES (?,?,?,?,?,?,?,?,?,?,1)""",
         (
             data.get("category_id") or None,
             data["name"], data.get("sku"), data.get("description"),
@@ -90,6 +90,7 @@ def create_product(data):
             1,
             opening_qty,
             _to_float(data.get("min_quantity")),
+            int(data.get("pcs_per_carton") or 0),
         ),
     )
     product_id = cur.lastrowid
@@ -108,13 +109,14 @@ def update_product(product_id, data):
     db.execute(
         """UPDATE products SET category_id=?, name=?, sku=?, description=?,
                unit_price=?, tax_rate=?, track_inventory=1,
-               min_quantity=?, is_active=? WHERE id=?""",
+               min_quantity=?, pcs_per_carton=?, is_active=? WHERE id=?""",
         (
             data.get("category_id") or None,
             data["name"], data.get("sku"), data.get("description"),
             _to_float(data.get("unit_price")),
             new_tax,
             _to_float(data.get("min_quantity")),
+            int(data.get("pcs_per_carton") or 0),
             1 if data.get("is_active", True) else 0,
             product_id,
         ),

@@ -31,6 +31,7 @@
         {{ row('Tax Rate', (sub.tax_rate or product.tax_rate) ~ '%') }}
         {% set eff_min = sub.min_quantity or product.min_quantity or 0 %}
         {{ row('Min Quantity', eff_min if eff_min else '—') }}
+        {{ row('Pcs / Carton', product.pcs_per_carton ~ ' (inherited)' if product.pcs_per_carton else '—') }}
         {{ row('Status', 'Active' if sub.is_active else 'Inactive') }}
         {% if sub.description %}
         <tr>
