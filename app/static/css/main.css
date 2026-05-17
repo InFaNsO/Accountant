@@ -502,9 +502,125 @@ html.show-boxes .unit-toggle .unit-opt:last-child  { color:var(--text-muted); }
 .unit-knob { position:absolute;inset:0;width:50%;background:var(--accent);border-radius:inherit;transition:transform .2s ease;transform:translateX(100%); }
 html.show-boxes .unit-knob { transform:translateX(0); }
 
-/* ── Responsive ───────────────────────────────────────────── */
+/* ── Topbar left group (hamburger + title) ────────────────── */
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.topbar-left .page-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Hamburger button ─────────────────────────────────────── */
+#menuBtn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  transition: background .15s, color .15s;
+}
+#menuBtn:hover { background: var(--bg); color: var(--text-primary); }
+
+/* ── Sidebar overlay ──────────────────────────────────────── */
+#sidebarOverlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.45);
+  z-index: 199;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .25s;
+}
+
+/* ── Touch scrolling on tables ────────────────────────────── */
+.table-wrap { -webkit-overflow-scrolling: touch; }
+
+/* ── Responsive: Tablet + Mobile (≤ 900px) ────────────────── */
 @media (max-width: 900px) {
   .form-grid-2, .form-grid-3 { grid-template-columns: 1fr; }
   .form-group.span-2, .form-group.span-3 { grid-column: span 1; }
   .dashboard-grid, .detail-grid, .invoice-header-box { grid-template-columns: 1fr; }
+
+  /* Sidebar becomes off-canvas drawer */
+  .sidebar {
+    transform: translateX(-100%);
+    transition: transform .25s ease;
+    z-index: 200;
+  }
+  body.sidebar-open .sidebar { transform: translateX(0); }
+
+  /* Overlay becomes active */
+  #sidebarOverlay {
+    display: block;
+    pointer-events: none;
+  }
+  body.sidebar-open #sidebarOverlay {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* Main fills full width — no sidebar offset */
+  .main { margin-left: 0; }
+
+  /* Show hamburger */
+  #menuBtn { display: flex; }
+}
+
+@media (min-width: 901px) {
+  #sidebarOverlay { display: none !important; }
+}
+
+/* ── Responsive: Mobile only (≤ 640px) ───────────────────── */
+@media (max-width: 640px) {
+  /* Tighter topbar & content spacing */
+  .topbar { padding: 0 14px; }
+  .page-title { font-size: 15px; }
+  .content { padding: 14px; }
+  .flash-container { padding: 0 14px; }
+  .topbar-actions { gap: 6px; }
+
+  /* Cards */
+  .card-header { padding: 12px 14px; }
+  .card-body { padding: 14px; }
+
+  /* Form actions wrap on small screens */
+  .form-actions { flex-wrap: wrap; }
+
+  /* Tighter table cells */
+  thead th { padding: 8px 10px; font-size: 11px; }
+  tbody td { padding: 10px 10px; font-size: 12.5px; }
+
+  /* Invoice line-items: horizontal scroll block */
+  .line-items { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+  /* Ledger modal fills screen */
+  #ledgerModal > div {
+    width: 100vw !important;
+    max-height: 100dvh !important;
+    border-radius: 0 !important;
+    margin: 0 !important;
+  }
+
+  /* Ledger entry form: 2-col instead of 5-col */
+  #ledgerEntryForm > div {
+    grid-template-columns: 1fr 1fr !important;
+  }
+}
+
+/* ── Responsive: Small phones (≤ 480px) ──────────────────── */
+@media (max-width: 480px) {
+  .stats-grid { grid-template-columns: 1fr 1fr; gap: 12px; }
+  .stat-value { font-size: 22px; }
 }

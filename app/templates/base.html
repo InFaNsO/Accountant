@@ -13,6 +13,8 @@
 </head>
 <body>
 
+<div id="sidebarOverlay" onclick="closeSidebar()"></div>
+
 <!-- Sidebar -->
 <aside class="sidebar">
   <div class="sidebar-brand">
@@ -147,7 +149,14 @@
 <!-- Main -->
 <main class="main">
   <header class="topbar">
-    <h1 class="page-title">{% block page_title %}{% endblock %}</h1>
+    <div class="topbar-left">
+      <button id="menuBtn" onclick="toggleSidebar()" aria-label="Toggle navigation">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+        </svg>
+      </button>
+      <h1 class="page-title">{% block page_title %}{% endblock %}</h1>
+    </div>
     <div class="topbar-actions">
       {% block topbar_actions %}{% endblock %}
       <button class="dark-toggle" onclick="toggleDark()" title="Toggle dark mode" aria-label="Toggle dark mode">
@@ -185,6 +194,18 @@
 </main>
 
 <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+<script>
+function toggleSidebar() {
+  document.body.classList.toggle('sidebar-open');
+}
+function closeSidebar() {
+  document.body.classList.remove('sidebar-open');
+}
+// Close sidebar on nav item click (mobile)
+document.querySelectorAll('.nav-item').forEach(function(el) {
+  el.addEventListener('click', function() { closeSidebar(); });
+});
+</script>
 {% block scripts %}{% endblock %}
 
 <!-- ── Client Ledger modal ────────────────────────────────────────────────── -->
