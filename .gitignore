@@ -13,6 +13,7 @@ venv/
 # Database (never commit production data)
 data/ledger.db
 data/*.db
+data/ledger.db
 
 # Logs
 logs/
