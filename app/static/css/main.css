@@ -584,23 +584,37 @@ html.show-boxes .unit-knob { transform:translateX(0); }
 
 /* ── Responsive: Mobile only (≤ 640px) ───────────────────── */
 @media (max-width: 640px) {
+  /* Prevent page-level horizontal scroll */
+  html { overflow-x: hidden; }
+  .main { max-width: 100vw; overflow-x: hidden; }
+
   /* Tighter topbar & content spacing */
   .topbar { padding: 0 14px; }
-  .page-title { font-size: 15px; }
+  .page-title { font-size: 15px; max-width: 120px; }
   .content { padding: 14px; }
   .flash-container { padding: 0 14px; }
   .topbar-actions { gap: 6px; }
 
   /* Cards */
-  .card-header { padding: 12px 14px; }
+  .card-header { padding: 12px 14px; flex-wrap: wrap; gap: 8px; }
   .card-body { padding: 14px; }
 
   /* Form actions wrap on small screens */
   .form-actions { flex-wrap: wrap; }
 
   /* Tighter table cells */
-  thead th { padding: 8px 10px; font-size: 11px; }
-  tbody td { padding: 10px 10px; font-size: 12.5px; }
+  thead th { padding: 8px 6px; font-size: 11px; }
+  tbody td { padding: 10px 6px; font-size: 12.5px; }
+
+  /* Hide secondary table columns on mobile */
+  .col-mobile-hide { display: none !important; }
+
+  /* Hide long button labels on mobile — keep SVG icon visible */
+  .btn-label-mobile { display: none !important; }
+
+  /* Compact topbar action buttons */
+  .topbar-actions .btn { padding: 7px 10px; font-size: 13px; }
+  .topbar-actions .btn svg { width: 15px; height: 15px; }
 
   /* Invoice line-items: horizontal scroll block */
   .line-items { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -617,6 +631,10 @@ html.show-boxes .unit-knob { transform:translateX(0); }
   #ledgerEntryForm > div {
     grid-template-columns: 1fr 1fr !important;
   }
+
+  /* Invoice status bar wraps cleanly */
+  .invoice-status-bar { flex-direction: column; align-items: flex-start !important; gap: 10px !important; }
+  .invoice-status-bar .progress-bar-wrap { width: 100% !important; }
 }
 
 /* ── Responsive: Small phones (≤ 480px) ──────────────────── */

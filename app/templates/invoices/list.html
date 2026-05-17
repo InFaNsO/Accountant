@@ -30,10 +30,10 @@
         <tr>
           <th>Invoice #</th>
           <th>Client</th>
-          <th>Issue Date</th>
-          <th>Due Date</th>
+          <th class="col-mobile-hide">Issue Date</th>
+          <th class="col-mobile-hide">Due Date</th>
           <th>Total</th>
-          <th>Balance</th>
+          <th class="col-mobile-hide">Balance</th>
           <th>Status</th>
           <th></th>
         </tr>
@@ -54,10 +54,10 @@
             <a href="{{ url_for('clients.detail', client_id=inv.client_id) }}" style="font-weight:700;color:var(--accent);text-decoration:none">{{ inv.client_name }}</a>
             {% if inv.client_company %}<div class="muted" style="font-size:12px">{{ inv.client_company }}</div>{% endif %}
           </td>
-          <td class="muted">{{ inv.issue_date }}</td>
-          <td class="muted">{{ inv.due_date or '—' }}</td>
+          <td class="muted col-mobile-hide">{{ inv.issue_date }}</td>
+          <td class="muted col-mobile-hide">{{ inv.due_date or '—' }}</td>
           <td class="fw-700">{{ inv.total|inr }}</td>
-          <td onclick="showClientLedger({{ inv.client_id }}, {{ inv.client_name|tojson }})"
+          <td class="col-mobile-hide" onclick="showClientLedger({{ inv.client_id }}, {{ inv.client_name|tojson }})"
               style="cursor:pointer;{% if (inv.total - inv.amount_paid) > 0 %}color:var(--danger);font-weight:600{% else %}color:var(--success);font-weight:600{% endif %}"
               title="View client ledger">
             {{ (inv.total - inv.amount_paid)|inr }}

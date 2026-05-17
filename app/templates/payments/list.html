@@ -4,11 +4,11 @@
 {% block topbar_actions %}
   <a href="{{ url_for('payments.import_payments') }}" class="btn btn-secondary">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:15px;height:15px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-    Import from Statement
+    <span class="btn-label-mobile">Import from Statement</span>
   </a>
   <a href="{{ url_for('payments.new_payment') }}" class="btn btn-primary">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-    Record Payment
+    <span class="btn-label-mobile">Record Payment</span>
   </a>
 {% endblock %}
 
@@ -26,8 +26,8 @@
           <th>Date</th>
           <th>Client</th>
           <th>Invoice</th>
-          <th>Method</th>
-          <th>Reference</th>
+          <th class="col-mobile-hide">Method</th>
+          <th class="col-mobile-hide">Reference</th>
           <th style="text-align:right">Amount</th>
           <th></th>
         </tr>
@@ -47,8 +47,8 @@
               <span class="muted" style="font-size:12px;font-style:italic">{{ p.invoice_number }}</span>
             {% endif %}
           </td>
-          <td><span class="badge badge-sent" style="text-transform:capitalize">{{ p.method.replace('_',' ') }}</span></td>
-          <td class="muted font-mono">{{ p.reference or '—' }}</td>
+          <td class="col-mobile-hide"><span class="badge badge-sent" style="text-transform:capitalize">{{ p.method.replace('_',' ') }}</span></td>
+          <td class="muted font-mono col-mobile-hide">{{ p.reference or '—' }}</td>
           <td class="text-right fw-700" style="color:var(--success)">{{ p.amount|inr }}</td>
           <td>
             <form class="confirm-inline" method="post" action="{{ url_for('payments.delete_payment', payment_id=p.id) }}" onsubmit="return confirm('Delete this payment record?')">

@@ -22,8 +22,8 @@
           <th>Name / Company</th>
           {% if can_financials %}
           <th style="text-align:right">Balance</th>
-          <th style="text-align:right">Purchases (60d)</th>
-          <th style="text-align:right">Payments (60d)</th>
+          <th class="col-mobile-hide" style="text-align:right">Purchases (60d)</th>
+          <th class="col-mobile-hide" style="text-align:right">Payments (60d)</th>
           {% endif %}
           <th></th>
         </tr>
@@ -63,10 +63,10 @@
             {% endif %}
             </span>
           </td>
-          <td style="text-align:right;font-weight:600;">
+          <td class="col-mobile-hide" style="text-align:right;font-weight:600;">
             {{ c.purchases_60d|inr }}
           </td>
-          <td style="text-align:right;font-weight:600;color:var(--success)">
+          <td class="col-mobile-hide" style="text-align:right;font-weight:600;color:var(--success)">
             {{ c.payments_60d|inr }}
           </td>
           {% endif %}

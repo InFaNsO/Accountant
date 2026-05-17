@@ -4,11 +4,11 @@
 {% block topbar_actions %}
   <a href="{{ url_for('payments.new_payment') }}?invoice_id={{ invoice.id }}" class="btn btn-primary">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-    Record Payment
+    <span class="btn-label-mobile">Record Payment</span>
   </a>
   <a href="{{ url_for('invoices.edit_invoice', invoice_id=invoice.id) }}" class="btn btn-secondary">Edit</a>
   <form class="confirm-inline" method="post" action="{{ url_for('invoices.delete_invoice', invoice_id=invoice.id) }}" onsubmit="return confirm('Delete this invoice?')">
-    <button class="btn btn-danger">Delete</button>
+    <button class="btn btn-danger">Del</button>
   </form>
 {% endblock %}
 
@@ -16,7 +16,7 @@
 
 <!-- Status bar -->
 <div class="card" style="margin-bottom:18px">
-  <div class="card-body" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+  <div class="card-body invoice-status-bar" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
     <div style="display:flex;align-items:center;gap:12px">
       <span class="badge badge-{{ invoice.status }}" style="font-size:13px;padding:5px 14px">{{ invoice.status|upper }}</span>
       {% set balance = invoice.total - invoice.amount_paid %}
