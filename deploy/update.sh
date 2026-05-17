@@ -21,8 +21,10 @@ echo "[deploy] Creating logs directory if missing..."
 mkdir -p /home/ledger/app/logs
 chown ledger:ledger /home/ledger/app/logs 2>/dev/null || true
 
-echo "[deploy] Restarting service..."
+echo "[deploy] Restarting services..."
 sudo systemctl restart ledger
+sudo systemctl restart ledger-mcp
 
 echo "[deploy] Done — $(date)"
-systemctl is-active ledger && echo "[deploy] Service is RUNNING" || echo "[deploy] WARNING: service not running"
+systemctl is-active ledger && echo "[deploy] ledger: RUNNING" || echo "[deploy] WARNING: ledger not running"
+systemctl is-active ledger-mcp && echo "[deploy] ledger-mcp: RUNNING" || echo "[deploy] WARNING: ledger-mcp not running"

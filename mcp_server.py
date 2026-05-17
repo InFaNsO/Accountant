@@ -707,4 +707,10 @@ def apply_stock_tally(tally_id: int) -> str:
 # ═════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    mcp.run()
+    transport = os.environ.get("MCP_TRANSPORT", "stdio").lower()
+    if transport == "sse":
+        host = os.environ.get("MCP_HOST", "0.0.0.0")
+        port = int(os.environ.get("MCP_PORT", "8765"))
+        mcp.run(transport="sse", host=host, port=port)
+    else:
+        mcp.run()

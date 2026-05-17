@@ -41,7 +41,7 @@ fi
 # Allow nginx (www-data) to traverse the home directory to serve static files
 chmod 755 /home/$APP_USER
 # Allow ledger to restart its own service without a password
-echo "$APP_USER ALL=(ALL) NOPASSWD: /bin/systemctl restart ledger, /bin/systemctl start ledger, /bin/systemctl stop ledger" \
+echo "$APP_USER ALL=(ALL) NOPASSWD: /bin/systemctl restart ledger, /bin/systemctl start ledger, /bin/systemctl stop ledger, /bin/systemctl restart ledger-mcp, /bin/systemctl start ledger-mcp, /bin/systemctl stop ledger-mcp" \
     > /etc/sudoers.d/ledger
 chmod 440 /etc/sudoers.d/ledger
 
@@ -89,17 +89,28 @@ EOF
 chown $APP_USER:$APP_USER "$APP_DIR/.env"
 chmod 600 "$APP_DIR/.env"
 
-# ── 7. Systemd service ────────────────────────────────────────────────────────
-echo "[7/9] Installing systemd service..."
+# ── 7. Systemd services ───────────────────────────────────────────────────────
+echo "[7/9] Installing systemd services..."
+
+# Flask / Gunicorn
 cp "$APP_DIR/deploy/ledger.service" /etc/systemd/system/ledger.service
-# Inject the secret key into the service
 sed -i "s|SECRET_KEY=changeme|SECRET_KEY=$SECRET_KEY|g" /etc/systemd/system/ledger.service
 systemctl daemon-reload
 systemctl enable ledger
 systemctl start ledger
-echo "  Service started — checking status..."
+echo "  Flask service started — checking..."
 sleep 2
-systemctl is-active ledger && echo "  ledger service: RUNNING" || echo "  WARNING: service not running, check: journalctl -u ledger"
+systemctl is-active ledger && echo "  ledger: RUNNING" || echo "  WARNING: ledger not running, check: journalctl -u ledger"
+
+# MCP Server (SSE)
+cp "$APP_DIR/deploy/ledger-mcp.service" /etc/systemd/system/ledger-mcp.service
+sed -i "s|LEDGER_API_KEY=changeme|LEDGER_API_KEY=$MCP_API_KEY|g" /etc/systemd/system/ledger-mcp.service
+systemctl daemon-reload
+systemctl enable ledger-mcp
+systemctl start ledger-mcp
+echo "  MCP service started — checking..."
+sleep 2
+systemctl is-active ledger-mcp && echo "  ledger-mcp: RUNNING" || echo "  WARNING: ledger-mcp not running, check: journalctl -u ledger-mcp"
 
 # ── 8. Nginx ──────────────────────────────────────────────────────────────────
 echo "[8/9] Configuring Nginx..."
@@ -127,8 +138,10 @@ echo "========================================"
 echo "  Setup complete!"
 echo ""
 echo "  App URL   : https://$DOMAIN"
+echo "  MCP URL   : https://$DOMAIN/mcp/sse"
 echo "  App dir   : $APP_DIR"
 echo "  Logs      : journalctl -u ledger -f"
+echo "             journalctl -u ledger-mcp -f"
 echo ""
 echo "  IMPORTANT — Add this private key to GitHub Secrets"
 echo "  as DO_SSH_KEY (Settings > Secrets > Actions):"
