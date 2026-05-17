@@ -125,6 +125,7 @@ def create_app():
         from .routes.production import bp as production_bp
         from .routes.transit    import bp as transit_bp
         from .routes.api        import bp as api_bp
+        from .routes.tallies    import bp as tallies_bp
 
         app.register_blueprint(auth_bp)
         app.register_blueprint(users_bp)
@@ -137,6 +138,7 @@ def create_app():
         app.register_blueprint(production_bp)
         app.register_blueprint(transit_bp)
         app.register_blueprint(api_bp)
+        app.register_blueprint(tallies_bp)
 
     @app.errorhandler(403)
     def forbidden(e):

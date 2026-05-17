@@ -1,0 +1,308 @@
+{% extends "base.html" %}
+{% block title %}{{ tally.name }}{% endblock %}
+{% block page_title %}{{ tally.name }}{% endblock %}
+{% block topbar_actions %}
+  {% if tally.status == 'draft' %}
+  <button form="tallyForm" type="submit" id="saveBtn"
+          formaction="{{ url_for('tallies.save_tally', tally_id=tally.id) }}"
+          class="btn btn-secondary">Save</button>
+  {% endif %}
+  <a href="{{ url_for('tallies.list_tallies') }}" class="btn btn-secondary">Back</a>
+{% endblock %}
+
+{% block content %}
+<form method="post" id="tallyForm">
+
+  {# ── Meta card ──────────────────────────────────────────────────── #}
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-body" style="display:flex;align-items:center;gap:24px;flex-wrap:wrap;padding:14px 20px">
+      <div>
+        {% if tally.status == 'applied' %}
+        <span style="font-size:12px;background:rgba(16,185,129,.12);color:var(--success);padding:4px 12px;border-radius:20px;font-weight:700">✓ Applied</span>
+        {% else %}
+        <span style="font-size:12px;background:rgba(99,102,241,.12);color:var(--accent);padding:4px 12px;border-radius:20px;font-weight:700">● Draft</span>
+        {% endif %}
+      </div>
+      <div style="font-size:13px;color:var(--text-muted)">Created <strong style="color:var(--text)">{{ tally.created_at[:10] if tally.created_at else '—' }}</strong></div>
+      {% if tally.applied_at %}
+      <div style="font-size:13px;color:var(--text-muted)">Applied <strong style="color:var(--success)">{{ tally.applied_at[:10] }}</strong></div>
+      {% endif %}
+      {% if tally.notes %}
+      <div style="font-size:13px;color:var(--text-muted);flex:1">{{ tally.notes }}</div>
+      {% endif %}
+    </div>
+  </div>
+
+  {# ── Tally table ────────────────────────────────────────────────── #}
+  <div class="card" style="margin-bottom:80px">
+    <div class="card-body" style="padding:0">
+      <table style="width:100%;border-collapse:collapse">
+        <thead>
+          <tr style="border-bottom:2px solid var(--border)">
+            <th style="padding:11px 20px;text-align:left;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">Product / Sub-Product</th>
+            <th style="padding:11px 12px;text-align:left;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">SKU</th>
+            <th style="padding:11px 12px;text-align:right;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">Digital</th>
+            <th style="padding:11px 12px;text-align:right;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">Physical</th>
+            <th style="padding:11px 12px;text-align:right;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">Difference</th>
+            <th style="padding:11px 12px;text-align:center;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">Status</th>
+            <th style="padding:11px 16px;text-align:right;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">Action</th>
+          </tr>
+        </thead>
+
+        {% for group in groups %}
+          {% set is_leaf = (group.items | length == 1 and group.items[0].sub_id is none) %}
+
+          {% if is_leaf %}
+            {# ── Leaf product: single row with input ──────────────── #}
+            {% set item = group.items[0] %}
+            <tr class="tally-item-row"
+                data-product-id="{{ group.product_id }}"
+                data-item-id="{{ item.id }}"
+                data-digital="{{ item.digital_qty }}"
+                style="border-bottom:1px solid var(--border)">
+              <td style="padding:11px 20px;font-weight:600">{{ group.product_name }}</td>
+              <td style="padding:11px 12px;color:var(--text-muted);font-size:12px;font-family:monospace">{{ group.product_sku or '—' }}</td>
+              <td style="padding:11px 12px;text-align:right;font-family:monospace">{{ item.digital_qty | indian }}</td>
+              <td style="padding:8px 12px;text-align:right">
+                {% if tally.status == 'draft' %}
+                <input type="number" name="item_{{ item.id }}"
+                       value="{{ item.physical_qty if item.physical_qty is not none else '' }}"
+                       min="0" step="0.01" placeholder="—"
+                       class="physical-input"
+                       style="width:110px;text-align:right"
+                       oninput="updateItemRow(this)">
+                {% else %}
+                <span style="font-family:monospace">{{ item.physical_qty | indian if item.physical_qty is not none else '—' }}</span>
+                {% endif %}
+              </td>
+              <td class="diff-cell" style="padding:11px 12px;text-align:right;font-family:monospace;font-weight:600"></td>
+              <td style="padding:11px 12px;text-align:center">
+                <span class="status-badge" style="font-size:11px;padding:3px 9px;border-radius:20px;font-weight:600;white-space:nowrap"></span>
+              </td>
+              <td style="padding:8px 16px;text-align:right">
+                {% if tally.status == 'draft' %}
+                <button type="submit" form="tallyForm"
+                        formaction="{{ url_for('tallies.refresh_digital', tally_id=tally.id, product_id=group.product_id) }}"
+                        class="btn btn-secondary btn-sm" title="Refresh digital stock to current warehouse level">↻</button>
+                {% endif %}
+              </td>
+            </tr>
+            {% if item.refreshed_at %}
+            <tr style="border-bottom:1px solid var(--border)">
+              <td colspan="7" style="padding:2px 20px 6px;font-size:11px;color:var(--text-muted)">↻ Digital refreshed {{ item.refreshed_at[:16].replace('T',' ') }}</td>
+            </tr>
+            {% endif %}
+
+          {% else %}
+            {# ── Parent product: aggregate header row ─────────────── #}
+            <tr class="tally-parent-row"
+                data-product-id="{{ group.product_id }}"
+                style="border-bottom:1px solid var(--border);background:var(--bg-alt)">
+              <td style="padding:10px 20px;font-weight:700;font-size:13px" colspan="2">
+                ▾ {{ group.product_name }}
+              </td>
+              <td class="parent-digital" style="padding:10px 12px;text-align:right;font-weight:600;font-family:monospace">
+                {{ group.items | sum(attribute='digital_qty') | indian }}
+              </td>
+              <td class="parent-physical" style="padding:10px 12px;text-align:right;font-weight:600;font-family:monospace">
+                <span style="color:var(--text-muted)">—</span>
+              </td>
+              <td class="parent-diff" style="padding:10px 12px;text-align:right;font-weight:700;font-family:monospace">
+                <span style="color:var(--text-muted)">—</span>
+              </td>
+              <td style="padding:10px 12px;text-align:center">
+                <span style="font-size:11px;color:var(--text-muted)">Σ total</span>
+              </td>
+              <td style="padding:8px 16px;text-align:right">
+                {% if tally.status == 'draft' %}
+                <button type="submit" form="tallyForm"
+                        formaction="{{ url_for('tallies.refresh_digital', tally_id=tally.id, product_id=group.product_id) }}"
+                        class="btn btn-secondary btn-sm" title="Refresh digital stock to current warehouse levels for all sub-products">↻</button>
+                {% endif %}
+              </td>
+            </tr>
+            {% if group.refreshed_at %}
+            <tr style="background:var(--bg-alt)">
+              <td colspan="7" style="padding:2px 20px 5px;font-size:11px;color:var(--text-muted)">↻ Digital refreshed {{ group.refreshed_at[:16].replace('T',' ') }}</td>
+            </tr>
+            {% endif %}
+
+            {# ── Sub-product rows ─────────────────────────────────── #}
+            {% for item in group.items %}
+            <tr class="tally-item-row"
+                data-product-id="{{ group.product_id }}"
+                data-item-id="{{ item.id }}"
+                data-digital="{{ item.digital_qty }}"
+                style="border-bottom:1px solid var(--border)">
+              <td style="padding:10px 20px;padding-left:36px;color:var(--text)">{{ item.sub_name }}</td>
+              <td style="padding:10px 12px;color:var(--text-muted);font-size:12px;font-family:monospace">{{ item.sub_sku or '—' }}</td>
+              <td style="padding:10px 12px;text-align:right;font-family:monospace">{{ item.digital_qty | indian }}</td>
+              <td style="padding:7px 12px;text-align:right">
+                {% if tally.status == 'draft' %}
+                <input type="number" name="item_{{ item.id }}"
+                       value="{{ item.physical_qty if item.physical_qty is not none else '' }}"
+                       min="0" step="0.01" placeholder="—"
+                       class="physical-input"
+                       style="width:110px;text-align:right"
+                       oninput="updateItemRow(this)">
+                {% else %}
+                <span style="font-family:monospace">{{ item.physical_qty | indian if item.physical_qty is not none else '—' }}</span>
+                {% endif %}
+              </td>
+              <td class="diff-cell" style="padding:10px 12px;text-align:right;font-weight:600;font-family:monospace"></td>
+              <td style="padding:10px 12px;text-align:center">
+                <span class="status-badge" style="font-size:11px;padding:3px 9px;border-radius:20px;font-weight:600;white-space:nowrap"></span>
+              </td>
+              <td style="padding:10px 16px"></td>
+            </tr>
+            {% endfor %}
+          {% endif %}
+        {% endfor %}
+      </table>
+    </div>
+  </div>
+
+  {# ── Bottom action bar (draft only) ─────────────────────────────── #}
+  {% if tally.status == 'draft' %}
+  <div style="position:fixed;bottom:0;left:var(--sidebar-width,220px);right:0;background:var(--bg);border-top:1px solid var(--border);padding:12px 28px;display:flex;align-items:center;justify-content:space-between;z-index:100;gap:16px">
+    <div style="display:flex;gap:20px;font-size:13px">
+      <span style="color:var(--text-muted)">Summary:</span>
+      <span>✓ <strong id="sum-match">0</strong> match</span>
+      <span style="color:var(--success)">↑ <strong id="sum-add">0</strong> to add</span>
+      <span style="color:var(--danger)">↓ <strong id="sum-reduce">0</strong> to reduce</span>
+      <span style="color:var(--text-muted)">— <strong id="sum-pending">0</strong> pending</span>
+    </div>
+    <button type="submit" id="applyBtn"
+            formaction="{{ url_for('tallies.apply_tally', tally_id=tally.id) }}"
+            class="btn btn-primary"
+            style="white-space:nowrap"
+            disabled
+            title="Fill in all physical quantities before applying">
+      Apply Corrections →
+    </button>
+  </div>
+  {% endif %}
+
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function updateItemRow(input) {
+  const row    = input.closest('tr');
+  const digital = parseFloat(row.dataset.digital) || 0;
+  const val     = input.value.trim();
+  const diffCell    = row.querySelector('.diff-cell');
+  const statusBadge = row.querySelector('.status-badge');
+
+  if (val === '') {
+    diffCell.innerHTML = '<span style="color:var(--text-muted)">—</span>';
+    statusBadge.textContent = 'Pending';
+    statusBadge.style.cssText = 'font-size:11px;padding:3px 9px;border-radius:20px;font-weight:600;background:rgba(160,160,160,.12);color:var(--text-muted)';
+  } else {
+    const phys = parseFloat(val) || 0;
+    const diff = digital - phys;
+    if (Math.abs(diff) < 0.001) {
+      diffCell.innerHTML = '<span style="color:var(--text-muted)">✓</span>';
+      statusBadge.textContent = 'Match';
+      statusBadge.style.cssText = 'font-size:11px;padding:3px 9px;border-radius:20px;font-weight:600;background:rgba(16,185,129,.12);color:var(--success)';
+    } else if (diff > 0) {
+      diffCell.innerHTML = '<span style="color:var(--danger)">+' + formatIndian(diff) + '</span>';
+      statusBadge.textContent = '↓ Reduce';
+      statusBadge.style.cssText = 'font-size:11px;padding:3px 9px;border-radius:20px;font-weight:600;background:rgba(239,68,68,.12);color:var(--danger)';
+    } else {
+      diffCell.innerHTML = '<span style="color:var(--success)">' + formatIndian(Math.abs(diff)) + '</span>';
+      statusBadge.textContent = '↑ Add';
+      statusBadge.style.cssText = 'font-size:11px;padding:3px 9px;border-radius:20px;font-weight:600;background:rgba(16,185,129,.12);color:var(--success)';
+    }
+  }
+
+  updateParentRow(row.dataset.productId);
+  updateSummary();
+}
+
+function updateParentRow(productId) {
+  const parentRow = document.querySelector('.tally-parent-row[data-product-id="' + productId + '"]');
+  if (!parentRow) return;
+
+  const itemRows = document.querySelectorAll('.tally-item-row[data-product-id="' + productId + '"]');
+  let totalDigital = 0, totalPhysical = 0, totalDiff = 0, pending = 0;
+
+  itemRows.forEach(function(row) {
+    const digital = parseFloat(row.dataset.digital) || 0;
+    totalDigital += digital;
+    const input = row.querySelector('.physical-input');
+    if (input && input.value.trim() !== '') {
+      const phys = parseFloat(input.value) || 0;
+      totalPhysical += phys;
+      totalDiff += (digital - phys);
+    } else {
+      pending++;
+    }
+  });
+
+  parentRow.querySelector('.parent-digital').textContent = formatIndian(totalDigital);
+
+  if (pending > 0) {
+    parentRow.querySelector('.parent-physical').innerHTML = '<span style="color:var(--text-muted);font-size:12px">partial</span>';
+    parentRow.querySelector('.parent-diff').innerHTML = '<span style="color:var(--text-muted)">—</span>';
+  } else {
+    parentRow.querySelector('.parent-physical').textContent = formatIndian(totalPhysical);
+    const diffEl = parentRow.querySelector('.parent-diff');
+    if (Math.abs(totalDiff) < 0.001) {
+      diffEl.innerHTML = '<span style="color:var(--text-muted)">✓ 0</span>';
+    } else if (totalDiff > 0) {
+      diffEl.innerHTML = '<span style="color:var(--danger)">+' + formatIndian(totalDiff) + '</span>';
+    } else {
+      diffEl.innerHTML = '<span style="color:var(--success)">' + formatIndian(Math.abs(totalDiff)) + '</span>';
+    }
+  }
+}
+
+function updateSummary() {
+  let match = 0, add = 0, reduce = 0, pending = 0;
+  document.querySelectorAll('.tally-item-row').forEach(function(row) {
+    const input = row.querySelector('.physical-input');
+    if (!input) return;
+    if (input.value.trim() === '') {
+      pending++;
+    } else {
+      const digital = parseFloat(row.dataset.digital) || 0;
+      const phys    = parseFloat(input.value) || 0;
+      const diff    = digital - phys;
+      if (Math.abs(diff) < 0.001) match++;
+      else if (diff > 0) reduce++;
+      else add++;
+    }
+  });
+
+  document.getElementById('sum-match').textContent   = match;
+  document.getElementById('sum-add').textContent     = add;
+  document.getElementById('sum-reduce').textContent  = reduce;
+  document.getElementById('sum-pending').textContent = pending;
+
+  const applyBtn = document.getElementById('applyBtn');
+  if (applyBtn) {
+    applyBtn.disabled = pending > 0;
+    applyBtn.title = pending > 0
+      ? pending + ' item(s) still pending — fill in all physical quantities first'
+      : 'Apply corrections to match digital stock with physical count';
+  }
+}
+
+// Initialise all rows on page load
+document.addEventListener('DOMContentLoaded', function() {
+  document.querySelectorAll('.physical-input').forEach(updateItemRow);
+});
+
+// Dirty check for unsaved-changes modal
+window.__dirtyCheck = function() {
+  const inputs  = document.querySelectorAll('.physical-input');
+  const isDirty = Array.from(inputs).some(function(inp) { return inp.value !== inp.defaultValue; });
+  return {
+    isDirty: isDirty,
+    save: isDirty ? function() { document.getElementById('saveBtn').click(); } : null,
+  };
+};
+</script>
+{% endblock %}

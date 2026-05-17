@@ -337,6 +337,31 @@ def _create_schema(db):
         );
     """)
 
+    # ── Stock tallies ─────────────────────────────────────────
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS stock_tallies (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            name       TEXT NOT NULL,
+            notes      TEXT,
+            status     TEXT DEFAULT 'draft',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            applied_at TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS stock_tally_items (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            tally_id     INTEGER NOT NULL,
+            product_id   INTEGER NOT NULL,
+            sub_id       INTEGER,
+            digital_qty  REAL NOT NULL DEFAULT 0,
+            physical_qty REAL,
+            refreshed_at TIMESTAMP,
+            FOREIGN KEY (tally_id)   REFERENCES stock_tallies(id) ON DELETE CASCADE,
+            FOREIGN KEY (product_id) REFERENCES products(id),
+            FOREIGN KEY (sub_id)     REFERENCES sub_products(id)
+        );
+    """)
+
     # ── Column-level migrations for existing installs ─────────
     _add_column(db, "user_permissions",  "can_financials",  "INTEGER DEFAULT 0")
     _add_column(db, "clients",          "opening_balance", "REAL DEFAULT 0")
