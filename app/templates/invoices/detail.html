@@ -98,7 +98,7 @@
             <div class="fw-700">{{ item.description }}</div>
             {% if item.sku %}<div style="font-size:11px;color:var(--text-muted);font-family:'SF Mono','Fira Code',monospace;margin-top:2px">{{ item.sku }}</div>{% endif %}
           </td>
-          <td class="muted">{{ item.quantity }}</td>
+          <td class="muted">{{ item.quantity | indian }}</td>
           <td>{{ item.unit_price|inr }}</td>
           <td class="muted">{{ item.tax_rate }}%</td>
           <td class="text-right fw-700">{{ item.line_total|inr }}</td>

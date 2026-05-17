@@ -65,7 +65,7 @@
       </svg>
     </div>
     <div class="stat-label">Clients</div>
-    <div class="stat-value">{{ stats.total_clients }}</div>
+    <div class="stat-value">{{ stats.total_clients | indian }}</div>
     <div class="stat-sub">Total clients</div>
   </div>
   {% endif %}
@@ -80,7 +80,7 @@
       </svg>
     </div>
     <div class="stat-label">Overdue</div>
-    <div class="stat-value">{{ stats.overdue_count }}</div>
+    <div class="stat-value">{{ stats.overdue_count | indian }}</div>
     <div class="stat-sub">Invoices past due (current)</div>
   </div>
   {% endif %}
@@ -250,8 +250,8 @@
           {% endif %}
         </div>
         <div style="text-align:right;font-size:13px">
-          <span style="color:var(--danger);font-weight:700">{{ item.stock_qty }}</span>
-          <span style="color:var(--text-muted)"> / {{ item.get('min_quantity') or item.get('parent_min_qty') }}</span>
+          <span style="color:var(--danger);font-weight:700">{{ item.stock_qty | indian }}</span>
+          <span style="color:var(--text-muted)"> / {{ (item.get('min_quantity') or item.get('parent_min_qty')) | indian }}</span>
         </div>
       </li>
       {% endfor %}
@@ -276,7 +276,7 @@
           {% endif %}
         </div>
         <div style="text-align:right;font-size:13px">
-          <span style="color:var(--success);font-weight:700">{{ item.production_qty }}</span>
+          <span style="color:var(--success);font-weight:700">{{ item.production_qty | indian }}</span>
           <span style="color:var(--text-muted)"> in production</span>
         </div>
       </li>
@@ -302,7 +302,7 @@
           {% endif %}
         </div>
         <div style="text-align:right;font-size:13px">
-          <span style="color:var(--warning);font-weight:700">{{ item.in_transit_qty }}</span>
+          <span style="color:var(--warning);font-weight:700">{{ item.in_transit_qty | indian }}</span>
           <span style="color:var(--text-muted)"> in transit</span>
         </div>
       </li>

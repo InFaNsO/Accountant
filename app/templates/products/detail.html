@@ -27,8 +27,8 @@
         {{ row('SKU', product.sku or '—') }}
         {{ row('Unit Price', product.unit_price|inr) }}
         {{ row('Tax Rate', product.tax_rate ~ '%') }}
-        {{ row('Min Quantity', product.min_quantity if product.min_quantity else '—') }}
-        {{ row('Pcs / Carton', product.pcs_per_carton if product.pcs_per_carton else '—') }}
+        {{ row('Min Quantity', product.min_quantity | indian if product.min_quantity else '—') }}
+        {{ row('Pcs / Carton', product.pcs_per_carton | indian if product.pcs_per_carton else '—') }}
         {{ row('Status', 'Active' if product.is_active else 'Inactive') }}
         {% if product.description %}
         <tr>
@@ -47,16 +47,16 @@
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
         <div style="text-align:center;padding:14px;background:var(--bg-alt);border-radius:var(--radius-sm)">
           <div style="font-size:22px;font-weight:700;color:{% if product.min_quantity > 0 and product.stock_qty < product.min_quantity %}var(--danger){% elif product.min_quantity > 0 and product.stock_qty <= (product.min_quantity * 1.2) %}var(--warning){% else %}var(--success){% endif %}">
-            {{ product.stock_qty }}
+            {{ product.stock_qty | indian }}
           </div>
           <div style="font-size:11px;color:var(--text-muted);margin-top:2px">Available</div>
         </div>
         <div style="text-align:center;padding:14px;background:var(--bg-alt);border-radius:var(--radius-sm)">
-          <div style="font-size:22px;font-weight:700;color:var(--warning)">{{ product.production_qty or 0 }}</div>
+          <div style="font-size:22px;font-weight:700;color:var(--warning)">{{ product.production_qty | indian }}</div>
           <div style="font-size:11px;color:var(--text-muted);margin-top:2px">In Production</div>
         </div>
         <div style="text-align:center;padding:14px;background:var(--bg-alt);border-radius:var(--radius-sm)">
-          <div style="font-size:22px;font-weight:700;color:var(--primary)">{{ product.in_transit_qty or 0 }}</div>
+          <div style="font-size:22px;font-weight:700;color:var(--primary)">{{ product.in_transit_qty | indian }}</div>
           <div style="font-size:11px;color:var(--text-muted);margin-top:2px">In Transit</div>
         </div>
       </div>
@@ -113,11 +113,11 @@
             </div>
           </td>
           <td style="text-align:right">
-            <span style="font-weight:700;color:{{ stock_color }}">{{ s.stock_qty }}</span>
-            {% if min_qty > 0 %}<div style="font-size:10px;color:var(--text-muted)">min {{ min_qty }}</div>{% endif %}
+            <span style="font-weight:700;color:{{ stock_color }}">{{ s.stock_qty | indian }}</span>
+            {% if min_qty > 0 %}<div style="font-size:10px;color:var(--text-muted)">min {{ min_qty | indian }}</div>{% endif %}
           </td>
-          <td style="text-align:right;color:var(--primary);font-weight:600">{{ s.in_transit_qty or '—' }}</td>
-          <td style="text-align:right;color:var(--warning);font-weight:600">{{ s.production_qty or '—' }}</td>
+          <td style="text-align:right;color:var(--primary);font-weight:600">{{ s.in_transit_qty | indian if s.in_transit_qty else '—' }}</td>
+          <td style="text-align:right;color:var(--warning);font-weight:600">{{ s.production_qty | indian if s.production_qty else '—' }}</td>
           <td style="text-align:right" class="sub-editable" data-field="price" data-val="{{ '' if s.use_parent_price else s.unit_price }}" title="Double-click to edit" ondblclick="cellEdit(this)">
             {% if s.use_parent_price %}<span class="muted">↑ parent</span>{% else %}<span style="font-weight:600">{{ s.unit_price|inr }}</span>{% endif %}
           </td>
@@ -229,7 +229,7 @@
               {% endif %}
             </td>
             <td style="text-align:right;font-weight:700;color:{% if m.movement_type in ('sale','warehouse_deduct') %}#ef9a9a{% else %}var(--success){% endif %}">
-              {% if m.movement_type in ('sale','warehouse_deduct') %}-{% else %}+{% endif %}{{ m.quantity }}
+              {% if m.movement_type in ('sale','warehouse_deduct') %}-{% else %}+{% endif %}{{ m.quantity | indian }}
             </td>
             <td class="muted" style="font-size:12px">{{ m.notes or '—' }}</td>
           </tr>
@@ -259,7 +259,7 @@
                 <span class="badge" style="background:rgba(245,158,11,.15);color:#d97706">▲ {{ 'Added' if m.movement_type == 'production_add' else 'Sent to Production' }}</span>
               {% endif %}
             </td>
-            <td style="text-align:right;font-weight:700;color:var(--warning)">{{ m.quantity }}</td>
+            <td style="text-align:right;font-weight:700;color:var(--warning)">{{ m.quantity | indian }}</td>
             <td class="muted" style="font-size:12px">{{ m.notes or '—' }}</td>
           </tr>
           {% endfor %}
@@ -291,7 +291,7 @@
                 {% if m.dispatch_name %}<span class="muted" style="font-size:12px;margin-left:6px">{{ m.dispatch_name }}</span>{% endif %}
               {% endif %}
             </td>
-            <td style="text-align:right;font-weight:700;color:var(--primary)">{{ m.quantity }}</td>
+            <td style="text-align:right;font-weight:700;color:var(--primary)">{{ m.quantity | indian }}</td>
             <td class="muted" style="font-size:12px">{{ m.expected_arrival or '—' }}</td>
             <td class="muted" style="font-size:12px">{{ m.notes or '—' }}</td>
           </tr>

@@ -30,8 +30,8 @@
         {% endif %}
         {{ row('Tax Rate', (sub.tax_rate or product.tax_rate) ~ '%') }}
         {% set eff_min = sub.min_quantity or product.min_quantity or 0 %}
-        {{ row('Min Quantity', eff_min if eff_min else '—') }}
-        {{ row('Pcs / Carton', product.pcs_per_carton ~ ' (inherited)' if product.pcs_per_carton else '—') }}
+        {{ row('Min Quantity', eff_min | indian if eff_min else '—') }}
+        {{ row('Pcs / Carton', (product.pcs_per_carton | indian) ~ ' (inherited)' if product.pcs_per_carton else '—') }}
         {{ row('Status', 'Active' if sub.is_active else 'Inactive') }}
         {% if sub.description %}
         <tr>
@@ -51,16 +51,16 @@
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
         <div style="text-align:center;padding:14px;background:var(--bg-alt);border-radius:var(--radius-sm)">
           <div style="font-size:22px;font-weight:700;color:{% if eff_min > 0 and sub.stock_qty < eff_min %}var(--danger){% elif eff_min > 0 and sub.stock_qty <= (eff_min * 1.2) %}var(--warning){% else %}var(--success){% endif %}">
-            {{ sub.stock_qty }}
+            {{ sub.stock_qty | indian }}
           </div>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:2px">Available{% if eff_min > 0 %} / min {{ eff_min }}{% endif %}</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px">Available{% if eff_min > 0 %} / min {{ eff_min | indian }}{% endif %}</div>
         </div>
         <div style="text-align:center;padding:14px;background:var(--bg-alt);border-radius:var(--radius-sm)">
-          <div style="font-size:22px;font-weight:700;color:var(--warning)">{{ sub.production_qty or 0 }}</div>
+          <div style="font-size:22px;font-weight:700;color:var(--warning)">{{ sub.production_qty | indian }}</div>
           <div style="font-size:11px;color:var(--text-muted);margin-top:2px">In Production</div>
         </div>
         <div style="text-align:center;padding:14px;background:var(--bg-alt);border-radius:var(--radius-sm)">
-          <div style="font-size:22px;font-weight:700;color:var(--primary)">{{ sub.in_transit_qty or 0 }}</div>
+          <div style="font-size:22px;font-weight:700;color:var(--primary)">{{ sub.in_transit_qty | indian }}</div>
           <div style="font-size:11px;color:var(--text-muted);margin-top:2px">In Transit</div>
         </div>
       </div>
@@ -158,7 +158,7 @@
               {% endif %}
             </td>
             <td style="text-align:right;font-weight:700;color:{% if m.movement_type in ('sale','warehouse_deduct') %}#ef9a9a{% else %}var(--success){% endif %}">
-              {% if m.movement_type in ('sale','warehouse_deduct') %}-{% else %}+{% endif %}{{ m.quantity }}
+              {% if m.movement_type in ('sale','warehouse_deduct') %}-{% else %}+{% endif %}{{ m.quantity | indian }}
             </td>
             <td class="muted" style="font-size:12px">{{ m.notes or '—' }}</td>
           </tr>
@@ -188,7 +188,7 @@
                 <span class="badge" style="background:rgba(245,158,11,.15);color:#d97706">▲ {{ 'Added' if m.movement_type == 'production_add' else 'Sent to Production' }}</span>
               {% endif %}
             </td>
-            <td style="text-align:right;font-weight:700;color:var(--warning)">{{ m.quantity }}</td>
+            <td style="text-align:right;font-weight:700;color:var(--warning)">{{ m.quantity | indian }}</td>
             <td class="muted" style="font-size:12px">{{ m.notes or '—' }}</td>
           </tr>
           {% endfor %}
@@ -220,7 +220,7 @@
                 {% if m.dispatch_name %}<span class="muted" style="font-size:12px;margin-left:6px">{{ m.dispatch_name }}</span>{% endif %}
               {% endif %}
             </td>
-            <td style="text-align:right;font-weight:700;color:var(--primary)">{{ m.quantity }}</td>
+            <td style="text-align:right;font-weight:700;color:var(--primary)">{{ m.quantity | indian }}</td>
             <td class="muted" style="font-size:12px">{{ m.expected_arrival or '—' }}</td>
             <td class="muted" style="font-size:12px">{{ m.notes or '—' }}</td>
           </tr>

@@ -10,6 +10,20 @@ login_manager.login_message   = "Please sign in to continue."
 login_manager.login_message_category = "error"
 
 
+def _indian_commas(integer_str: str) -> str:
+    """Apply Indian comma grouping to a string of digits: '1000000' → '10,00,000'"""
+    if len(integer_str) <= 3:
+        return integer_str
+    last_three = integer_str[-3:]
+    remaining  = integer_str[:-3]
+    groups = []
+    while remaining:
+        groups.append(remaining[-2:])
+        remaining = remaining[:-2]
+    groups.reverse()
+    return ",".join(groups) + "," + last_three
+
+
 def _format_inr(value):
     """Format a number in Indian currency style: ₹10,00,00,000.00"""
     try:
@@ -18,19 +32,28 @@ def _format_inr(value):
         num = 0.0
     negative = num < 0
     integer_part, decimal_part = f"{abs(num):.2f}".split(".")
-    if len(integer_part) <= 3:
-        formatted = integer_part
-    else:
-        last_three = integer_part[-3:]
-        remaining  = integer_part[:-3]
-        groups = []
-        while remaining:
-            groups.append(remaining[-2:])
-            remaining = remaining[:-2]
-        groups.reverse()
-        formatted = ",".join(groups) + "," + last_three
-    result = f"₹{formatted}.{decimal_part}"
+    result = f"₹{_indian_commas(integer_part)}.{decimal_part}"
     return f"-{result}" if negative else result
+
+
+def _format_indian(value):
+    """Format a quantity with Indian comma grouping, no currency symbol.
+    Whole numbers show no decimal; fractional values show up to 2 d.p.
+    Examples: 100000 → '1,00,000'   1234.5 → '1,234.50'
+    """
+    try:
+        num = float(value or 0)
+    except (TypeError, ValueError):
+        return str(value or 0)
+    negative = num < 0
+    abs_num  = abs(num)
+    if abs_num == int(abs_num):
+        integer_part = str(int(abs_num))
+        formatted    = _indian_commas(integer_part)
+    else:
+        integer_part, decimal_part = f"{abs_num:.2f}".split(".")
+        formatted = _indian_commas(integer_part) + "." + decimal_part
+    return f"-{formatted}" if negative else formatted
 
 
 def create_app():
@@ -41,6 +64,7 @@ def create_app():
     )
 
     app.jinja_env.filters["inr"]       = _format_inr
+    app.jinja_env.filters["indian"]    = _format_indian
     app.jinja_env.filters["enumerate"] = enumerate
 
     @app.context_processor

@@ -66,10 +66,10 @@
           <span>Price: <strong style="color:var(--text)">{{ p.unit_price|inr }}</strong></span>
           <span>Tax: {{ p.tax_rate }}%</span>
           {% if not subs %}
-          <span>Stock: <strong style="color:{{ p_color }}">{{ p.stock_qty }}</strong>{% if p.min_quantity > 0 %}<span style="color:var(--text-muted)"> / min {{ p.min_quantity }}</span>{% endif %}</span>
+          <span>Stock: <strong style="color:{{ p_color }}">{{ p.stock_qty | indian }}</strong>{% if p.min_quantity > 0 %}<span style="color:var(--text-muted)"> / min {{ p.min_quantity | indian }}</span>{% endif %}</span>
           {% endif %}
-          {% if p.production_qty > 0 %}<span style="color:var(--warning)">In production: {{ p.production_qty }}</span>{% endif %}
-          {% if p.in_transit_qty > 0 %}<span style="color:var(--primary)">In transit: {{ p.in_transit_qty }}</span>{% endif %}
+          {% if p.production_qty > 0 %}<span style="color:var(--warning)">In production: {{ p.production_qty | indian }}</span>{% endif %}
+          {% if p.in_transit_qty > 0 %}<span style="color:var(--primary)">In transit: {{ p.in_transit_qty | indian }}</span>{% endif %}
         </div>
       </div>
       <div style="display:flex;gap:6px;flex-shrink:0">
@@ -108,9 +108,9 @@
             {% else %}
               <span>Price: <strong style="color:var(--text)">{{ s.unit_price|inr }}</strong></span>
             {% endif %}
-            <span>Stock: <strong style="color:{{ s_color }}">{{ s.stock_qty }}</strong>{% if min_q > 0 %}<span style="color:var(--text-muted)"> / min {{ min_q }}</span>{% endif %}</span>
-            {% if s.production_qty > 0 %}<span style="color:var(--warning)">In production: {{ s.production_qty }}</span>{% endif %}
-            {% if s.in_transit_qty > 0 %}<span style="color:var(--primary)">In transit: {{ s.in_transit_qty }}</span>{% endif %}
+            <span>Stock: <strong style="color:{{ s_color }}">{{ s.stock_qty | indian }}</strong>{% if min_q > 0 %}<span style="color:var(--text-muted)"> / min {{ min_q | indian }}</span>{% endif %}</span>
+            {% if s.production_qty > 0 %}<span style="color:var(--warning)">In production: {{ s.production_qty | indian }}</span>{% endif %}
+            {% if s.in_transit_qty > 0 %}<span style="color:var(--primary)">In transit: {{ s.in_transit_qty | indian }}</span>{% endif %}
           </div>
         </div>
         <div style="display:flex;gap:6px;flex-shrink:0">
