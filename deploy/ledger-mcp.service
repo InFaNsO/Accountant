@@ -13,6 +13,7 @@ Environment="PATH=/home/ledger/app/venv/bin"
 Environment="LEDGER_API_URL=http://127.0.0.1:5000"
 Environment="LEDGER_API_KEY=changeme"
 Environment="MCP_TRANSPORT=sse"
+Environment="FASTMCP_TRANSPORT_SECURITY__ENABLE_DNS_REBINDING_PROTECTION=false"
 
 ExecStart=/home/ledger/app/venv/bin/python mcp_server.py
 
