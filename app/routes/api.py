@@ -1826,3 +1826,128 @@ def delete_dispatch(dispatch_id):
     db.execute("DELETE FROM dispatches WHERE id=?", (dispatch_id,))
     db.commit()
     return jsonify({"result": f"✓ Dispatch DISP-{dispatch_id:04d} ('{d['name']}') permanently deleted and stock movements reversed."})
+
+
+# ─── Stock Tallies ────────────────────────────────────────────────────────────
+
+@api_bp.route("/tallies", methods=["GET"])
+@require_auth
+def list_tallies_api():
+    db = get_db()
+    rows = db.execute("SELECT * FROM stock_tallies ORDER BY created_at DESC").fetchall()
+    out = []
+    for t in rows:
+        total = db.execute(
+            "SELECT COUNT(*) FROM stock_tally_items WHERE tally_id=?", (t["id"],)
+        ).fetchone()[0]
+        pending = db.execute(
+            "SELECT COUNT(*) FROM stock_tally_items WHERE tally_id=? AND physical_qty IS NULL",
+            (t["id"],),
+        ).fetchone()[0]
+        out.append({
+            "id": t["id"],
+            "name": t["name"],
+            "status": t["status"],
+            "notes": t["notes"],
+            "created_at": t["created_at"],
+            "applied_at": t["applied_at"],
+            "total_items": total,
+            "pending_items": pending,
+        })
+    return jsonify(out)
+
+
+@api_bp.route("/tallies/<int:tally_id>", methods=["GET"])
+@require_auth
+def get_tally_api(tally_id):
+    from ..services.tally_service import get_tally
+    tally, categories = get_tally(tally_id)
+    if not tally:
+        return jsonify({"error": "Tally not found"}), 404
+
+    cat_list = []
+    for cat in categories:
+        groups_out = []
+        for g in cat["groups"]:
+            items_out = []
+            for row in g["rows"]:
+                diff = None
+                if row["physical_qty"] is not None:
+                    diff = (row["physical_qty"] or 0) - (row["digital_qty"] or 0)
+                items_out.append({
+                    "item_id": row["id"],
+                    "sub_id": row["sub_id"],
+                    "sub_name": row["sub_name"],
+                    "sub_sku": row["sub_sku"],
+                    "digital_qty": row["digital_qty"],
+                    "physical_qty": row["physical_qty"],
+                    "diff": diff,
+                    "refreshed_at": row["refreshed_at"],
+                })
+            groups_out.append({
+                "product_id": g["product_id"],
+                "product_name": g["product_name"],
+                "product_sku": g["product_sku"],
+                "pcs_per_carton": g["pcs_per_carton"],
+                "items": items_out,
+            })
+        cat_list.append({"category_name": cat["category_name"], "groups": groups_out})
+
+    return jsonify({
+        "id": tally["id"],
+        "name": tally["name"],
+        "status": tally["status"],
+        "notes": tally["notes"],
+        "created_at": tally["created_at"],
+        "applied_at": tally["applied_at"],
+        "categories": cat_list,
+    })
+
+
+@api_bp.route("/tallies", methods=["POST"])
+@require_auth
+def create_tally_api():
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "name is required"}), 400
+    notes = (data.get("notes") or "").strip() or None
+    from ..services.tally_service import create_tally
+    tally_id = create_tally(name, notes)
+    return jsonify({"tally_id": tally_id, "result": f"Tally '{name}' created with id {tally_id}."})
+
+
+@api_bp.route("/tallies/<int:tally_id>/items/<int:item_id>", methods=["PUT"])
+@require_auth
+def update_tally_item_api(tally_id, item_id):
+    db = get_db()
+    tally = db.execute("SELECT status FROM stock_tallies WHERE id=?", (tally_id,)).fetchone()
+    if not tally:
+        return jsonify({"error": "Tally not found"}), 404
+    if tally["status"] != "draft":
+        return jsonify({"error": "Tally is not a draft — cannot update items"}), 400
+    data = request.get_json(silent=True) or {}
+    if "physical_qty" not in data:
+        return jsonify({"error": "physical_qty is required"}), 400
+    val = data["physical_qty"]
+    if val is not None:
+        try:
+            val = float(val)
+        except (TypeError, ValueError):
+            return jsonify({"error": "physical_qty must be a number or null"}), 400
+    db.execute(
+        "UPDATE stock_tally_items SET physical_qty=? WHERE id=? AND tally_id=?",
+        (val, item_id, tally_id),
+    )
+    db.commit()
+    return jsonify({"result": f"Item {item_id} updated — physical_qty set to {val}."})
+
+
+@api_bp.route("/tallies/<int:tally_id>/apply", methods=["POST"])
+@require_auth
+def apply_tally_api(tally_id):
+    from ..services.tally_service import apply_tally
+    ok, err = apply_tally(tally_id)
+    if not ok:
+        return jsonify({"error": err}), 400
+    return jsonify({"result": f"Tally {tally_id} applied — stock quantities updated to match physical counts."})

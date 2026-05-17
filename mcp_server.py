@@ -648,6 +648,61 @@ def delete_dispatch(dispatch_id: int) -> str:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# STOCK TALLIES
+# ═════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def list_stock_tallies() -> str:
+    """
+    List all stock tallies (physical inventory counts).
+    Returns id, name, status (draft/applied), created_at, total_items, pending_items.
+    """
+    return _call("GET", "tallies")
+
+
+@mcp.tool()
+def get_stock_tally_detail(tally_id: int) -> str:
+    """
+    Get full detail of a stock tally including all line items grouped by category.
+    Each item shows: item_id, product/sub name, digital_qty (system stock),
+    physical_qty (counted), and diff (physical - digital, null if not yet counted).
+    Use item_id values with update_tally_item_count to record physical counts.
+    """
+    return _call("GET", f"tallies/{tally_id}")
+
+
+@mcp.tool()
+def create_stock_tally(name: str, notes: str = "") -> str:
+    """
+    Create a new stock tally (physical inventory count session).
+    Snapshots current warehouse stock quantities for all active products.
+    Returns the new tally_id. Status starts as 'draft'.
+    """
+    return _call("POST", "tallies", body={"name": name, "notes": notes})
+
+
+@mcp.tool()
+def update_tally_item_count(tally_id: int, item_id: int, physical_qty: float) -> str:
+    """
+    Record the physical counted quantity for one item in a stock tally.
+    tally_id: the tally being worked on (must be in draft status).
+    item_id: the item_id from get_stock_tally_detail response.
+    physical_qty: the physically counted quantity (use 0 if item is out of stock).
+    """
+    return _call("PUT", f"tallies/{tally_id}/items/{item_id}", body={"physical_qty": physical_qty})
+
+
+@mcp.tool()
+def apply_stock_tally(tally_id: int) -> str:
+    """
+    Apply a completed stock tally — adjusts all warehouse stock quantities to match
+    physical counts and marks the tally as applied. All items must have physical_qty
+    filled in before applying. This action is irreversible — confirm with user first.
+    """
+    return _call("POST", f"tallies/{tally_id}/apply")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # ENTRY POINT
 # ═════════════════════════════════════════════════════════════════════════════
 
