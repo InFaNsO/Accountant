@@ -2,7 +2,6 @@
 Description=Ledger — MCP Server (SSE)
 Documentation=https://github.com/InFaNsO/Accountant
 After=network.target ledger.service
-Requires=ledger.service
 
 [Service]
 Type=simple
@@ -14,8 +13,6 @@ Environment="PATH=/home/ledger/app/venv/bin"
 Environment="LEDGER_API_URL=http://127.0.0.1:5000"
 Environment="LEDGER_API_KEY=changeme"
 Environment="MCP_TRANSPORT=sse"
-Environment="FASTMCP_HOST=127.0.0.1"
-Environment="FASTMCP_PORT=8765"
 
 ExecStart=/home/ledger/app/venv/bin/python mcp_server.py
 
