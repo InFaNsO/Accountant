@@ -11,31 +11,45 @@
 
 {% block content %}
 {% if groups %}
-<div style="margin-bottom:14px;display:flex;gap:10px;align-items:center">
+<div style="margin-bottom:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
   <input type="search" id="productSearch" placeholder="Search products, sub-products or SKU…"
          oninput="filterProducts(this.value)"
          style="max-width:360px;width:100%">
   <span id="productCount" style="font-size:13px;color:var(--text-muted)"></span>
+  <div style="margin-left:auto;flex-shrink:0">
+    <div class="stock-unit-pill">
+      <button class="unit-btn" data-unit="boxes" onclick="setStockUnit('boxes')">Boxes</button>
+      <button class="unit-btn" data-unit="pcs" onclick="setStockUnit('pcs')">Pcs</button>
+    </div>
+  </div>
 </div>
+
   {% set ns = namespace(current_cat=None, cat_id=0) %}
   {% for g in groups %}
     {% set p = g.product %}
     {% set subs = g.subs %}
 
     {% if p.category_name != ns.current_cat %}
-      {% if ns.current_cat is not none %}</div>{% endif %}
+      {% if ns.current_cat is not none %}
+        </div><!-- /cat-body -->
+      </div><!-- /card -->
+      {% endif %}
       {% set ns.current_cat = p.category_name %}
       {% set ns.cat_id = ns.cat_id + 1 %}
       <div class="card" style="margin-bottom:18px">
-        <div class="card-header" style="background:var(--bg-alt)">
-          <span class="card-title" style="font-size:13px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted)">
-            {{ p.category_name or 'Uncategorised' }}
-          </span>
-          <div class="cat-ctrl" data-cat="{{ ns.cat_id }}" style="display:flex;gap:6px">
-            <button class="btn btn-secondary btn-sm" onclick="setCatExpand({{ ns.cat_id }}, true)">Expand All</button>
-            <button class="btn btn-secondary btn-sm" onclick="setCatExpand({{ ns.cat_id }}, false)">Collapse All</button>
+        <div class="card-header" style="background:var(--bg-alt);cursor:pointer;user-select:none" onclick="toggleCat({{ ns.cat_id }})">
+          <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0">
+            <span id="cat-chev-{{ ns.cat_id }}" style="font-size:11px;color:var(--text-muted);flex-shrink:0;width:12px">▶</span>
+            <span class="card-title" style="font-size:13px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted)">
+              {{ p.category_name or 'Uncategorised' }}
+            </span>
+          </div>
+          <div class="cat-ctrl" data-cat="{{ ns.cat_id }}" style="display:none;gap:6px">
+            <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();setCatExpand({{ ns.cat_id }}, true)">Expand All</button>
+            <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();setCatExpand({{ ns.cat_id }}, false)">Collapse All</button>
           </div>
         </div>
+        <div id="cat-body-{{ ns.cat_id }}" style="display:none">
     {% endif %}
 
     {% set p_color =
@@ -44,89 +58,97 @@
       'var(--success)'
     %}
 
-    <!-- Product row -->
-    <div class="product-row" data-search="{{ p.name|lower }} {{ (p.sku or '')|lower }} {{ (p.category_name or '')|lower }}"
-         style="display:flex;align-items:center;gap:8px;padding:14px 20px;border-bottom:1px solid var(--border)">
-      {% if subs %}
-      <button class="sub-toggle" data-pid="{{ p.id }}" data-cat="{{ ns.cat_id }}"
-              onclick="toggleSubs({{ p.id }})"
-              style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:13px;padding:2px 4px;flex-shrink:0;line-height:1"
-              title="Toggle sub-products">▼</button>
-      {% else %}
-      <span style="width:20px;flex-shrink:0"></span>
-      {% endif %}
-      <div style="flex:1;min-width:0">
-        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-          <a href="{{ url_for('products.product_detail', product_id=p.id) }}"
-             style="font-weight:700;font-size:15px;color:var(--text);text-decoration:none">{{ p.name }}</a>
-          {% if p.sku %}<span class="muted font-mono" style="font-size:12px">{{ p.sku }}</span>{% endif %}
-          <span class="badge badge-{{ 'active' if p.is_active else 'inactive' }}">{{ 'Active' if p.is_active else 'Inactive' }}</span>
-        </div>
-        <div style="display:flex;gap:24px;margin-top:4px;font-size:13px;color:var(--text-muted);flex-wrap:wrap">
-          <span>Price: <strong style="color:var(--text)">{{ p.unit_price|inr }}</strong></span>
-          <span>Tax: {{ p.tax_rate }}%</span>
-          {% if not subs %}
-          <span>Stock: <strong style="color:{{ p_color }}">{{ p.stock_qty | indian }}</strong>{% if p.min_quantity > 0 %}<span style="color:var(--text-muted)"> / min {{ p.min_quantity | indian }}</span>{% endif %}</span>
-          {% endif %}
-          {% if p.production_qty > 0 %}<span style="color:var(--warning)">In production: {{ p.production_qty | indian }}</span>{% endif %}
-          {% if p.in_transit_qty > 0 %}<span style="color:var(--primary)">In transit: {{ p.in_transit_qty | indian }}</span>{% endif %}
-        </div>
-      </div>
-      <div style="display:flex;gap:6px;flex-shrink:0">
-        <a href="{{ url_for('products.new_sub_product', product_id=p.id) }}" class="btn btn-secondary btn-sm">+ Sub</a>
-        <a href="{{ url_for('products.edit_product', product_id=p.id) }}" class="btn btn-secondary btn-sm">Edit</a>
-        <form method="post" action="{{ url_for('products.delete_product', product_id=p.id) }}"
-              onsubmit="return confirm('Delete {{ p.name }} and all its sub-products?')">
-          <button class="btn btn-danger btn-sm">Delete</button>
-        </form>
-      </div>
-    </div>
+    <!-- Product block (data-ppb for unit conversion; inherited by all sub-products) -->
+    <div class="product-block" data-ppb="{{ p.pcs_per_carton or 0 }}">
 
-    {% if subs %}
-    <div id="sub-group-{{ p.id }}" class="sub-group" data-cat="{{ ns.cat_id }}">
-      {% for s in subs %}
-      {% set min_q = s.min_quantity if s.min_quantity > 0 else p.min_quantity %}
-      {% set s_color =
-        'var(--danger)'  if min_q > 0 and s.stock_qty < min_q else
-        'var(--warning)' if min_q > 0 and s.stock_qty <= (min_q * 1.2) else
-        'var(--success)'
-      %}
-      <div style="display:flex;align-items:center;gap:8px;padding:10px 20px 10px 52px;border-bottom:1px solid var(--border);background:var(--bg-alt)">
+      <!-- Product row -->
+      <div class="product-row" data-search="{{ p.name|lower }} {{ (p.sku or '')|lower }} {{ (p.category_name or '')|lower }}"
+           style="display:flex;align-items:center;gap:8px;padding:14px 20px;border-bottom:1px solid var(--border)">
+        {% if subs %}
+        <button class="sub-toggle" data-pid="{{ p.id }}" data-cat="{{ ns.cat_id }}"
+                onclick="toggleSubs({{ p.id }})"
+                style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:13px;padding:2px 4px;flex-shrink:0;line-height:1"
+                title="Toggle sub-products">▶</button>
+        {% else %}
+        <span style="width:20px;flex-shrink:0"></span>
+        {% endif %}
         <div style="flex:1;min-width:0">
-          <div class="sub-search-text" data-search="{{ s.name|lower }} {{ (s.sku or '')|lower }}" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-            <span style="color:var(--text-muted);font-size:12px">↳</span>
-            <a href="{{ url_for('products.sub_detail', product_id=p.id, sub_id=s.id) }}"
-               style="font-weight:600;font-size:14px;color:var(--text);text-decoration:none"
-               onmouseover="this.style.color='var(--accent)';this.style.textDecoration='underline'"
-               onmouseout="this.style.color='var(--text)';this.style.textDecoration='none'">{{ s.name }}</a>
-            {% if s.sku %}<span class="muted font-mono" style="font-size:12px">{{ s.sku }}</span>{% endif %}
-            {% if not s.is_active %}<span class="badge badge-inactive">Inactive</span>{% endif %}
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <a href="{{ url_for('products.product_detail', product_id=p.id) }}"
+               style="font-weight:700;font-size:15px;color:var(--text);text-decoration:none">{{ p.name }}</a>
+            {% if p.sku %}<span class="muted font-mono" style="font-size:12px">{{ p.sku }}</span>{% endif %}
+            <span class="badge badge-{{ 'active' if p.is_active else 'inactive' }}">{{ 'Active' if p.is_active else 'Inactive' }}</span>
           </div>
-          <div style="display:flex;gap:20px;margin-top:3px;font-size:12px;color:var(--text-muted);flex-wrap:wrap">
-            {% if s.use_parent_price %}
-              <span>Price: <em>parent ({{ p.unit_price|inr }})</em></span>
-            {% else %}
-              <span>Price: <strong style="color:var(--text)">{{ s.unit_price|inr }}</strong></span>
+          <div style="display:flex;gap:24px;margin-top:4px;font-size:13px;color:var(--text-muted);flex-wrap:wrap">
+            <span>Price: <strong style="color:var(--text)">{{ p.unit_price|inr }}</strong></span>
+            <span>Tax: {{ p.tax_rate }}%</span>
+            {% if not subs %}
+            <span>Stock: <strong data-pcs="{{ p.stock_qty }}" style="color:{{ p_color }}">{{ p.stock_qty | indian }}</strong>{% if p.min_quantity > 0 %}<span style="color:var(--text-muted)"> / min <span data-pcs="{{ p.min_quantity }}">{{ p.min_quantity | indian }}</span></span>{% endif %}</span>
             {% endif %}
-            <span>Stock: <strong style="color:{{ s_color }}">{{ s.stock_qty | indian }}</strong>{% if min_q > 0 %}<span style="color:var(--text-muted)"> / min {{ min_q | indian }}</span>{% endif %}</span>
-            {% if s.production_qty > 0 %}<span style="color:var(--warning)">In production: {{ s.production_qty | indian }}</span>{% endif %}
-            {% if s.in_transit_qty > 0 %}<span style="color:var(--primary)">In transit: {{ s.in_transit_qty | indian }}</span>{% endif %}
+            {% if p.production_qty > 0 %}<span style="color:var(--warning)">In production: <span data-pcs="{{ p.production_qty }}">{{ p.production_qty | indian }}</span></span>{% endif %}
+            {% if p.in_transit_qty > 0 %}<span style="color:var(--primary)">In transit: <span data-pcs="{{ p.in_transit_qty }}">{{ p.in_transit_qty | indian }}</span></span>{% endif %}
           </div>
         </div>
         <div style="display:flex;gap:6px;flex-shrink:0">
-          <a href="{{ url_for('products.edit_sub_product', product_id=p.id, sub_id=s.id) }}" class="btn btn-secondary btn-sm">Edit</a>
-          <form method="post" action="{{ url_for('products.delete_sub_product', product_id=p.id, sub_id=s.id) }}"
-                onsubmit="return confirm('Delete {{ s.name }}?')">
+          <a href="{{ url_for('products.new_sub_product', product_id=p.id) }}" class="btn btn-secondary btn-sm">+ Sub</a>
+          <a href="{{ url_for('products.edit_product', product_id=p.id) }}" class="btn btn-secondary btn-sm">Edit</a>
+          <form method="post" action="{{ url_for('products.delete_product', product_id=p.id) }}"
+                onsubmit="return confirm('Delete {{ p.name }} and all its sub-products?')">
             <button class="btn btn-danger btn-sm">Delete</button>
           </form>
         </div>
       </div>
-      {% endfor %}
-    </div>
-    {% endif %}
+
+      {% if subs %}
+      <div id="sub-group-{{ p.id }}" class="sub-group" data-cat="{{ ns.cat_id }}" style="display:none">
+        {% for s in subs %}
+        {% set min_q = s.min_quantity if s.min_quantity > 0 else p.min_quantity %}
+        {% set s_color =
+          'var(--danger)'  if min_q > 0 and s.stock_qty < min_q else
+          'var(--warning)' if min_q > 0 and s.stock_qty <= (min_q * 1.2) else
+          'var(--success)'
+        %}
+        <div class="sub-row" style="display:flex;align-items:center;gap:8px;padding:10px 20px 10px 52px;border-bottom:1px solid var(--border);background:var(--bg-alt)">
+          <div style="flex:1;min-width:0">
+            <div data-search="{{ s.name|lower }} {{ (s.sku or '')|lower }}" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+              <span style="color:var(--text-muted);font-size:12px">↳</span>
+              <a href="{{ url_for('products.sub_detail', product_id=p.id, sub_id=s.id) }}"
+                 style="font-weight:600;font-size:14px;color:var(--text);text-decoration:none"
+                 onmouseover="this.style.color='var(--accent)';this.style.textDecoration='underline'"
+                 onmouseout="this.style.color='var(--text)';this.style.textDecoration='none'">{{ s.name }}</a>
+              {% if s.sku %}<span class="muted font-mono" style="font-size:12px">{{ s.sku }}</span>{% endif %}
+              {% if not s.is_active %}<span class="badge badge-inactive">Inactive</span>{% endif %}
+            </div>
+            <div style="display:flex;gap:20px;margin-top:3px;font-size:12px;color:var(--text-muted);flex-wrap:wrap">
+              {% if s.use_parent_price %}
+                <span>Price: <em>parent ({{ p.unit_price|inr }})</em></span>
+              {% else %}
+                <span>Price: <strong style="color:var(--text)">{{ s.unit_price|inr }}</strong></span>
+              {% endif %}
+              <span>Stock: <strong data-pcs="{{ s.stock_qty }}" style="color:{{ s_color }}">{{ s.stock_qty | indian }}</strong>{% if min_q > 0 %}<span style="color:var(--text-muted)"> / min <span data-pcs="{{ min_q }}">{{ min_q | indian }}</span></span>{% endif %}</span>
+              {% if s.production_qty > 0 %}<span style="color:var(--warning)">In production: <span data-pcs="{{ s.production_qty }}">{{ s.production_qty | indian }}</span></span>{% endif %}
+              {% if s.in_transit_qty > 0 %}<span style="color:var(--primary)">In transit: <span data-pcs="{{ s.in_transit_qty }}">{{ s.in_transit_qty | indian }}</span></span>{% endif %}
+            </div>
+          </div>
+          <div style="display:flex;gap:6px;flex-shrink:0">
+            <a href="{{ url_for('products.edit_sub_product', product_id=p.id, sub_id=s.id) }}" class="btn btn-secondary btn-sm">Edit</a>
+            <form method="post" action="{{ url_for('products.delete_sub_product', product_id=p.id, sub_id=s.id) }}"
+                  onsubmit="return confirm('Delete {{ s.name }}?')">
+              <button class="btn btn-danger btn-sm">Delete</button>
+            </form>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+    </div><!-- /product-block -->
 
   {% endfor %}
-  {% if ns.current_cat is not none %}</div>{% endif %}
+  {% if ns.current_cat is not none %}
+    </div><!-- /cat-body -->
+  </div><!-- /card -->
+  {% endif %}
 
 {% else %}
 <div class="card">
@@ -142,16 +164,34 @@
 
 {% block scripts %}
 <script>
+function toggleCat(catId) {
+  const body = document.getElementById('cat-body-' + catId);
+  const chev = document.getElementById('cat-chev-' + catId);
+  if (!body) return;
+  const collapsed = body.style.display === 'none';
+  body.style.display = collapsed ? '' : 'none';
+  if (chev) chev.textContent = collapsed ? '▼' : '▶';
+}
+
 function toggleSubs(pid) {
   const el  = document.getElementById('sub-group-' + pid);
   const btn = document.querySelector(`.sub-toggle[data-pid="${pid}"]`);
   if (!el) return;
   const visible = el.style.display !== 'none';
-  el.style.display  = visible ? 'none' : '';
-  btn.textContent   = visible ? '▶' : '▼';
+  el.style.display = visible ? 'none' : '';
+  if (btn) btn.textContent = visible ? '▶' : '▼';
 }
 
 function setCatExpand(catId, expand) {
+  // Auto-open the category body when expanding sub-products
+  if (expand) {
+    const body = document.getElementById('cat-body-' + catId);
+    const chev = document.getElementById('cat-chev-' + catId);
+    if (body && body.style.display === 'none') {
+      body.style.display = '';
+      if (chev) chev.textContent = '▼';
+    }
+  }
   document.querySelectorAll(`.sub-group[data-cat="${catId}"]`).forEach(el => {
     el.style.display = expand ? '' : 'none';
   });
@@ -164,22 +204,38 @@ function filterProducts(q) {
   q = q.trim().toLowerCase();
   let visible = 0;
 
-  document.querySelectorAll('.product-row').forEach(row => {
-    const productText = row.dataset.search || '';
-    // Check if any sub-products match the query
-    const subGroup = row.nextElementSibling?.classList.contains('sub-group')
-      ? row.nextElementSibling : null;
+  // When searching, auto-expand all category bodies so results are visible
+  document.querySelectorAll('[id^="cat-body-"]').forEach(body => {
+    body.style.display = q ? '' : 'none';
+    const chev = document.getElementById(body.id.replace('cat-body-', 'cat-chev-'));
+    if (chev) chev.textContent = q ? '▼' : '▶';
+  });
+
+  document.querySelectorAll('.product-block').forEach(block => {
+    const row = block.querySelector('.product-row');
+    const productText = row ? (row.dataset.search || '') : '';
+    const subGroup = block.querySelector('.sub-group');
     let subMatch = false;
+
     if (subGroup) {
-      subGroup.querySelectorAll('[data-search]').forEach(sub => {
-        const match = !q || sub.dataset.search.includes(q);
-        sub.closest('div[style*="padding:10px"]').style.display = match ? '' : 'none';
+      subGroup.querySelectorAll('.sub-row').forEach(subRow => {
+        const searchEl = subRow.querySelector('[data-search]');
+        const match = !q || (searchEl && searchEl.dataset.search.includes(q));
+        subRow.style.display = match ? '' : 'none';
         if (match) subMatch = true;
       });
     }
+
     const productMatch = !q || productText.includes(q) || subMatch;
-    row.style.display = productMatch ? '' : 'none';
-    if (subGroup) subGroup.style.display = productMatch ? '' : 'none';
+    block.style.display = productMatch ? '' : 'none';
+
+    // Show sub-group when sub matches during search; collapse when search cleared
+    if (subGroup) {
+      subGroup.style.display = (q && subMatch) ? '' : 'none';
+      const btn = block.querySelector('.sub-toggle');
+      if (btn) btn.textContent = (q && subMatch) ? '▼' : '▶';
+    }
+
     if (productMatch) visible++;
   });
 
@@ -187,12 +243,13 @@ function filterProducts(q) {
   if (countEl) countEl.textContent = q ? `${visible} result${visible !== 1 ? 's' : ''}` : '';
 }
 
-// Hide category expand/collapse buttons if the category has no sub-groups
 document.addEventListener('DOMContentLoaded', () => {
+  initStockUnit();
+  // Show Expand/Collapse All buttons only for categories that have sub-products
   document.querySelectorAll('.cat-ctrl').forEach(ctrl => {
     const catId = ctrl.dataset.cat;
-    if (!document.querySelector(`.sub-group[data-cat="${catId}"]`)) {
-      ctrl.style.display = 'none';
+    if (document.querySelector(`.sub-group[data-cat="${catId}"]`)) {
+      ctrl.style.display = 'flex';
     }
   });
 });

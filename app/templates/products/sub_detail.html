@@ -31,7 +31,7 @@
         {{ row('Tax Rate', (sub.tax_rate or product.tax_rate) ~ '%') }}
         {% set eff_min = sub.min_quantity or product.min_quantity or 0 %}
         {{ row('Min Quantity', eff_min | indian if eff_min else '—') }}
-        {{ row('Pcs / Carton', (product.pcs_per_carton | indian) ~ ' (inherited)' if product.pcs_per_carton else '—') }}
+        {{ row('Pcs / Box', (product.pcs_per_carton | indian) ~ ' (inherited)' if product.pcs_per_carton else '—') }}
         {{ row('Status', 'Active' if sub.is_active else 'Inactive') }}
         {% if sub.description %}
         <tr>
@@ -44,23 +44,29 @@
   </div>
 
   <!-- Stock summary card -->
-  <div class="card">
-    <div class="card-header"><span class="card-title">Stock</span></div>
+  <div class="card" data-ppb="{{ product.pcs_per_carton or 0 }}">
+    <div class="card-header">
+      <span class="card-title">Stock</span>
+      <div class="stock-unit-pill">
+        <button class="unit-btn" data-unit="boxes" onclick="setStockUnit('boxes')">Boxes</button>
+        <button class="unit-btn" data-unit="pcs" onclick="setStockUnit('pcs')">Pcs</button>
+      </div>
+    </div>
     <div class="card-body">
       {% set eff_min = sub.min_quantity or product.min_quantity or 0 %}
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
         <div style="text-align:center;padding:14px;background:var(--bg-alt);border-radius:var(--radius-sm)">
           <div style="font-size:22px;font-weight:700;color:{% if eff_min > 0 and sub.stock_qty < eff_min %}var(--danger){% elif eff_min > 0 and sub.stock_qty <= (eff_min * 1.2) %}var(--warning){% else %}var(--success){% endif %}">
-            {{ sub.stock_qty | indian }}
+            <span data-pcs="{{ sub.stock_qty }}">{{ sub.stock_qty | indian }}</span>
           </div>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:2px">Available{% if eff_min > 0 %} / min {{ eff_min | indian }}{% endif %}</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px">Available{% if eff_min > 0 %} / min <span data-pcs="{{ eff_min }}">{{ eff_min | indian }}</span>{% endif %}</div>
         </div>
         <div style="text-align:center;padding:14px;background:var(--bg-alt);border-radius:var(--radius-sm)">
-          <div style="font-size:22px;font-weight:700;color:var(--warning)">{{ sub.production_qty | indian }}</div>
+          <div style="font-size:22px;font-weight:700;color:var(--warning)"><span data-pcs="{{ sub.production_qty }}">{{ sub.production_qty | indian }}</span></div>
           <div style="font-size:11px;color:var(--text-muted);margin-top:2px">In Production</div>
         </div>
         <div style="text-align:center;padding:14px;background:var(--bg-alt);border-radius:var(--radius-sm)">
-          <div style="font-size:22px;font-weight:700;color:var(--primary)">{{ sub.in_transit_qty | indian }}</div>
+          <div style="font-size:22px;font-weight:700;color:var(--primary)"><span data-pcs="{{ sub.in_transit_qty }}">{{ sub.in_transit_qty | indian }}</span></div>
           <div style="font-size:11px;color:var(--text-muted);margin-top:2px">In Transit</div>
         </div>
       </div>
@@ -237,6 +243,8 @@
 
 {% block scripts %}
 <script>
+document.addEventListener('DOMContentLoaded', initStockUnit);
+
 function switchTab(name) {
   document.querySelectorAll('.stock-tab-pane').forEach(p => p.style.display = 'none');
   document.querySelectorAll('.stock-tab-btn').forEach(b => {

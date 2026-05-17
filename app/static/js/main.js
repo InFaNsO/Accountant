@@ -26,6 +26,34 @@ function formatIndian(value) {
   return (num < 0 ? '-' : '') + _indianCommas(intStr) + dec;
 }
 
+// ── Stock unit toggle (pieces ↔ boxes) ──────────────────────
+// Call initStockUnit() on DOMContentLoaded on any page with [data-pcs] elements.
+// Products have data-ppb (pieces-per-box) on a container; stock numbers have data-pcs.
+function setStockUnit(unit) {
+  localStorage.setItem('stockUnit', unit);
+  _applyStockUnit(unit);
+}
+
+function _applyStockUnit(unit) {
+  document.querySelectorAll('[data-pcs]').forEach(el => {
+    const pcs = parseFloat(el.dataset.pcs);
+    if (isNaN(pcs)) return;
+    const container = el.closest('[data-ppb]');
+    const ppb = container ? (parseFloat(container.dataset.ppb) || 0) : 0;
+    el.textContent = (unit === 'boxes' && ppb > 0)
+      ? formatIndian(pcs / ppb)
+      : formatIndian(pcs);
+  });
+  document.querySelectorAll('.unit-btn').forEach(btn => {
+    btn.classList.toggle('unit-active', btn.dataset.unit === unit);
+  });
+}
+
+function initStockUnit() {
+  const unit = localStorage.getItem('stockUnit') || 'boxes';
+  _applyStockUnit(unit);
+}
+
 // Shared table search utility
 function filterTable(q, tableId) {
   q = q.toLowerCase();

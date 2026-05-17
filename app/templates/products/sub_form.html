@@ -42,6 +42,12 @@
           <small class="muted">Inherited from parent product</small>
         </div>
 
+        <div class="form-group">
+          <label>Pieces per Box</label>
+          <input type="text" value="{{ product.pcs_per_carton | indian if product.pcs_per_carton else '—' }}" disabled style="background:var(--bg-alt);color:var(--text-muted);cursor:not-allowed">
+          <small class="muted">Inherited from parent product</small>
+        </div>
+
         <div class="form-group span-2" style="flex-direction:row;align-items:center;gap:10px">
           <input type="checkbox" id="use_parent_price" name="use_parent_price" value="1" style="width:auto"
                  onchange="togglePrice(this.checked)"

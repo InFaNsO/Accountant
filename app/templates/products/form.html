@@ -59,10 +59,11 @@
         </div>
 
         <div class="form-group">
-          <label for="pcs_per_carton">Pieces per Carton</label>
+          <label for="pcs_per_carton">Pieces per Box *</label>
           <input type="number" id="pcs_per_carton" name="pcs_per_carton"
-                 value="{{ product.get('pcs_per_carton', '') or '' }}" step="1" min="0" placeholder="e.g. 12, 24, 48">
-          <small class="muted">Inherited by all sub-products</small>
+                 value="{{ product.get('pcs_per_carton', '') or '' }}" step="1" min="1" required
+                 placeholder="e.g. 12, 24, 48">
+          <small class="muted">Required — inherited by all sub-products for box ↔ pieces conversion</small>
         </div>
 
         <div class="form-group">

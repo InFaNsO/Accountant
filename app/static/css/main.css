@@ -488,6 +488,28 @@ body.dark thead th { background: #0F172A; }
 body.dark .icon-moon { display: none; }
 body.dark .icon-sun  { display: block; }
 
+/* ── Stock unit pill toggle ───────────────────────────────── */
+.stock-unit-pill {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.unit-btn {
+  padding: 4px 14px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  line-height: 1.8;
+  transition: background .15s, color .15s;
+}
+.unit-btn:hover { background: var(--bg-alt); color: var(--text-primary); }
+.unit-btn.unit-active { background: var(--accent); color: #fff; }
+
 /* ── Responsive ───────────────────────────────────────────── */
 @media (max-width: 900px) {
   .form-grid-2, .form-grid-3 { grid-template-columns: 1fr; }

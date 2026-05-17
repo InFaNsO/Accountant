@@ -28,7 +28,7 @@
         {{ row('Unit Price', product.unit_price|inr) }}
         {{ row('Tax Rate', product.tax_rate ~ '%') }}
         {{ row('Min Quantity', product.min_quantity | indian if product.min_quantity else '—') }}
-        {{ row('Pcs / Carton', product.pcs_per_carton | indian if product.pcs_per_carton else '—') }}
+        {{ row('Pcs / Box', product.pcs_per_carton | indian if product.pcs_per_carton else '—') }}
         {{ row('Status', 'Active' if product.is_active else 'Inactive') }}
         {% if product.description %}
         <tr>
@@ -41,22 +41,28 @@
   </div>
 
   <!-- Stock summary card -->
-  <div class="card">
-    <div class="card-header"><span class="card-title">Stock{% if subs %} (Parent){% endif %}</span></div>
+  <div class="card" data-ppb="{{ product.pcs_per_carton or 0 }}">
+    <div class="card-header">
+      <span class="card-title">Stock{% if subs %} (Parent){% endif %}</span>
+      <div class="stock-unit-pill">
+        <button class="unit-btn" data-unit="boxes" onclick="setStockUnit('boxes')">Boxes</button>
+        <button class="unit-btn" data-unit="pcs"   onclick="setStockUnit('pcs')">Pcs</button>
+      </div>
+    </div>
     <div class="card-body">
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
         <div style="text-align:center;padding:14px;background:var(--bg-alt);border-radius:var(--radius-sm)">
           <div style="font-size:22px;font-weight:700;color:{% if product.min_quantity > 0 and product.stock_qty < product.min_quantity %}var(--danger){% elif product.min_quantity > 0 and product.stock_qty <= (product.min_quantity * 1.2) %}var(--warning){% else %}var(--success){% endif %}">
-            {{ product.stock_qty | indian }}
+            <span data-pcs="{{ product.stock_qty }}">{{ product.stock_qty | indian }}</span>
           </div>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:2px">Available</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px">Available{% if product.min_quantity > 0 %} / min <span data-pcs="{{ product.min_quantity }}">{{ product.min_quantity | indian }}</span>{% endif %}</div>
         </div>
         <div style="text-align:center;padding:14px;background:var(--bg-alt);border-radius:var(--radius-sm)">
-          <div style="font-size:22px;font-weight:700;color:var(--warning)">{{ product.production_qty | indian }}</div>
+          <div style="font-size:22px;font-weight:700;color:var(--warning)"><span data-pcs="{{ product.production_qty or 0 }}">{{ product.production_qty | indian }}</span></div>
           <div style="font-size:11px;color:var(--text-muted);margin-top:2px">In Production</div>
         </div>
         <div style="text-align:center;padding:14px;background:var(--bg-alt);border-radius:var(--radius-sm)">
-          <div style="font-size:22px;font-weight:700;color:var(--primary)">{{ product.in_transit_qty | indian }}</div>
+          <div style="font-size:22px;font-weight:700;color:var(--primary)"><span data-pcs="{{ product.in_transit_qty or 0 }}">{{ product.in_transit_qty | indian }}</span></div>
           <div style="font-size:11px;color:var(--text-muted);margin-top:2px">In Transit</div>
         </div>
       </div>
