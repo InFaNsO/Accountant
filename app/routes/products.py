@@ -95,7 +95,16 @@ def product_detail(product_id):
         flash("Product not found.", "error")
         return redirect(url_for("products.list_products"))
     subs = product_service.get_sub_products(product_id)
-    # Only load stock history for products with no sub-products
+    product = dict(product)
+
+    if subs:
+        # When a product has sub-products, the stock card shows aggregated totals
+        product["stock_qty"]      = sum(s["stock_qty"]      or 0 for s in subs)
+        product["min_quantity"]   = sum(s["min_quantity"]   or 0 for s in subs)
+        product["production_qty"] = sum(s["production_qty"] or 0 for s in subs)
+        product["in_transit_qty"] = sum(s["in_transit_qty"] or 0 for s in subs)
+
+    # Only load stock history for leaf products (no sub-products)
     warehouse_history = production_history = transit_history = []
     if not subs:
         warehouse_history  = product_service.get_stock_history(

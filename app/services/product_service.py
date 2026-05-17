@@ -143,7 +143,7 @@ def delete_product(product_id):
 
 def get_sub_products(product_id):
     return get_db().execute(
-        "SELECT * FROM sub_products WHERE product_id=? ORDER BY name",
+        "SELECT * FROM sub_products WHERE product_id=? ORDER BY COALESCE(NULLIF(sku,''), name)",
         (product_id,),
     ).fetchall()
 
@@ -368,11 +368,15 @@ def get_stock_history(product_id=None, sub_id=None, movement_types=None, limit=1
 def get_stock_alerts():
     db = get_db()
 
-    # Products below minimum
+    # Helper: subquery to exclude products that have sub-products
+    no_subs = "NOT EXISTS (SELECT 1 FROM sub_products sp WHERE sp.product_id = p.id)"
+
+    # Products below minimum (exclude parents with sub-products)
     low_products = db.execute(
-        """SELECT p.*, c.name AS category_name
+        f"""SELECT p.*, c.name AS category_name
            FROM products p LEFT JOIN categories c ON p.category_id=c.id
            WHERE p.track_inventory=1 AND p.min_quantity>0 AND p.stock_qty < p.min_quantity
+             AND {no_subs}
            ORDER BY (p.stock_qty - p.min_quantity) ASC""",
     ).fetchall()
 
@@ -388,23 +392,25 @@ def get_stock_alerts():
            ORDER BY s.stock_qty ASC""",
     ).fetchall()
 
-    # In production
+    # In production (exclude parents with sub-products)
     in_production_p = db.execute(
-        "SELECT p.*, c.name AS category_name FROM products p LEFT JOIN categories c ON p.category_id=c.id WHERE p.production_qty>0"
+        f"""SELECT p.*, c.name AS category_name
+            FROM products p LEFT JOIN categories c ON p.category_id=c.id
+            WHERE p.production_qty>0 AND {no_subs}"""
     ).fetchall()
     in_production_s = db.execute(
         "SELECT s.*, p.name AS parent_name, p.pcs_per_carton FROM sub_products s JOIN products p ON s.product_id=p.id WHERE s.production_qty>0"
     ).fetchall()
 
-    # In transit
+    # In transit (exclude parents with sub-products)
     in_transit_p = db.execute(
-        """SELECT p.*, c.name AS category_name,
+        f"""SELECT p.*, c.name AS category_name,
                   m.expected_arrival, m.quantity AS dispatch_qty
            FROM products p
            LEFT JOIN categories c ON p.category_id=c.id
            JOIN stock_movements m ON m.product_id=p.id AND m.sub_product_id IS NULL
                                  AND m.movement_type IN ('dispatch', 'transit_dispatch')
-           WHERE p.in_transit_qty>0
+           WHERE p.in_transit_qty>0 AND {no_subs}
            GROUP BY p.id ORDER BY m.expected_arrival ASC"""
     ).fetchall()
     in_transit_s = db.execute(
