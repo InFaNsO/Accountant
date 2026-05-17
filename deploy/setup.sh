@@ -2,9 +2,9 @@
 # =============================================================================
 # Ledger — One-time DigitalOcean Droplet Setup Script
 # Run as root on a fresh Ubuntu 22.04 droplet:
-#   bash setup.sh <your-domain> <github-repo-url> <secret-key>
+#   bash setup.sh <your-domain> <github-repo-url> <secret-key> <mcp-api-key>
 # Example:
-#   bash setup.sh admin.applestreeabrasives.com https://github.com/InFaNsO/Accountant.git mysecretkey123
+#   bash setup.sh admin.applestreeabrasives.com https://github.com/InFaNsO/Accountant.git mysecretkey123 mymcpkey456
 # =============================================================================
 
 set -e  # Exit immediately on any error
@@ -12,6 +12,7 @@ set -e  # Exit immediately on any error
 DOMAIN=${1:-"admin.applestreeabrasives.com"}
 REPO=${2:-"https://github.com/InFaNsO/Accountant.git"}
 SECRET_KEY=${3:-"change-this-to-a-random-secret"}
+MCP_API_KEY=${4:-"change-this-mcp-key"}
 APP_USER="ledger"
 APP_DIR="/home/$APP_USER/app"
 PYTHON="python3"
@@ -83,6 +84,7 @@ echo "[6/9] Writing environment config..."
 cat > "$APP_DIR/.env" <<EOF
 SECRET_KEY=$SECRET_KEY
 FLASK_ENV=production
+MCP_API_KEY=$MCP_API_KEY
 EOF
 chown $APP_USER:$APP_USER "$APP_DIR/.env"
 chmod 600 "$APP_DIR/.env"
