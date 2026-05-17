@@ -1830,7 +1830,7 @@ def delete_dispatch(dispatch_id):
 
 # ─── Stock Tallies ────────────────────────────────────────────────────────────
 
-@api_bp.route("/tallies", methods=["GET"])
+@bp.route("/tallies", methods=["GET"])
 @require_auth
 def list_tallies_api():
     db = get_db()
@@ -1857,7 +1857,7 @@ def list_tallies_api():
     return jsonify(out)
 
 
-@api_bp.route("/tallies/<int:tally_id>", methods=["GET"])
+@bp.route("/tallies/<int:tally_id>", methods=["GET"])
 @require_auth
 def get_tally_api(tally_id):
     from ..services.tally_service import get_tally
@@ -1904,7 +1904,7 @@ def get_tally_api(tally_id):
     })
 
 
-@api_bp.route("/tallies", methods=["POST"])
+@bp.route("/tallies", methods=["POST"])
 @require_auth
 def create_tally_api():
     data = request.get_json(silent=True) or {}
@@ -1917,7 +1917,7 @@ def create_tally_api():
     return jsonify({"tally_id": tally_id, "result": f"Tally '{name}' created with id {tally_id}."})
 
 
-@api_bp.route("/tallies/<int:tally_id>/items/<int:item_id>", methods=["PUT"])
+@bp.route("/tallies/<int:tally_id>/items/<int:item_id>", methods=["PUT"])
 @require_auth
 def update_tally_item_api(tally_id, item_id):
     db = get_db()
@@ -1943,7 +1943,7 @@ def update_tally_item_api(tally_id, item_id):
     return jsonify({"result": f"Item {item_id} updated — physical_qty set to {val}."})
 
 
-@api_bp.route("/tallies/<int:tally_id>/apply", methods=["POST"])
+@bp.route("/tallies/<int:tally_id>/apply", methods=["POST"])
 @require_auth
 def apply_tally_api(tally_id):
     from ..services.tally_service import apply_tally
