@@ -709,7 +709,10 @@ def apply_stock_tally(tally_id: int) -> str:
 if __name__ == "__main__":
     transport = os.environ.get("MCP_TRANSPORT", "stdio").lower()
     if transport == "sse":
-        # Host/port set via FASTMCP_HOST / FASTMCP_PORT env vars
+        from mcp.server.transport_security import TransportSecuritySettings
+        mcp.settings.transport_security = TransportSecuritySettings(
+            enable_dns_rebinding_protection=False
+        )
         mcp.run(transport="sse")
     else:
         mcp.run()
