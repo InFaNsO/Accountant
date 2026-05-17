@@ -26,3 +26,6 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+
+# Claude Code (machine-specific settings and worktrees)
+.claude/
