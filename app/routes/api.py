@@ -1059,13 +1059,32 @@ def get_stock_summary():
            WHERE s.is_active=1 ORDER BY p.name, s.name"""
     ).fetchall()
 
+    # Aggregate sub-product totals per parent so parent rows use SUM(sub.min_quantity)
+    # instead of p.min_quantity (which is just a per-sub fallback default, not the total)
+    sub_agg = {}
+    for s in subs:
+        pid = s["parent_id"]
+        if pid not in sub_agg:
+            sub_agg[pid] = {"stock": 0.0, "prod": 0.0, "transit": 0.0, "min": 0.0}
+        sub_agg[pid]["stock"]   += _f(s["stock_qty"])
+        sub_agg[pid]["prod"]    += _f(s["production_qty"])
+        sub_agg[pid]["transit"] += _f(s["in_transit_qty"])
+        sub_agg[pid]["min"]     += _f(s["min_quantity"])
+
     def _row(name, sku, stock, prod, transit, min_qty):
         alert = " ⚠ LOW" if min_qty and _f(stock) < _f(min_qty) else ""
         return (f"{name}" + (f" [{sku}]" if sku else "") +
                 f" | wh:{_f(stock):.0f} prod:{_f(prod):.0f} transit:{_f(transit):.0f}{alert}")
 
     lines = ["=== Products ==="]
-    lines += [_row(p["name"], p["sku"], p["stock_qty"], p["production_qty"], p["in_transit_qty"], p["min_quantity"]) for p in products]
+    for p in products:
+        pid = p["id"]
+        if pid in sub_agg:
+            # Parent with sub-products: use aggregated sub totals, not p.min_quantity
+            agg = sub_agg[pid]
+            lines.append(_row(p["name"], p["sku"], agg["stock"], agg["prod"], agg["transit"], agg["min"]))
+        else:
+            lines.append(_row(p["name"], p["sku"], p["stock_qty"], p["production_qty"], p["in_transit_qty"], p["min_quantity"]))
     if subs:
         lines.append("\n=== Sub-products ===")
         lines += [_row(f"{s['parent']} — {s['name']}", s["sku"], s["stock_qty"], s["production_qty"], s["in_transit_qty"], s["min_quantity"]) for s in subs]
@@ -1076,20 +1095,36 @@ def get_stock_summary():
 @require_auth
 def get_low_stock_alerts():
     db = get_db()
+    # Products WITHOUT sub-products: use p.min_quantity directly
     low_p = db.execute(
-        "SELECT name, sku, stock_qty, min_quantity FROM products "
-        "WHERE is_active=1 AND min_quantity>0 AND stock_qty<min_quantity ORDER BY (stock_qty-min_quantity)"
+        """SELECT name, sku, stock_qty, min_quantity FROM products
+           WHERE is_active=1 AND min_quantity>0 AND stock_qty<min_quantity
+             AND NOT EXISTS (SELECT 1 FROM sub_products sp WHERE sp.product_id=products.id AND sp.is_active=1)
+           ORDER BY (stock_qty-min_quantity)"""
     ).fetchall()
+
+    # Products WITH sub-products: compare SUM(sub.stock_qty) vs SUM(sub.min_quantity)
+    low_p_agg = db.execute(
+        """SELECT p.name, p.sku,
+                  SUM(s.stock_qty)   AS total_stock,
+                  SUM(s.min_quantity) AS total_min
+           FROM products p
+           JOIN sub_products s ON s.product_id=p.id AND s.is_active=1
+           WHERE p.is_active=1
+           GROUP BY p.id
+           HAVING total_min > 0 AND total_stock < total_min
+           ORDER BY (total_stock - total_min)"""
+    ).fetchall()
+
+    # Sub-products: use sub's own min_quantity (not parent fallback)
     low_s = db.execute(
-        """SELECT p.name AS parent, s.name, s.sku, s.stock_qty,
-                  CASE WHEN s.min_quantity>0 THEN s.min_quantity ELSE p.min_quantity END AS eff_min
+        """SELECT p.name AS parent, s.name, s.sku, s.stock_qty, s.min_quantity AS eff_min
            FROM sub_products s JOIN products p ON p.id=s.product_id
-           WHERE s.is_active=1
-             AND (CASE WHEN s.min_quantity>0 THEN s.min_quantity ELSE p.min_quantity END)>0
-             AND s.stock_qty < (CASE WHEN s.min_quantity>0 THEN s.min_quantity ELSE p.min_quantity END)
+           WHERE s.is_active=1 AND s.min_quantity>0 AND s.stock_qty < s.min_quantity
            ORDER BY s.stock_qty"""
     ).fetchall()
-    if not low_p and not low_s:
+
+    if not low_p and not low_p_agg and not low_s:
         return jsonify({"result": "No low stock alerts — all products above minimum levels."})
     lines = []
     for p in low_p:
@@ -1097,6 +1132,12 @@ def get_low_stock_alerts():
         lines.append(
             f"{p['name']}" + (f" [{p['sku']}]" if p["sku"] else "") +
             f" | stock: {_f(p['stock_qty']):.0f} / min: {_f(p['min_quantity']):.0f} | short by {shortage:.0f}"
+        )
+    for p in low_p_agg:
+        shortage = _f(p["total_min"]) - _f(p["total_stock"])
+        lines.append(
+            f"{p['name']}" + (f" [{p['sku']}]" if p["sku"] else "") +
+            f" | stock: {_f(p['total_stock']):.0f} / min: {_f(p['total_min']):.0f} | short by {shortage:.0f} [aggregate]"
         )
     for s in low_s:
         shortage = _f(s["eff_min"]) - _f(s["stock_qty"])
