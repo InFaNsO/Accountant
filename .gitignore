@@ -29,3 +29,13 @@ Thumbs.db
 
 # Claude Code (machine-specific settings and worktrees)
 .claude/
+
+# Android - Firebase config (contains secrets, added manually per device)
+android/app/google-services.json
+firebase-credentials.json
+
+# Android build artifacts
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties

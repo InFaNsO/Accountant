@@ -126,6 +126,7 @@ def create_app():
         from .routes.transit    import bp as transit_bp
         from .routes.api        import bp as api_bp
         from .routes.tallies    import bp as tallies_bp
+        from .routes.mobile     import bp as mobile_bp
 
         app.register_blueprint(auth_bp)
         app.register_blueprint(users_bp)
@@ -139,6 +140,14 @@ def create_app():
         app.register_blueprint(transit_bp)
         app.register_blueprint(api_bp)
         app.register_blueprint(tallies_bp)
+        app.register_blueprint(mobile_bp)
+
+        from .services.notification_service import init_firebase
+        init_firebase()
+
+    if not app.config.get("TESTING"):
+        from .services.scheduler import start_scheduler
+        start_scheduler(app)
 
     @app.errorhandler(403)
     def forbidden(e):

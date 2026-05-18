@@ -362,6 +362,26 @@ def _create_schema(db):
         );
     """)
 
+    # ── Mobile push notifications ─────────────────────────────
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS device_tokens (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id    INTEGER NOT NULL,
+            fcm_token  TEXT NOT NULL UNIQUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_seen  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS notification_log (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            type         TEXT NOT NULL,
+            reference_id INTEGER NOT NULL,
+            sent_date    TEXT NOT NULL,
+            UNIQUE(type, reference_id, sent_date)
+        );
+    """)
+
     # ── Column-level migrations for existing installs ─────────
     _add_column(db, "user_permissions",  "can_financials",  "INTEGER DEFAULT 0")
     _add_column(db, "clients",          "opening_balance", "REAL DEFAULT 0")
