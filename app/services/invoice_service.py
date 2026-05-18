@@ -1,6 +1,7 @@
 from datetime import date
 from ..database import get_db
 from . import product_service
+from .payment_service import _refresh_invoice_paid
 
 
 def _next_invoice_number(db):
@@ -19,8 +20,11 @@ def _next_invoice_number(db):
 
 def get_all_invoices():
     return get_db().execute(
-        """SELECT i.*, c.name as client_name, c.company as client_company
-           FROM invoices i JOIN clients c ON i.client_id = c.id
+        """SELECT i.*, c.name as client_name, c.company as client_company,
+                  cc.name as company_name
+           FROM invoices i
+           JOIN clients c ON i.client_id = c.id
+           LEFT JOIN client_companies cc ON i.company_id = cc.id
            ORDER BY i.created_at DESC"""
     ).fetchall()
 
@@ -30,8 +34,11 @@ def get_invoice(invoice_id):
         """SELECT i.*, c.name as client_name, c.company as client_company,
                   c.email as client_email, c.address as client_address,
                   c.city as client_city, c.country as client_country,
-                  c.tax_id as client_tax_id
-           FROM invoices i JOIN clients c ON i.client_id = c.id
+                  c.tax_id as client_tax_id,
+                  cc.name as company_name
+           FROM invoices i
+           JOIN clients c ON i.client_id = c.id
+           LEFT JOIN client_companies cc ON i.company_id = cc.id
            WHERE i.id = ?""",
         (invoice_id,),
     ).fetchone()
@@ -50,54 +57,51 @@ def get_invoice_payments(invoice_id):
     ).fetchall()
 
 
-def _apply_client_credit(db, client_id, invoice_id):
-    """Reallocate unallocated (NULL) payments that represent true credit to the new invoice."""
-    client = db.execute("SELECT opening_balance FROM clients WHERE id=?", (client_id,)).fetchone()
-    opening_debt = max(0.0, (client["opening_balance"] or 0)) if client else 0.0
-
-    total_null = db.execute(
-        "SELECT COALESCE(SUM(amount), 0) AS s FROM payments WHERE client_id=? AND invoice_id IS NULL",
-        (client_id,),
-    ).fetchone()["s"]
-
-    available_credit = max(0.0, total_null - opening_debt)
-    if available_credit < 0.01:
+def _apply_company_ob_credit(db, client_id, company_id, invoice_id, issue_date):
+    """
+    If the company has a credit opening balance, apply it to the new invoice.
+    Creates a 'balance' payment and reduces the company's opening_balance in-place
+    so the client-level balance formula stays consistent.
+    """
+    co = db.execute(
+        "SELECT opening_balance FROM client_companies WHERE id=?", (company_id,)
+    ).fetchone()
+    if not co:
         return
+    ob = float(co["opening_balance"] or 0)
+    if ob >= 0:
+        return  # no credit
 
-    inv = db.execute("SELECT total FROM invoices WHERE id=?", (invoice_id,)).fetchone()
+    credit = abs(ob)
+    inv = db.execute("SELECT total, amount_paid FROM invoices WHERE id=?", (invoice_id,)).fetchone()
     if not inv:
         return
-
-    to_cover = min(available_credit, inv["total"])
-    if to_cover < 0.01:
+    remaining_invoice = float(inv["total"]) - float(inv["amount_paid"])
+    apply = min(credit, remaining_invoice)
+    if apply < 0.01:
         return
 
-    null_pmts = db.execute(
-        "SELECT id, amount, payment_date, method, reference, notes FROM payments "
-        "WHERE client_id=? AND invoice_id IS NULL ORDER BY created_at ASC",
+    # Create a 'balance' payment for the applied amount
+    db.execute(
+        """INSERT INTO payments
+               (client_id, invoice_id, company_id, amount, payment_date, method, notes)
+           VALUES (?, ?, ?, ?, ?, 'balance', 'Auto-applied from credit balance')""",
+        (client_id, invoice_id, company_id, apply, issue_date),
+    )
+    # Reduce company OB so the credit isn't double-counted
+    new_ob = ob + apply  # ob is negative, so this moves toward 0
+    db.execute(
+        "UPDATE client_companies SET opening_balance=? WHERE id=?", (new_ob, company_id)
+    )
+    # Re-sync client-level opening_balance
+    row = db.execute(
+        "SELECT COALESCE(SUM(opening_balance), 0) AS s FROM client_companies WHERE client_id=?",
         (client_id,),
-    ).fetchall()
-
-    covered = 0.0
-    for pmt in null_pmts:
-        if covered >= to_cover - 0.001:
-            break
-        take = min(pmt["amount"], to_cover - covered)
-        leftover = pmt["amount"] - take
-        if leftover < 0.01:
-            db.execute("UPDATE payments SET invoice_id=? WHERE id=?", (invoice_id, pmt["id"]))
-        else:
-            db.execute("UPDATE payments SET amount=? WHERE id=?", (leftover, pmt["id"]))
-            db.execute(
-                """INSERT INTO payments (client_id, invoice_id, amount, payment_date, method, reference, notes)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (client_id, invoice_id, take,
-                 pmt["payment_date"], pmt["method"], pmt["reference"], pmt["notes"]),
-            )
-        covered += take
-
-    if covered > 0.001:
-        refresh_invoice_paid(invoice_id)
+    ).fetchone()
+    db.execute(
+        "UPDATE clients SET opening_balance=? WHERE id=?", (row["s"], client_id)
+    )
+    _refresh_invoice_paid(db, invoice_id)
 
 
 def create_invoice(data, items):
@@ -112,12 +116,14 @@ def create_invoice(data, items):
     discount = float(data.get("discount_amount", 0))
     total = subtotal + tax_total - discount
 
+    company_id = int(data["company_id"]) if data.get("company_id") else None
+
     cur = db.execute(
-        """INSERT INTO invoices (invoice_number, client_id, status, issue_date, due_date,
+        """INSERT INTO invoices (invoice_number, client_id, company_id, status, issue_date, due_date,
            notes, subtotal, tax_total, discount_amount, total)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
-            invoice_number, data["client_id"],
+            invoice_number, data["client_id"], company_id,
             data.get("status", "issued"),
             data.get("issue_date", str(date.today())),
             data.get("due_date"),
@@ -157,8 +163,10 @@ def create_invoice(data, items):
             )
     db.commit()
 
-    # Auto-apply any existing client credit to this new invoice
-    _apply_client_credit(db, int(data["client_id"]), invoice_id)
+    # Auto-apply company credit OB to the new invoice (credit case only)
+    if company_id:
+        issue_date = data.get("issue_date", str(date.today()))
+        _apply_company_ob_credit(db, int(data["client_id"]), company_id, invoice_id, issue_date)
 
     return invoice_id
 
@@ -204,12 +212,14 @@ def update_invoice(invoice_id, data, items):
     discount = float(data.get("discount_amount", 0))
     total = subtotal + tax_total - discount
 
+    company_id = int(data["company_id"]) if data.get("company_id") else None
+
     db.execute(
-        """UPDATE invoices SET client_id=?, status=?, issue_date=?, due_date=?,
+        """UPDATE invoices SET client_id=?, company_id=?, status=?, issue_date=?, due_date=?,
            notes=?, subtotal=?, tax_total=?, discount_amount=?, total=?
            WHERE id=?""",
         (
-            data["client_id"], data.get("status", "issued"),
+            data["client_id"], company_id, data.get("status", "issued"),
             data.get("issue_date"), data.get("due_date"),
             data.get("notes"), subtotal, tax_total, discount, total,
             invoice_id,

@@ -305,6 +305,24 @@ def _create_schema(db):
         );
     """)
 
+    # ── Client companies (multiple companies per client) ──────
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS client_companies (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id  INTEGER NOT NULL,
+            name       TEXT NOT NULL,
+            email      TEXT,
+            phone      TEXT,
+            address    TEXT,
+            city       TEXT,
+            country    TEXT,
+            tax_id     TEXT,
+            notes      TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
+        );
+    """)
+
     # ── Users & permissions ───────────────────────────────────
     db.executescript("""
         CREATE TABLE IF NOT EXISTS users (
@@ -386,6 +404,9 @@ def _create_schema(db):
     _add_column(db, "user_permissions",  "can_financials",  "INTEGER DEFAULT 0")
     _add_column(db, "clients",          "opening_balance", "REAL DEFAULT 0")
     _add_column(db, "clients",          "payment_terms",   "INTEGER DEFAULT 0")
+    _add_column(db, "client_companies", "opening_balance", "REAL DEFAULT 0")
+    _add_column(db, "invoices",         "company_id",      "INTEGER")
+    _add_column(db, "payments",         "company_id",      "INTEGER")
     _add_column(db, "products",         "category_id",     "INTEGER")
     _add_column(db, "products",         "min_quantity",    "REAL DEFAULT 0")
     _add_column(db, "products",         "production_qty",  "REAL DEFAULT 0")

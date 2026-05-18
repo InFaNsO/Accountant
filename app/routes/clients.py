@@ -1,6 +1,7 @@
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
 from flask_login import login_required, current_user
 from ..services import client_service
+from ..services.payment_service import recalculate_client_balance
 from ..services.auth_service import permission_required
 from ..database import get_db
 
@@ -16,19 +17,43 @@ def list_clients():
     return render_template("clients/list.html", clients=clients, can_financials=can_financials)
 
 
+def _parse_companies(form):
+    """Extract companies[N][field] entries from a flat form dict."""
+    companies = []
+    i = 0
+    while True:
+        name = form.get(f"companies[{i}][name]", "").strip()
+        if not name and f"companies[{i}][name]" not in form:
+            break
+        if name:
+            companies.append({
+                "id":                   form.get(f"companies[{i}][id]", "").strip() or None,
+                "name":                 name,
+                "tax_id":               form.get(f"companies[{i}][tax_id]", "").strip() or None,
+                "opening_balance_amt":  form.get(f"companies[{i}][opening_balance_amt]", "0"),
+                "opening_balance_type": form.get(f"companies[{i}][opening_balance_type]", "debt"),
+            })
+        i += 1
+    return companies
+
+
 @bp.route("/new", methods=["GET", "POST"])
 @login_required
 @permission_required("clients", "create")
 def new_client():
     if request.method == "POST":
         data = request.form.to_dict()
+        companies = _parse_companies(request.form)
         if not data.get("name"):
             flash("Client name is required.", "error")
-            return render_template("clients/form.html", client=data, action="new")
-        client_id = client_service.create_client(data)
+            return render_template("clients/form.html", client=data, companies=companies, action="new")
+        if not companies:
+            flash("At least one company is required.", "error")
+            return render_template("clients/form.html", client=data, companies=companies, action="new")
+        client_id = client_service.create_client(data, companies)
         flash("Client created successfully.", "success")
         return redirect(url_for("clients.detail", client_id=client_id))
-    return render_template("clients/form.html", client={}, action="new")
+    return render_template("clients/form.html", client={}, companies=[], action="new")
 
 
 @bp.route("/<int:client_id>")
@@ -40,10 +65,11 @@ def detail(client_id):
         flash("Client not found.", "error")
         return redirect(url_for("clients.list_clients"))
     invoices = client_service.get_client_invoices(client_id)
+    companies = client_service.get_companies(client_id)
     can_financials = current_user.has_permission("clients", "financials")
     balance = client_service.get_client_balance(client_id) if can_financials else None
     return render_template("clients/detail.html", client=client, invoices=invoices,
-                           balance=balance, can_financials=can_financials)
+                           companies=companies, balance=balance, can_financials=can_financials)
 
 
 @bp.route("/<int:client_id>/edit", methods=["GET", "POST"])
@@ -56,13 +82,23 @@ def edit_client(client_id):
         return redirect(url_for("clients.list_clients"))
     if request.method == "POST":
         data = request.form.to_dict()
+        companies = _parse_companies(request.form)
         if not data.get("name"):
             flash("Client name is required.", "error")
-            return render_template("clients/form.html", client=data, action="edit", client_id=client_id)
-        client_service.update_client(client_id, data)
+            existing = client_service.get_companies(client_id)
+            return render_template("clients/form.html", client=data, companies=[dict(c) for c in existing],
+                                   action="edit", client_id=client_id)
+        if not companies:
+            flash("At least one company is required.", "error")
+            existing = client_service.get_companies(client_id)
+            return render_template("clients/form.html", client=data, companies=[dict(c) for c in existing],
+                                   action="edit", client_id=client_id)
+        client_service.update_client(client_id, data, companies)
         flash("Client updated successfully.", "success")
         return redirect(url_for("clients.detail", client_id=client_id))
-    return render_template("clients/form.html", client=dict(client), action="edit", client_id=client_id)
+    companies = [dict(c) for c in client_service.get_companies(client_id)]
+    return render_template("clients/form.html", client=dict(client), companies=companies,
+                           action="edit", client_id=client_id)
 
 
 @bp.route("/<int:client_id>/ledger")
@@ -78,13 +114,17 @@ def ledger(client_id):
 
     db = get_db()
     invoices = db.execute(
-        "SELECT id, invoice_number, issue_date, total, amount_paid, status FROM invoices "
-        "WHERE client_id=? AND status != 'cancelled' ORDER BY issue_date, id",
+        "SELECT i.id, i.invoice_number, i.issue_date, i.total, i.amount_paid, i.status, "
+        "cc.name AS company_name "
+        "FROM invoices i LEFT JOIN client_companies cc ON i.company_id = cc.id "
+        "WHERE i.client_id=? AND i.status != 'cancelled' ORDER BY i.issue_date, i.id",
         (client_id,),
     ).fetchall()
     payments = db.execute(
-        "SELECT id, amount, payment_date, method, reference, notes, invoice_id FROM payments "
-        "WHERE client_id=? ORDER BY payment_date, id",
+        "SELECT p.id, p.amount, p.payment_date, p.method, p.reference, p.notes, p.invoice_id, "
+        "cc.name AS company_name "
+        "FROM payments p LEFT JOIN client_companies cc ON p.company_id = cc.id "
+        "WHERE p.client_id=? ORDER BY p.payment_date, p.id",
         (client_id,),
     ).fetchall()
     manual = db.execute(
@@ -123,16 +163,22 @@ def ledger(client_id):
             r = item["row"]
             if item["kind"] == "invoice":
                 running -= float(r["total"])
+                label = r["invoice_number"]
+                if r.get("company_name"):
+                    label += f" ({r['company_name']})"
                 entries.append({"date": r["issue_date"] or "", "type": "invoice",
-                                "label": r["invoice_number"],
+                                "label": label, "company": r.get("company_name") or "",
                                 "debit": r["total"], "credit": 0, "running": running})
             elif item["kind"] == "payment":
                 running += float(r["amount"])
                 parts = [r["method"]] if r["method"] else []
                 if r["reference"]: parts.append(r["reference"])
                 if r["notes"]:     parts.append(r["notes"])
+                label = " — ".join(parts) if parts else "Payment"
+                if r.get("company_name"):
+                    label += f" ({r['company_name']})"
                 entries.append({"date": r["payment_date"] or "", "type": "payment",
-                                "label": " — ".join(parts) if parts else "Payment",
+                                "label": label, "company": r.get("company_name") or "",
                                 "invoice_id": r["invoice_id"],
                                 "debit": 0, "credit": r["amount"], "running": running})
             else:  # manual
@@ -202,6 +248,14 @@ def add_ledger_entry(client_id):
     return jsonify({"ok": True})
 
 
+@bp.route("/<int:client_id>/recalculate", methods=["POST"])
+@login_required
+@permission_required("clients", "financials")
+def recalculate(client_id):
+    recalculate_client_balance(client_id)
+    return jsonify({"ok": True})
+
+
 @bp.route("/<int:client_id>/delete", methods=["POST"])
 @login_required
 @permission_required("clients", "delete")
@@ -209,3 +263,47 @@ def delete_client(client_id):
     client_service.delete_client(client_id)
     flash("Client deleted.", "success")
     return redirect(url_for("clients.list_clients"))
+
+
+# ── Company endpoints ─────────────────────────────────────────────────────────
+
+@bp.route("/api/<int:client_id>/companies")
+@login_required
+def api_companies(client_id):
+    companies = client_service.get_companies(client_id)
+    return jsonify([dict(c) for c in companies])
+
+
+@bp.route("/<int:client_id>/companies", methods=["POST"])
+@login_required
+@permission_required("clients", "edit")
+def add_company(client_id):
+    data = request.get_json(silent=True) or {}
+    if not data.get("name"):
+        return jsonify({"error": "Company name is required"}), 400
+    # Accept either signed opening_balance or amt+type
+    if "opening_balance_amt" not in data and "opening_balance" in data:
+        data["opening_balance_amt"] = abs(float(data.get("opening_balance") or 0))
+    company_id = client_service.create_company(client_id, data)
+    return jsonify({"ok": True, "id": company_id, "name": data["name"]})
+
+
+@bp.route("/<int:client_id>/companies/<int:company_id>", methods=["POST"])
+@login_required
+@permission_required("clients", "edit")
+def edit_company(client_id, company_id):
+    data = request.get_json(silent=True) or {}
+    if not data.get("name"):
+        return jsonify({"error": "Company name is required"}), 400
+    if "opening_balance_amt" not in data and "opening_balance" in data:
+        data["opening_balance_amt"] = abs(float(data.get("opening_balance") or 0))
+    client_service.update_company(company_id, data)
+    return jsonify({"ok": True})
+
+
+@bp.route("/<int:client_id>/companies/<int:company_id>/delete", methods=["POST"])
+@login_required
+@permission_required("clients", "edit")
+def delete_company(client_id, company_id):
+    client_service.delete_company(company_id)
+    return jsonify({"ok": True})

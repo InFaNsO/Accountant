@@ -38,15 +38,9 @@
           </td>
           {% if can_financials %}
           {% set ob = (c.opening_balance or 0) %}
-          {% set ob_paid = c.ob_paid or 0 %}
-          {% if ob >= 0 %}
-            {% set ob_remaining = [ob - ob_paid, 0]|max %}
-            {% set ob_excess = [ob_paid - ob, 0]|max %}
-          {% else %}
-            {% set ob_remaining = 0 %}
-            {% set ob_excess = ob_paid + (ob * -1) %}
-          {% endif %}
-          {% set balance = -(ob_remaining + (c.invoice_balance or 0)) + ob_excess %}
+          {% set credit_ob = [0, ob * -1]|max %}
+          {% set debit_ob  = [0, ob]|max %}
+          {% set balance = (c.total_paid + credit_ob) - (c.total_invoiced + debit_ob) %}
           <td style="text-align:right">
             <span onclick="showClientLedger({{ c.id }}, '{{ c.name|replace("'", "\\'") }}')"
                   style="cursor:pointer;text-decoration:underline dotted"

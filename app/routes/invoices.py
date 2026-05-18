@@ -1,5 +1,5 @@
 import re
-from flask import Blueprint, render_template, request, redirect, url_for, flash
+from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
 from flask_login import login_required
 from ..services import invoice_service, client_service, product_service
 from ..services.auth_service import permission_required
@@ -62,6 +62,13 @@ def _parse_items(form):
                 "tax_rate":       form.get(f"items[{idx}][tax_rate]", 0),
             })
     return items
+
+
+@bp.route("/api/client-companies/<int:client_id>")
+@login_required
+def api_client_companies(client_id):
+    companies = client_service.get_companies(client_id)
+    return jsonify([{"id": c["id"], "name": c["name"]} for c in companies])
 
 
 @bp.route("/")

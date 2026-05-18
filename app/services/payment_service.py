@@ -56,6 +56,166 @@ def _refresh_invoice_paid(db, invoice_id):
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+def recalculate_client_balance(client_id):
+    """
+    Re-run payment allocation from scratch for a client.
+
+    Steps:
+      1. Reset every payment's invoice_id to NULL.
+      2. Reset every non-cancelled invoice's amount_paid to 0 / status to 'issued'.
+      3. Re-allocate: opening-balance coverage (NULL) first, then oldest invoices.
+      4. Apply credit opening balance (ob < 0) directly to oldest invoices.
+      5. Commit.
+    """
+    db = get_db()
+
+    client = db.execute("SELECT opening_balance FROM clients WHERE id=?", (client_id,)).fetchone()
+    if not client:
+        return
+
+    ob = float(client["opening_balance"] or 0)
+    # Positive OB = client owes us; needs NULL-payment coverage
+    ob_coverage = max(0.0, ob)
+    # Negative OB = client pre-paid credit; applies directly to oldest invoices
+    ob_credit   = abs(min(0.0, ob))
+
+    # 1 & 2 — reset all allocations
+    db.execute("UPDATE payments SET invoice_id=NULL WHERE client_id=?", (client_id,))
+    db.execute(
+        """UPDATE invoices
+           SET amount_paid = 0,
+               status = CASE WHEN status = 'draft' THEN 'draft' ELSE 'issued' END
+           WHERE client_id = ? AND status != 'cancelled'""",
+        (client_id,),
+    )
+
+    total_payments = float(db.execute(
+        "SELECT COALESCE(SUM(amount), 0) FROM payments WHERE client_id=?",
+        (client_id,),
+    ).fetchone()[0])
+
+    # 3 — re-allocate surplus beyond OB coverage to invoices
+    keep_for_ob = min(total_payments, ob_coverage)
+    to_release  = total_payments - keep_for_ob
+
+    if to_release > 0.001:
+        _release_null_to_invoices(db, client_id, keep_for_ob, to_release)
+
+    # 4 — apply credit OB directly to oldest invoices (no payment record needed)
+    if ob_credit > 0.001:
+        _apply_credit_ob_to_invoices(db, client_id, ob_credit)
+
+    db.commit()
+
+
+def _release_null_to_invoices(db, client_id, keep_for_ob, to_release):
+    """Walk NULL payments oldest-first; skip the OB-coverage portion; send the rest to invoices."""
+    null_pmts = db.execute(
+        "SELECT id, amount, payment_date, method, reference, notes "
+        "FROM payments WHERE client_id=? AND invoice_id IS NULL "
+        "ORDER BY payment_date ASC, id ASC",
+        (client_id,),
+    ).fetchall()
+
+    open_invoices = db.execute(
+        "SELECT id, total, amount_paid FROM invoices "
+        "WHERE client_id=? AND status NOT IN ('cancelled') AND total > amount_paid "
+        "ORDER BY issue_date ASC, id ASC",
+        (client_id,),
+    ).fetchall()
+
+    if not null_pmts or not open_invoices:
+        return
+
+    affected  = set()
+    ob_budget = keep_for_ob
+    inv_gaps  = {inv["id"]: float(inv["total"]) - float(inv["amount_paid"]) for inv in open_invoices}
+    inv_order = [inv["id"] for inv in open_invoices]
+
+    for pmt in null_pmts:
+        pmt_amount     = float(pmt["amount"])
+        ob_take        = min(pmt_amount, max(0.0, ob_budget))
+        ob_budget     -= ob_take
+        release_amount = pmt_amount - ob_take
+
+        if release_amount < 0.001:
+            continue
+
+        if ob_take < 0.001:
+            # Entire payment is released — reuse the record for the first invoice
+            remaining  = release_amount
+            first_used = False
+            for inv_id in inv_order:
+                if remaining < 0.001:
+                    break
+                if inv_gaps.get(inv_id, 0) < 0.001:
+                    continue
+                alloc = min(remaining, inv_gaps[inv_id])
+                inv_gaps[inv_id] -= alloc
+                remaining -= alloc
+                affected.add(inv_id)
+                if not first_used:
+                    db.execute(
+                        "UPDATE payments SET invoice_id=?, amount=? WHERE id=?",
+                        (inv_id, alloc, pmt["id"]),
+                    )
+                    first_used = True
+                else:
+                    db.execute(
+                        "INSERT INTO payments (client_id, invoice_id, amount, payment_date, method, reference, notes) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (client_id, inv_id, alloc, pmt["payment_date"],
+                         pmt["method"] or "cash", pmt["reference"], pmt["notes"]),
+                    )
+        else:
+            # Split: ob_take stays NULL (reduce original), release_amount goes to invoices
+            db.execute("UPDATE payments SET amount=? WHERE id=?", (ob_take, pmt["id"]))
+            remaining = release_amount
+            for inv_id in inv_order:
+                if remaining < 0.001:
+                    break
+                if inv_gaps.get(inv_id, 0) < 0.001:
+                    continue
+                alloc = min(remaining, inv_gaps[inv_id])
+                inv_gaps[inv_id] -= alloc
+                remaining -= alloc
+                affected.add(inv_id)
+                db.execute(
+                    "INSERT INTO payments (client_id, invoice_id, amount, payment_date, method, reference, notes) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (client_id, inv_id, alloc, pmt["payment_date"],
+                     pmt["method"] or "cash", pmt["reference"], pmt["notes"]),
+                )
+
+    for inv_id in affected:
+        _refresh_invoice_paid(db, inv_id)
+
+
+def _apply_credit_ob_to_invoices(db, client_id, credit_amount):
+    """Apply a credit opening balance directly to oldest invoices by updating amount_paid.
+    No payment record is created — the OB itself is the source of credit."""
+    invoices = db.execute(
+        "SELECT id, total, amount_paid FROM invoices "
+        "WHERE client_id=? AND status NOT IN ('cancelled') AND total > amount_paid "
+        "ORDER BY issue_date ASC, id ASC",
+        (client_id,),
+    ).fetchall()
+
+    remaining = credit_amount
+    for inv in invoices:
+        if remaining < 0.001:
+            break
+        gap   = float(inv["total"]) - float(inv["amount_paid"])
+        alloc = min(gap, remaining)
+        remaining -= alloc
+        new_paid = float(inv["amount_paid"]) + alloc
+        new_status = "paid" if new_paid >= float(inv["total"]) else "partial"
+        db.execute(
+            "UPDATE invoices SET amount_paid=?, status=? WHERE id=?",
+            (new_paid, new_status, inv["id"]),
+        )
+
+
 def create_payment(data):
     """
     Record a payment against a client ledger.
@@ -70,15 +230,16 @@ def create_payment(data):
     client_id  = int(data["client_id"])
     amount     = float(data["amount"])
     explicit   = data.get("invoice_id")
+    company_id = int(data["company_id"]) if data.get("company_id") else None
 
     inserted_ids = []
 
     if explicit:
         # Direct allocation to a specific invoice
         cur = db.execute(
-            """INSERT INTO payments (client_id, invoice_id, amount, payment_date, method, reference, notes)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (client_id, int(explicit), amount,
+            """INSERT INTO payments (client_id, invoice_id, company_id, amount, payment_date, method, reference, notes)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (client_id, int(explicit), company_id, amount,
              data["payment_date"], data.get("method","cash"),
              data.get("reference"), data.get("notes")),
         )
@@ -92,9 +253,9 @@ def create_payment(data):
         if ob_remaining > 0 and remaining > 0:
             apply = min(ob_remaining, remaining)
             cur = db.execute(
-                """INSERT INTO payments (client_id, invoice_id, amount, payment_date, method, reference, notes)
-                   VALUES (?, NULL, ?, ?, ?, ?, ?)""",
-                (client_id, apply, data["payment_date"],
+                """INSERT INTO payments (client_id, invoice_id, company_id, amount, payment_date, method, reference, notes)
+                   VALUES (?, NULL, ?, ?, ?, ?, ?, ?)""",
+                (client_id, company_id, apply, data["payment_date"],
                  data.get("method","cash"), data.get("reference"), data.get("notes")),
             )
             inserted_ids.append(cur.lastrowid)
@@ -107,9 +268,9 @@ def create_payment(data):
                     break
                 apply = min(inv["remaining"], remaining)
                 cur = db.execute(
-                    """INSERT INTO payments (client_id, invoice_id, amount, payment_date, method, reference, notes)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                    (client_id, inv["id"], apply, data["payment_date"],
+                    """INSERT INTO payments (client_id, invoice_id, company_id, amount, payment_date, method, reference, notes)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (client_id, inv["id"], company_id, apply, data["payment_date"],
                      data.get("method","cash"), data.get("reference"), data.get("notes")),
                 )
                 inserted_ids.append(cur.lastrowid)
@@ -119,9 +280,9 @@ def create_payment(data):
             # Step 3 — any leftover goes as unallocated (invoice_id NULL)
             if remaining > 0.001:
                 cur = db.execute(
-                    """INSERT INTO payments (client_id, invoice_id, amount, payment_date, method, reference, notes)
-                       VALUES (?, NULL, ?, ?, ?, ?, ?)""",
-                    (client_id, remaining, data["payment_date"],
+                    """INSERT INTO payments (client_id, invoice_id, company_id, amount, payment_date, method, reference, notes)
+                       VALUES (?, NULL, ?, ?, ?, ?, ?, ?)""",
+                    (client_id, company_id, remaining, data["payment_date"],
                      data.get("method","cash"), data.get("reference"), data.get("notes")),
                 )
                 inserted_ids.append(cur.lastrowid)

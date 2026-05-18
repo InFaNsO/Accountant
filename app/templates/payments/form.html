@@ -38,6 +38,13 @@
           </select>
         </div>
 
+        <div class="form-group span-2" id="companyWrap" style="display:none">
+          <label for="company_id">Received from Company <span style="font-weight:400;color:var(--text-muted)">(optional)</span></label>
+          <select id="company_id" name="company_id">
+            <option value="">— No specific company —</option>
+          </select>
+        </div>
+
         <div class="form-group">
           <label for="amount">Amount (₹) *</label>
           <input type="number" id="amount" name="amount"
@@ -121,6 +128,25 @@ async function loadClientInvoices(clientId) {
   });
   window._clientInvoices = invs;
   updatePreview();
+  loadClientCompanies(clientId);
+}
+
+async function loadClientCompanies(clientId) {
+  const wrap = document.getElementById('companyWrap');
+  const sel  = document.getElementById('company_id');
+  sel.innerHTML = '<option value="">— No specific company —</option>';
+  if (!clientId) { wrap.style.display = 'none'; return; }
+  try {
+    const res       = await fetch(`/payments/api/client-companies/${clientId}`);
+    const companies = await res.json();
+    companies.forEach(co => {
+      const opt = document.createElement('option');
+      opt.value       = co.id;
+      opt.textContent = co.name;
+      sel.appendChild(opt);
+    });
+    wrap.style.display = companies.length ? '' : 'none';
+  } catch(e) { wrap.style.display = 'none'; }
 }
 
 function updatePreview() {

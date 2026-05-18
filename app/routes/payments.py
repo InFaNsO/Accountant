@@ -72,6 +72,15 @@ def delete_payment(payment_id):
     return redirect(url_for("payments.list_payments"))
 
 
+# ── Client companies list for JS (used by payment form) ──────────────────────
+@bp.route("/api/client-companies/<int:client_id>")
+@login_required
+@permission_required("payments", "view")
+def api_client_companies(client_id):
+    companies = client_service.get_companies(client_id)
+    return jsonify([{"id": c["id"], "name": c["name"]} for c in companies])
+
+
 # ── Client invoice list for JS (used by payment form) ────────────────────────
 @bp.route("/api/client-invoices/<int:client_id>")
 @login_required

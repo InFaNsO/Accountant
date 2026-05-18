@@ -84,14 +84,20 @@
 
   </div>
 
-  <!-- Right: balance + summary -->
+  <!-- Right: balance + summary + companies -->
   <div style="display:flex;flex-direction:column;gap:22px">
 
     {% if can_financials %}
-    <div class="card" onclick="showClientLedger({{ client.id }}, '{{ client.name|replace("'", "\\'") }}')"
-         style="cursor:pointer" title="Click to view full ledger">
-      <div class="card-header"><span class="card-title">Balance</span><span style="font-size:11px;color:var(--text-muted);margin-left:auto">Click to view ledger</span></div>
-      <div class="card-body">
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title" style="cursor:pointer" onclick="showClientLedger({{ client.id }}, '{{ client.name|replace("'", "\\'") }}')" title="Click to view full ledger">Balance</span>
+        <span style="font-size:11px;color:var(--text-muted);margin-left:8px;cursor:pointer" onclick="showClientLedger({{ client.id }}, '{{ client.name|replace("'", "\\'") }}')">Click to view ledger</span>
+        <button id="recalcBtn" class="btn btn-secondary btn-sm" style="margin-left:auto"
+                onclick="recalculateBalance({{ client.id }})">Recalculate</button>
+      </div>
+      <div class="card-body" id="balanceBody"
+           style="cursor:pointer" title="Click to view ledger"
+           onclick="showClientLedger({{ client.id }}, '{{ client.name|replace("'", "\\'") }}')">
         <div class="stat-value" style="font-size:32px;color:{% if balance < 0 %}var(--danger){% elif balance > 0 %}var(--success){% else %}var(--warning){% endif %}">
           {{ balance|inr }}
         </div>
@@ -120,6 +126,210 @@
       </div>
     </div>
 
+    <!-- Companies card -->
+    <div class="card" id="companiesCard">
+      <div class="card-header">
+        <span class="card-title">Companies ({{ companies|length }})</span>
+        <button class="btn btn-secondary btn-sm" onclick="showAddCompany()" style="margin-left:auto">+ Add</button>
+      </div>
+
+      <!-- Add company form (hidden by default) -->
+      <div id="addCompanyForm" style="display:none;padding:14px 18px;border-bottom:1px solid var(--border)">
+        <div class="form-grid form-grid-2" style="gap:10px">
+          <div class="form-group span-2">
+            <label style="font-size:12px">Company Name *</label>
+            <input type="text" id="nc_name" placeholder="Acme Corp" style="font-size:13px">
+          </div>
+          <div class="form-group span-2">
+            <label style="font-size:12px">GST Number</label>
+            <input type="text" id="nc_tax_id" placeholder="27AABCJ1234A1Z5" style="font-size:13px;font-family:monospace;text-transform:uppercase" oninput="this.value=this.value.toUpperCase()">
+          </div>
+          <div class="form-group">
+            <label style="font-size:12px">Opening Balance (₹)</label>
+            <input type="number" id="nc_ob_amt" value="0" min="0" step="0.01" style="font-size:13px">
+          </div>
+          <div class="form-group">
+            <label style="font-size:12px">Balance Type</label>
+            <select id="nc_ob_type" style="font-size:13px">
+              <option value="debt">Client owes us (debt)</option>
+              <option value="credit">Client has credit (advance paid)</option>
+            </select>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <button class="btn btn-primary btn-sm" onclick="saveNewCompany({{ client.id }})">Save</button>
+          <button class="btn btn-secondary btn-sm" onclick="hideAddCompany()">Cancel</button>
+        </div>
+      </div>
+
+      {% if companies %}
+      <div class="table-wrap">
+        <table id="companiesTable">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th class="col-mobile-hide">GST</th>
+              {% if can_financials %}<th style="text-align:right">Opening Bal.</th>{% endif %}
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for co in companies %}
+            {% set co_ob = co.opening_balance or 0 %}
+            <tr id="co-row-{{ co.id }}">
+              <td style="font-weight:600;font-size:13px">{{ co.name }}</td>
+              <td class="muted col-mobile-hide" style="font-size:12px;font-family:monospace">{{ co.tax_id or '—' }}</td>
+              {% if can_financials %}
+              <td style="text-align:right;font-size:12px">
+                {% if co_ob < 0 %}
+                  <span style="color:var(--success)">{{ (co_ob * -1)|inr }} cr</span>
+                {% elif co_ob > 0 %}
+                  <span style="color:var(--danger)">{{ co_ob|inr }} dr</span>
+                {% else %}
+                  <span class="muted">—</span>
+                {% endif %}
+              </td>
+              {% endif %}
+              <td style="text-align:right;white-space:nowrap">
+                <button class="btn btn-ghost btn-sm" onclick="editCompany({{ co.id }}, {{ co.name|tojson }}, {{ (co.tax_id or '')|tojson }}, {{ co_ob }})">Edit</button>
+                <button class="btn btn-danger btn-sm" onclick="deleteCompany({{ client.id }}, {{ co.id }}, '{{ co.name|replace("'","\\'") }}')">Del</button>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="empty-state" style="padding:20px" id="companiesEmpty">
+        <p style="font-size:13px;color:var(--text-muted)">No companies added yet.</p>
+      </div>
+      {% endif %}
+    </div>
+
   </div>
 </div>
+
+<!-- Edit company modal -->
+<div id="editCoModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9000;align-items:center;justify-content:center">
+  <div style="background:var(--bg);border-radius:var(--radius);padding:24px;width:440px;max-width:94vw;box-shadow:0 16px 48px rgba(0,0,0,.3)">
+    <div style="font-weight:700;font-size:15px;margin-bottom:16px">Edit Company</div>
+    <input type="hidden" id="ec_id">
+    <div class="form-group" style="margin-bottom:10px">
+      <label style="font-size:12px">Company Name *</label>
+      <input type="text" id="ec_name" style="font-size:13px">
+    </div>
+    <div class="form-group" style="margin-bottom:10px">
+      <label style="font-size:12px">GST Number</label>
+      <input type="text" id="ec_tax_id" style="font-size:13px;font-family:monospace;text-transform:uppercase" oninput="this.value=this.value.toUpperCase()" placeholder="27AABCJ1234A1Z5">
+    </div>
+    <div class="form-grid form-grid-2" style="gap:10px">
+      <div class="form-group">
+        <label style="font-size:12px">Opening Balance (₹)</label>
+        <input type="number" id="ec_ob_amt" min="0" step="0.01" style="font-size:13px">
+      </div>
+      <div class="form-group">
+        <label style="font-size:12px">Balance Type</label>
+        <select id="ec_ob_type" style="font-size:13px">
+          <option value="debt">Client owes us (debt)</option>
+          <option value="credit">Client has credit (advance paid)</option>
+        </select>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end">
+      <button class="btn btn-primary" onclick="saveEditCompany({{ client.id }})">Save</button>
+      <button class="btn btn-secondary" onclick="document.getElementById('editCoModal').style.display='none'">Cancel</button>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function recalculateBalance(clientId) {
+  const btn = document.getElementById('recalcBtn');
+  btn.disabled = true;
+  btn.textContent = 'Recalculating…';
+  try {
+    const res = await fetch(`/clients/${clientId}/recalculate`, { method: 'POST' });
+    const data = await res.json();
+    if (data.ok) {
+      location.reload();
+    } else {
+      alert('Recalculation failed.');
+      btn.disabled = false;
+      btn.textContent = 'Recalculate';
+    }
+  } catch (e) {
+    alert('Error: ' + e);
+    btn.disabled = false;
+    btn.textContent = 'Recalculate';
+  }
+}
+
+function showAddCompany() {
+  document.getElementById('addCompanyForm').style.display = '';
+  document.getElementById('nc_name').focus();
+}
+function hideAddCompany() {
+  document.getElementById('addCompanyForm').style.display = 'none';
+  ['nc_name','nc_tax_id'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('nc_ob_amt').value  = '0';
+  document.getElementById('nc_ob_type').value = 'debt';
+}
+
+async function saveNewCompany(clientId) {
+  const name = document.getElementById('nc_name').value.trim();
+  if (!name) { alert('Company name is required.'); return; }
+  const res = await fetch(`/clients/${clientId}/companies`, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({
+      name,
+      tax_id:               document.getElementById('nc_tax_id').value.trim(),
+      opening_balance_amt:  document.getElementById('nc_ob_amt').value,
+      opening_balance_type: document.getElementById('nc_ob_type').value,
+    })
+  });
+  const data = await res.json();
+  if (data.error) { alert(data.error); return; }
+  location.reload();
+}
+
+function editCompany(id, name, tax_id, ob_signed) {
+  document.getElementById('ec_id').value     = id;
+  document.getElementById('ec_name').value   = name;
+  document.getElementById('ec_tax_id').value = tax_id;
+  document.getElementById('ec_ob_amt').value  = Math.abs(ob_signed).toFixed(2);
+  document.getElementById('ec_ob_type').value = ob_signed < 0 ? 'credit' : 'debt';
+  document.getElementById('editCoModal').style.display = 'flex';
+}
+
+async function saveEditCompany(clientId) {
+  const id   = document.getElementById('ec_id').value;
+  const name = document.getElementById('ec_name').value.trim();
+  if (!name) { alert('Company name is required.'); return; }
+  const res = await fetch(`/clients/${clientId}/companies/${id}`, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({
+      name,
+      tax_id:               document.getElementById('ec_tax_id').value.trim(),
+      opening_balance_amt:  document.getElementById('ec_ob_amt').value,
+      opening_balance_type: document.getElementById('ec_ob_type').value,
+    })
+  });
+  const data = await res.json();
+  if (data.error) { alert(data.error); return; }
+  location.reload();
+}
+
+async function deleteCompany(clientId, companyId, name) {
+  if (!confirm(`Delete company "${name}"?\n\nExisting invoices and payments will keep their data but the company link will be removed.`)) return;
+  const res  = await fetch(`/clients/${clientId}/companies/${companyId}/delete`, { method: 'POST' });
+  const data = await res.json();
+  if (data.error) { alert(data.error); return; }
+  location.reload();
+}
+</script>
 {% endblock %}

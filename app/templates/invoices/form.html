@@ -51,7 +51,14 @@
           <input type="number" id="discount_amount" name="discount_amount" value="{{ invoice.get('discount_amount', 0) }}" step="0.01" min="0" oninput="recalcTotals()">
         </div>
 
-        <div class="form-group span-3">
+        <div class="form-group" id="companyWrap" style="display:none">
+          <label for="company_id">Bill to Company</label>
+          <select id="company_id" name="company_id">
+            <option value="">— No specific company —</option>
+          </select>
+        </div>
+
+        <div class="form-group {% if invoice.get('company_id') %}{% else %}span-2{% endif %}" id="notesWrap">
           <label for="notes">Notes / Terms</label>
           <textarea id="notes" name="notes" placeholder="Payment terms, bank details, thank-you message…">{{ invoice.get('notes','') }}</textarea>
         </div>
@@ -201,6 +208,9 @@ function clientCbSelect(e, optEl) {
   document.getElementById('client_error').style.display = 'none';
   _clientDD.style.display = 'none'; _clientInput = null;
 
+  // Load companies for this client
+  loadClientCompanies(c.id);
+
   // Auto-fill due date from client's payment terms
   const dueDate = document.getElementById('due_date');
   const issueDate = document.getElementById('issue_date');
@@ -215,6 +225,25 @@ function clientCbSelect(e, optEl) {
   } else {
     dueDate._clientTerms = null;
   }
+}
+
+async function loadClientCompanies(clientId, preselectId) {
+  const wrap = document.getElementById('companyWrap');
+  const sel  = document.getElementById('company_id');
+  sel.innerHTML = '<option value="">— No specific company —</option>';
+  if (!clientId) { wrap.style.display = 'none'; return; }
+  try {
+    const res       = await fetch(`/invoices/api/client-companies/${clientId}`);
+    const companies = await res.json();
+    companies.forEach(co => {
+      const opt = document.createElement('option');
+      opt.value       = co.id;
+      opt.textContent = co.name;
+      if (preselectId && String(co.id) === String(preselectId)) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    wrap.style.display = companies.length ? '' : 'none';
+  } catch(e) { wrap.style.display = 'none'; }
 }
 function clientCbKey(e, inp) {
   if (_clientDD.style.display === 'none' || _clientInput !== inp) {
@@ -528,10 +557,12 @@ function recalcTotals() {
 document.addEventListener('DOMContentLoaded', () => {
   // Pre-populate client combobox in edit mode
   {
-    const clientIdVal = document.getElementById('client_id').value;
+    const clientIdVal  = document.getElementById('client_id').value;
+    const savedCompany = "{{ invoice.get('company_id', '')|string }}";
     if (clientIdVal) {
       const found = CLIENT_LIST.find(c => String(c.id) === String(clientIdVal));
       if (found) document.getElementById('client_search').value = found.name + (found.company ? ' — ' + found.company : '');
+      loadClientCompanies(clientIdVal, savedCompany || null);
     }
   }
 

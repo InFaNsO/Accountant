@@ -430,13 +430,14 @@ def update_client(client_id):
     existing = db.execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
     if not existing:
         return jsonify({"error": f"Client ID {client_id} not found."}), 404
-    opening_balance_amt = data.get("opening_balance_amt")
+    opening_balance_amt  = data.get("opening_balance_amt")
     opening_balance_type = data.get("opening_balance_type")
+    old_ob = _f(existing["opening_balance"])
     if opening_balance_amt is not None:
-        ob_type = opening_balance_type or ("credit" if _f(existing["opening_balance"]) < 0 else "debt")
+        ob_type = opening_balance_type or ("credit" if old_ob < 0 else "debt")
         ob = abs(float(opening_balance_amt)) if ob_type != "credit" else -abs(float(opening_balance_amt))
     else:
-        ob = _f(existing["opening_balance"])
+        ob = old_ob
     db.execute(
         """UPDATE clients SET name=?, company=?, email=?, phone=?, address=?,
            city=?, country=?, tax_id=?, notes=?, opening_balance=?,

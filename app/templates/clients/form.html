@@ -6,92 +6,180 @@
 {% endblock %}
 
 {% block content %}
-<div class="card" style="max-width:760px">
-  <div class="card-header">
-    <span class="card-title">Client Information</span>
-  </div>
-  <div class="card-body">
-    <form method="post" action="{{ url_for('clients.edit_client', client_id=client_id) if action == 'edit' else url_for('clients.new_client') }}">
-      <div class="form-grid form-grid-2">
+<div style="max-width:780px">
+  <form method="post" id="clientForm"
+        action="{{ url_for('clients.edit_client', client_id=client_id) if action == 'edit' else url_for('clients.new_client') }}">
 
-        <div class="form-group">
-          <label for="name">Full Name *</label>
-          <input type="text" id="name" name="name" value="{{ client.get('name','') }}" required placeholder="Jane Smith">
-        </div>
+    <!-- Basic Info -->
+    <div class="card" style="margin-bottom:18px">
+      <div class="card-header"><span class="card-title">Client Information</span></div>
+      <div class="card-body">
+        <div class="form-grid form-grid-2">
 
-        <div class="form-group">
-          <label for="company">Company</label>
-          <input type="text" id="company" name="company" value="{{ client.get('company','') }}" placeholder="Acme Corp">
-        </div>
+          <div class="form-group span-2">
+            <label for="name">Full Name *</label>
+            <input type="text" id="name" name="name" value="{{ client.get('name','') }}" required placeholder="e.g. Rajesh Kumar">
+          </div>
 
-        <div class="form-group">
-          <label for="email">Email</label>
-          <input type="email" id="email" name="email" value="{{ client.get('email','') }}" placeholder="jane@example.com">
-        </div>
+          <div class="form-group">
+            <label for="phone">Phone <span style="color:var(--text-muted);font-size:12px">(optional)</span></label>
+            <input type="tel" id="phone" name="phone" value="{{ client.get('phone','') }}" placeholder="+91 98765 43210">
+          </div>
 
-        <div class="form-group">
-          <label for="phone">Phone</label>
-          <input type="tel" id="phone" name="phone" value="{{ client.get('phone','') }}" placeholder="+1 555 000 0000">
-        </div>
+          <div class="form-group">
+            <label for="payment_terms">Payment Terms (days)</label>
+            <input type="number" id="payment_terms" name="payment_terms"
+                   value="{{ client.get('payment_terms', '') or 30 }}"
+                   min="0" step="1" placeholder="30">
+          </div>
 
-        <div class="form-group span-2">
-          <label for="address">Street Address</label>
-          <input type="text" id="address" name="address" value="{{ client.get('address','') }}" placeholder="123 Main St">
-        </div>
+          <div class="form-group span-2">
+            <label for="notes">Notes</label>
+            <textarea id="notes" name="notes" placeholder="Any relevant notes about this client…">{{ client.get('notes','') }}</textarea>
+          </div>
 
-        <div class="form-group">
-          <label for="city">City</label>
-          <input type="text" id="city" name="city" value="{{ client.get('city','') }}" placeholder="New York">
         </div>
-
-        <div class="form-group">
-          <label for="country">Country</label>
-          <input type="text" id="country" name="country" value="{{ client.get('country','') }}" placeholder="United States">
-        </div>
-
-        <div class="form-group">
-          <label for="tax_id">Tax ID / VAT Number</label>
-          <input type="text" id="tax_id" name="tax_id" value="{{ client.get('tax_id','') }}" placeholder="US-123456789">
-        </div>
-
-        <div class="form-group">
-          <label for="opening_balance_amt">Opening Balance (₹)</label>
-          <input type="number" id="opening_balance_amt" name="opening_balance_amt"
-                 value="{{ client.get('opening_balance', 0)|abs }}"
-                 step="0.01" min="0" placeholder="0.00">
-        </div>
-        <div class="form-group">
-          <label for="opening_balance_type">Balance Type</label>
-          <select id="opening_balance_type" name="opening_balance_type">
-            <option value="debt" {{ 'selected' if (client.get('opening_balance') or 0) >= 0 }}>Client owes us (debt)</option>
-            <option value="credit" {{ 'selected' if (client.get('opening_balance') or 0) < 0 }}>Client has credit (advance paid)</option>
-          </select>
-        </div>
-
-        <div class="form-group">
-          <label for="payment_terms">Payment Terms (days)</label>
-          <input type="number" id="payment_terms" name="payment_terms"
-                 value="{{ client.get('payment_terms', '') or '' }}"
-                 min="0" step="1" placeholder="e.g. 30, 60, 90">
-        </div>
-        <div class="form-group" style="display:flex;align-items:flex-end;padding-bottom:2px">
-          <p style="font-size:12px;color:var(--text-muted);line-height:1.5;margin:0">
-            When set, invoices for this client will auto-fill the due date as
-            <strong>issue date + payment terms</strong>.
-          </p>
-        </div>
-
-        <div class="form-group span-2">
-          <label for="notes">Notes</label>
-          <textarea id="notes" name="notes" placeholder="Any relevant notes about this client…">{{ client.get('notes','') }}</textarea>
-        </div>
-
       </div>
-      <div class="form-actions mt-16">
-        <button type="submit" class="btn btn-primary">{{ 'Save Changes' if action == 'edit' else 'Create Client' }}</button>
-        <a href="{{ url_for('clients.list_clients') }}" class="btn btn-secondary">Cancel</a>
+    </div>
+
+    <!-- Company Details -->
+    <div class="card" style="margin-bottom:18px">
+      <div class="card-header">
+        <span class="card-title">Company Details</span>
+        <span style="font-size:12px;color:var(--text-muted);margin-left:10px">At least 1 company required</span>
+        <button type="button" class="btn btn-secondary btn-sm" style="margin-left:auto" onclick="addCompanyBlock()">+ Add Company</button>
       </div>
-    </form>
-  </div>
+      <div id="companiesContainer" style="padding:0 18px 4px">
+        <!-- Companies rendered here -->
+      </div>
+    </div>
+
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary" onclick="return validateCompanies()">
+        {{ 'Save Changes' if action == 'edit' else 'Create Client' }}
+      </button>
+      <a href="{{ url_for('clients.list_clients') }}" class="btn btn-secondary">Cancel</a>
+    </div>
+
+  </form>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Existing companies (for edit mode)
+const EXISTING_COMPANIES = {{ companies | tojson if companies is defined else '[]' }};
+
+let companyIdx = 0;
+
+function addCompanyBlock(data) {
+  const container = document.getElementById('companiesContainer');
+  const idx       = companyIdx++;
+  const id        = data ? (data.id || '') : '';
+  const name      = data ? escHtml(data.name || '') : '';
+  const tax_id    = data ? escHtml(data.tax_id || '') : '';
+  const ob_amt    = data ? Math.abs(parseFloat(data.opening_balance || 0)).toFixed(2) : '0.00';
+  const ob_type   = data ? (parseFloat(data.opening_balance || 0) < 0 ? 'credit' : 'debt') : 'debt';
+  const isFirst   = container.children.length === 0;
+
+  const div = document.createElement('div');
+  div.className = 'company-block';
+  div.dataset.idx = idx;
+  div.innerHTML = `
+    <div class="company-separator" style="display:flex;align-items:center;gap:10px;margin:14px 0 10px">
+      <span style="font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">
+        Company ${container.children.length + 1}
+      </span>
+      <div style="flex:1;height:1px;background:var(--border)"></div>
+      <button type="button" class="btn btn-danger btn-sm" onclick="removeCompanyBlock(this)"
+              ${isFirst ? 'disabled title="At least one company required"' : ''}>Remove</button>
+    </div>
+    <input type="hidden" name="companies[${idx}][id]" value="${id}">
+    <div class="form-grid form-grid-2" style="gap:12px;margin-bottom:14px">
+      <div class="form-group">
+        <label style="font-size:13px">Company Name *</label>
+        <input type="text" name="companies[${idx}][name]" value="${name}"
+               placeholder="e.g. Jain Trading Co." required>
+      </div>
+      <div class="form-group">
+        <label style="font-size:13px">GST Number <span style="color:var(--text-muted);font-size:11px">(optional)</span></label>
+        <input type="text" name="companies[${idx}][tax_id]" value="${tax_id}"
+               placeholder="e.g. 27AABCJ1234A1Z5" maxlength="15"
+               style="font-family:monospace;text-transform:uppercase"
+               oninput="this.value=this.value.toUpperCase()">
+      </div>
+      <div class="form-group">
+        <label style="font-size:13px">Opening Balance (₹)</label>
+        <input type="number" name="companies[${idx}][opening_balance_amt]"
+               value="${ob_amt}" min="0" step="0.01" placeholder="0.00">
+      </div>
+      <div class="form-group">
+        <label style="font-size:13px">Balance Type</label>
+        <select name="companies[${idx}][opening_balance_type]">
+          <option value="debt"   ${ob_type === 'debt'   ? 'selected' : ''}>Client owes us (debt)</option>
+          <option value="credit" ${ob_type === 'credit' ? 'selected' : ''}>Client has credit (advance paid)</option>
+        </select>
+      </div>
+    </div>
+  `;
+  container.appendChild(div);
+  updateRemoveButtons();
+}
+
+function removeCompanyBlock(btn) {
+  const block = btn.closest('.company-block');
+  block.remove();
+  renumberCompanies();
+  updateRemoveButtons();
+}
+
+function renumberCompanies() {
+  document.querySelectorAll('.company-block').forEach((block, i) => {
+    block.querySelector('.company-separator span').textContent = `Company ${i + 1}`;
+  });
+}
+
+function updateRemoveButtons() {
+  const blocks = document.querySelectorAll('.company-block');
+  blocks.forEach(block => {
+    const btn = block.querySelector('.btn-danger');
+    if (blocks.length === 1) {
+      btn.disabled = true;
+      btn.title = 'At least one company required';
+    } else {
+      btn.disabled = false;
+      btn.title = '';
+    }
+  });
+}
+
+function validateCompanies() {
+  const blocks = document.querySelectorAll('.company-block');
+  if (blocks.length === 0) {
+    alert('Please add at least one company.');
+    return false;
+  }
+  for (const block of blocks) {
+    const nameInp = block.querySelector('input[name$="[name]"]');
+    if (!nameInp.value.trim()) {
+      alert('Company name is required for all company entries.');
+      nameInp.focus();
+      return false;
+    }
+  }
+  return true;
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  if (EXISTING_COMPANIES.length > 0) {
+    EXISTING_COMPANIES.forEach(co => addCompanyBlock(co));
+  } else {
+    addCompanyBlock(); // start with 1 blank
+  }
+});
+</script>
 {% endblock %}
