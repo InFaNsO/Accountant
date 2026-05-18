@@ -10,10 +10,13 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.ProgressBar
+import android.widget.RelativeLayout
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import kotlinx.coroutines.CoroutineScope
@@ -32,20 +35,27 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Let the system handle inset sizing; we only control colour
-        WindowCompat.setDecorFitsSystemWindows(window, true)
+        // Edge-to-edge: content draws behind status bar; we handle insets explicitly
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         setContentView(R.layout.activity_main)
 
-        // Match status bar colour to the web app's white topbar
+        // White status bar with dark icons to match the web app topbar
         @Suppress("DEPRECATION")
         window.statusBarColor = android.graphics.Color.parseColor("#FFFFFF")
-        // Dark icons so they're visible on the white status bar
         WindowInsetsControllerCompat(window, window.decorView)
             .isAppearanceLightStatusBars = true
 
         webView     = findViewById(R.id.webView)
         swipeRefresh = findViewById(R.id.swipeRefresh)
         progressBar = findViewById(R.id.progressBar)
+
+        // Push layout content below the status bar
+        val rootLayout = findViewById<RelativeLayout>(R.id.rootLayout)
+        ViewCompat.setOnApplyWindowInsetsListener(rootLayout) { v, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.statusBars())
+            v.setPadding(0, bars.top, 0, 0)
+            WindowInsetsCompat.CONSUMED
+        }
 
         requestNotificationPermission()
         setupWebView()
