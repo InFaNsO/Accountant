@@ -5,6 +5,9 @@
   {% if subs %}
   <a href="{{ url_for('products.new_sub_product', product_id=product.id) }}" class="btn btn-secondary">+ Sub-Product</a>
   {% endif %}
+  {% if not product.eco_parent_id and not product.has_eco_range %}
+  <button onclick="document.getElementById('eco-range-modal').style.display='flex'" class="btn btn-secondary">+ Eco Range</button>
+  {% endif %}
   <a href="{{ url_for('products.edit_product', product_id=product.id) }}" class="btn btn-secondary">Edit</a>
   <a href="{{ url_for('products.list_products') }}" class="btn btn-secondary">Back</a>
 {% endblock %}
@@ -30,6 +33,30 @@
         {{ row('Min Quantity', product.min_quantity | indian if product.min_quantity else '—') }}
         {{ row('Pcs / Box', product.pcs_per_carton | indian if product.pcs_per_carton else '—') }}
         {{ row('Status', 'Active' if product.is_active else 'Inactive') }}
+        {% if eco_product %}
+        <tr>
+          <td style="padding:10px 20px;color:var(--text-muted);font-size:13px">Eco Range</td>
+          <td style="padding:10px 20px">
+            <a href="{{ url_for('products.product_detail', product_id=eco_product.id) }}"
+               style="color:var(--success);font-weight:600;text-decoration:none">
+              {{ eco_product.name }}{% if eco_product.sku %} [{{ eco_product.sku }}]{% endif %}
+            </a>
+            <span style="font-size:11px;color:var(--text-muted);margin-left:6px">{{ eco_product.unit_price|inr }}</span>
+          </td>
+        </tr>
+        {% endif %}
+        {% if main_product %}
+        <tr>
+          <td style="padding:10px 20px;color:var(--text-muted);font-size:13px">Main Product</td>
+          <td style="padding:10px 20px">
+            <a href="{{ url_for('products.product_detail', product_id=main_product.id) }}"
+               style="color:var(--primary);font-weight:600;text-decoration:none">
+              {{ main_product.name }}
+            </a>
+            <span style="font-size:11px;background:rgba(16,185,129,.15);color:#10b981;padding:2px 7px;border-radius:10px;margin-left:6px">Eco Product</span>
+          </td>
+        </tr>
+        {% endif %}
         {% if product.description %}
         <tr>
           <td style="padding:10px 20px;color:var(--text-muted);font-size:13px">Description</td>
@@ -309,6 +336,44 @@
     {% else %}
     <div class="empty-state" style="padding:28px"><p>No transit history yet.</p></div>
     {% endif %}
+  </div>
+</div>
+{% endif %}
+
+{% if not product.eco_parent_id and not product.has_eco_range %}
+<!-- Eco Range creation modal -->
+<div id="eco-range-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;align-items:center;justify-content:center">
+  <div style="background:var(--bg);border-radius:var(--radius);padding:28px;width:100%;max-width:420px;box-shadow:0 8px 32px rgba(0,0,0,.2)">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+      <h3 style="margin:0;font-size:16px">Create Eco Range</h3>
+      <button onclick="document.getElementById('eco-range-modal').style.display='none'"
+              style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text-muted);line-height:1">&times;</button>
+    </div>
+    <p style="font-size:13px;color:var(--text-muted);margin:0 0 18px">
+      Creates <strong>Eco {{ product.name }}</strong>{% if subs %} with {{ subs|length }} eco sub-product(s) mirroring your current sub-products{% endif %}.
+      Stock starts at zero — add it from the eco product page. Min quantity is shared with this product.
+    </p>
+    <form method="post" action="{{ url_for('products.create_eco_range', product_id=product.id) }}">
+      <div class="form-group" style="margin-bottom:14px">
+        <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px">Eco SKU <span style="font-weight:400;color:var(--text-muted)">(optional)</span></label>
+        <input type="text" name="sku"
+               placeholder="{{ 'E-' + product.sku if product.sku else 'Auto-generated' }}"
+               style="width:100%;box-sizing:border-box">
+        {% if product.sku %}
+        <div style="font-size:11px;color:var(--text-muted);margin-top:4px">Defaults to E-{{ product.sku }}</div>
+        {% endif %}
+      </div>
+      <div class="form-group" style="margin-bottom:20px">
+        <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px">Eco Unit Price (₹) *</label>
+        <input type="number" name="unit_price" step="0.01" min="0" placeholder="0.00" required
+               style="width:100%;box-sizing:border-box">
+        <div style="font-size:11px;color:var(--text-muted);margin-top:4px">Main product price: {{ product.unit_price|inr }}</div>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button type="button" onclick="document.getElementById('eco-range-modal').style.display='none'" class="btn btn-secondary">Cancel</button>
+        <button type="submit" class="btn btn-primary">Create Eco Range</button>
+      </div>
+    </form>
   </div>
 </div>
 {% endif %}

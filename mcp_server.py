@@ -348,13 +348,16 @@ def search_products(query: str) -> str:
 
 @mcp.tool()
 def get_stock_summary() -> str:
-    """Current stock levels for all products and sub-products (warehouse / production / transit)."""
+    """Current stock levels for all products and sub-products (warehouse / production / transit).
+    Eco-paired products are shown merged with their main product, displaying combined stock figures."""
     return _call("GET", "products/stock")
 
 
 @mcp.tool()
 def get_low_stock_alerts() -> str:
-    """List all products and sub-products currently below their minimum stock level."""
+    """List all products and sub-products currently below their minimum stock level.
+    For eco-paired products, combined (main + eco) stock is compared against the shared minimum.
+    If combined stock is short, BOTH the main and eco product/sub-product are listed as alerts."""
     return _call("GET", "products/low-stock")
 
 
@@ -395,6 +398,7 @@ def update_product(
     Update an existing product. ONLY call after explicit user confirmation.
     Pass None for numeric fields to keep existing values.
     pcs_per_carton: pieces per carton (inherited by all sub-products). Pass None to keep existing.
+    If the product has an eco range, changing min_quantity automatically cascades to the eco product.
     """
     return _call("PUT", f"products/{product_id}", body={k: v for k, v in locals().items() if k not in ("self", "product_id")})
 
@@ -406,6 +410,27 @@ def delete_product(product_id: int) -> str:
     Only call after the user explicitly confirmed deletion.
     """
     return _call("DELETE", f"products/{product_id}")
+
+
+@mcp.tool()
+def create_eco_range(
+    product_id: int,
+    unit_price: float,
+    sku: str = "",
+) -> str:
+    """
+    Create an eco range for an existing main product. ONLY call after explicit user confirmation.
+    Creates an eco variant product named "Eco <product name>" (and mirrors all sub-products if the
+    main has sub-products, each named "Eco <sub-product name>").
+    Eco range always starts with zero stock — use adjust_stock per eco product/sub-product to add stock.
+    The eco product shares the same minimum stock threshold as the main product.
+    Stock alerts compare combined (main + eco) stock against the minimum — if short, BOTH are flagged.
+    For products with sub-products, update eco sub-product pricing separately via update_sub_product.
+    Updating min_quantity on the main product automatically cascades to the eco product.
+    """
+    return _call("POST", f"products/{product_id}/create-eco-range", body={
+        "unit_price": unit_price, "sku": sku
+    })
 
 
 @mcp.tool()

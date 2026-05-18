@@ -1049,18 +1049,19 @@ def search_products():
 def get_stock_summary():
     db = get_db()
     products = db.execute(
-        "SELECT id, name, sku, stock_qty, production_qty, in_transit_qty, min_quantity "
+        "SELECT id, name, sku, stock_qty, production_qty, in_transit_qty, min_quantity, "
+        "has_eco_range, eco_parent_id "
         "FROM products WHERE is_active=1 ORDER BY name"
     ).fetchall()
     subs = db.execute(
-        """SELECT p.id AS parent_id, p.name AS parent, s.id, s.name, s.sku,
+        """SELECT p.id AS parent_id, p.name AS parent, p.eco_parent_id AS parent_eco_parent,
+                  s.id, s.name, s.sku, s.eco_parent_sub_id,
                   s.stock_qty, s.production_qty, s.in_transit_qty, s.min_quantity
            FROM sub_products s JOIN products p ON p.id=s.product_id
            WHERE s.is_active=1 ORDER BY p.name, s.name"""
     ).fetchall()
 
-    # Aggregate sub-product totals per parent so parent rows use SUM(sub.min_quantity)
-    # instead of p.min_quantity (which is just a per-sub fallback default, not the total)
+    # Aggregate sub-product totals per parent
     sub_agg = {}
     for s in subs:
         pid = s["parent_id"]
@@ -1071,6 +1072,9 @@ def get_stock_summary():
         sub_agg[pid]["transit"] += _f(s["in_transit_qty"])
         sub_agg[pid]["min"]     += _f(s["min_quantity"])
 
+    # Build lookup: main product id → eco product row
+    eco_by_main = {p["eco_parent_id"]: p for p in products if p["eco_parent_id"]}
+
     def _row(name, sku, stock, prod, transit, min_qty):
         alert = " ⚠ LOW" if min_qty and _f(stock) < _f(min_qty) else ""
         return (f"{name}" + (f" [{sku}]" if sku else "") +
@@ -1079,15 +1083,67 @@ def get_stock_summary():
     lines = ["=== Products ==="]
     for p in products:
         pid = p["id"]
+        # Skip eco products — they are shown merged with their main product
+        if p["eco_parent_id"]:
+            continue
+
+        eco = eco_by_main.get(pid)
+
         if pid in sub_agg:
-            # Parent with sub-products: use aggregated sub totals, not p.min_quantity
+            # Main product has sub-products
             agg = sub_agg[pid]
-            lines.append(_row(p["name"], p["sku"], agg["stock"], agg["prod"], agg["transit"], agg["min"]))
+            if eco and eco["id"] in sub_agg:
+                # Eco product also has sub-products — merge sub totals
+                eco_agg = sub_agg[eco["id"]]
+                combined_stock   = agg["stock"]   + eco_agg["stock"]
+                combined_prod    = agg["prod"]     + eco_agg["prod"]
+                combined_transit = agg["transit"]  + eco_agg["transit"]
+                alert = " ⚠ LOW" if agg["min"] and combined_stock < agg["min"] else ""
+                lines.append(
+                    f"{p['name']} + Eco" + (f" [{p['sku']}]" if p["sku"] else "") +
+                    f" | wh:{combined_stock:.0f}({agg['stock']:.0f}+{eco_agg['stock']:.0f})"
+                    f" prod:{combined_prod:.0f} transit:{combined_transit:.0f}{alert}"
+                )
+            else:
+                lines.append(_row(p["name"], p["sku"], agg["stock"], agg["prod"], agg["transit"], agg["min"]))
         else:
-            lines.append(_row(p["name"], p["sku"], p["stock_qty"], p["production_qty"], p["in_transit_qty"], p["min_quantity"]))
+            if eco:
+                # Standalone eco-paired product — merge stock
+                combined_stock   = _f(p["stock_qty"])   + _f(eco["stock_qty"])
+                combined_prod    = _f(p["production_qty"]) + _f(eco["production_qty"])
+                combined_transit = _f(p["in_transit_qty"]) + _f(eco["in_transit_qty"])
+                min_qty = _f(p["min_quantity"])
+                alert = " ⚠ LOW" if min_qty and combined_stock < min_qty else ""
+                lines.append(
+                    f"{p['name']} + Eco" + (f" [{p['sku']}]" if p["sku"] else "") +
+                    f" | wh:{combined_stock:.0f}({_f(p['stock_qty']):.0f}+{_f(eco['stock_qty']):.0f})"
+                    f" prod:{combined_prod:.0f} transit:{combined_transit:.0f}{alert}"
+                )
+            else:
+                lines.append(_row(p["name"], p["sku"], p["stock_qty"], p["production_qty"], p["in_transit_qty"], p["min_quantity"]))
+
     if subs:
         lines.append("\n=== Sub-products ===")
-        lines += [_row(f"{s['parent']} — {s['name']}", s["sku"], s["stock_qty"], s["production_qty"], s["in_transit_qty"], s["min_quantity"]) for s in subs]
+        # Build lookup: main sub id → eco sub row (for pairing)
+        eco_subs_by_main = {s["eco_parent_sub_id"]: s for s in subs if s["eco_parent_sub_id"]}
+        for s in subs:
+            # Skip eco sub-products (shown merged with main sub)
+            if s["eco_parent_sub_id"]:
+                continue
+            eco_s = eco_subs_by_main.get(s["id"])
+            if eco_s:
+                combined_stock   = _f(s["stock_qty"])     + _f(eco_s["stock_qty"])
+                combined_prod    = _f(s["production_qty"]) + _f(eco_s["production_qty"])
+                combined_transit = _f(s["in_transit_qty"]) + _f(eco_s["in_transit_qty"])
+                min_qty = _f(s["min_quantity"])
+                alert = " ⚠ LOW" if min_qty and combined_stock < min_qty else ""
+                lines.append(
+                    f"{s['parent']} — {s['name']} + Eco" + (f" [{s['sku']}]" if s["sku"] else "") +
+                    f" | wh:{combined_stock:.0f}({_f(s['stock_qty']):.0f}+{_f(eco_s['stock_qty']):.0f})"
+                    f" prod:{combined_prod:.0f} transit:{combined_transit:.0f}{alert}"
+                )
+            else:
+                lines.append(_row(f"{s['parent']} — {s['name']}", s["sku"], s["stock_qty"], s["production_qty"], s["in_transit_qty"], s["min_quantity"]))
     return jsonify({"result": "\n".join(lines)})
 
 
@@ -1095,56 +1151,126 @@ def get_stock_summary():
 @require_auth
 def get_low_stock_alerts():
     db = get_db()
-    # Products WITHOUT sub-products: use p.min_quantity directly
+
+    # ── Block A: Standalone products (no sub-products, no eco linkage) ──────
     low_p = db.execute(
         """SELECT name, sku, stock_qty, min_quantity FROM products
            WHERE is_active=1 AND min_quantity>0 AND stock_qty<min_quantity
+             AND has_eco_range=0 AND eco_parent_id IS NULL
              AND NOT EXISTS (SELECT 1 FROM sub_products sp WHERE sp.product_id=products.id AND sp.is_active=1)
            ORDER BY (stock_qty-min_quantity)"""
     ).fetchall()
 
-    # Products WITH sub-products: compare SUM(sub.stock_qty) vs SUM(sub.min_quantity)
+    # ── Block B: Eco-paired products without sub-products ───────────────────
+    # Check combined (main + eco) stock vs main's minimum
+    eco_paired_low = db.execute(
+        """SELECT p.name AS main_name, p.sku AS main_sku,
+                  p.stock_qty AS main_stock, p.min_quantity AS min_qty,
+                  eco.name AS eco_name, eco.sku AS eco_sku, eco.stock_qty AS eco_stock,
+                  (p.stock_qty + eco.stock_qty) AS combined
+           FROM products p
+           JOIN products eco ON eco.eco_parent_id = p.id AND eco.is_active=1
+           WHERE p.is_active=1 AND p.has_eco_range=1 AND p.min_quantity > 0
+             AND (p.stock_qty + eco.stock_qty) < p.min_quantity
+             AND NOT EXISTS (SELECT 1 FROM sub_products sp WHERE sp.product_id=p.id AND sp.is_active=1)
+           ORDER BY (p.stock_qty + eco.stock_qty - p.min_quantity)"""
+    ).fetchall()
+
+    # ── Block C: Products WITH sub-products, no eco range ───────────────────
     low_p_agg = db.execute(
         """SELECT p.name, p.sku,
-                  SUM(s.stock_qty)   AS total_stock,
+                  SUM(s.stock_qty)    AS total_stock,
                   SUM(s.min_quantity) AS total_min
            FROM products p
            JOIN sub_products s ON s.product_id=p.id AND s.is_active=1
-           WHERE p.is_active=1
+           WHERE p.is_active=1 AND p.has_eco_range=0 AND p.eco_parent_id IS NULL
            GROUP BY p.id
            HAVING total_min > 0 AND total_stock < total_min
            ORDER BY (total_stock - total_min)"""
     ).fetchall()
 
-    # Sub-products: use sub's own min_quantity (not parent fallback)
+    # ── Block D: Eco-paired products WITH sub-products (per-variant pair) ───
+    # For each main_sub + eco_sub pair, compare combined stock vs main_sub.min_quantity
+    eco_sub_pairs_low = db.execute(
+        """SELECT ms.name AS main_sub_name, ms.sku AS main_sub_sku,
+                  ms.stock_qty AS main_stock, ms.min_quantity AS eff_min,
+                  es.name AS eco_sub_name, es.sku AS eco_sub_sku, es.stock_qty AS eco_stock,
+                  p.name AS main_parent_name, ep.name AS eco_parent_name,
+                  (ms.stock_qty + es.stock_qty) AS combined
+           FROM sub_products ms
+           JOIN sub_products es ON es.eco_parent_sub_id = ms.id AND es.is_active=1
+           JOIN products p  ON p.id  = ms.product_id
+           JOIN products ep ON ep.id = es.product_id
+           WHERE ms.is_active=1 AND ms.min_quantity > 0
+             AND (ms.stock_qty + es.stock_qty) < ms.min_quantity
+           ORDER BY (ms.stock_qty + es.stock_qty - ms.min_quantity)"""
+    ).fetchall()
+
+    # ── Block E: Individual sub-products with no eco counterpart ────────────
+    # Exclude: eco sub-products (eco_parent_sub_id IS NOT NULL)
+    # Exclude: main sub-products that have an eco pair (handled in Block D)
     low_s = db.execute(
         """SELECT p.name AS parent, s.name, s.sku, s.stock_qty, s.min_quantity AS eff_min
            FROM sub_products s JOIN products p ON p.id=s.product_id
            WHERE s.is_active=1 AND s.min_quantity>0 AND s.stock_qty < s.min_quantity
+             AND s.eco_parent_sub_id IS NULL
+             AND NOT EXISTS (
+                 SELECT 1 FROM sub_products es
+                 WHERE es.eco_parent_sub_id = s.id AND es.is_active=1
+             )
            ORDER BY s.stock_qty"""
     ).fetchall()
 
-    if not low_p and not low_p_agg and not low_s:
+    if not low_p and not eco_paired_low and not low_p_agg and not eco_sub_pairs_low and not low_s:
         return jsonify({"result": "No low stock alerts — all products above minimum levels."})
+
     lines = []
+
     for p in low_p:
         shortage = _f(p["min_quantity"]) - _f(p["stock_qty"])
         lines.append(
             f"{p['name']}" + (f" [{p['sku']}]" if p["sku"] else "") +
             f" | stock: {_f(p['stock_qty']):.0f} / min: {_f(p['min_quantity']):.0f} | short by {shortage:.0f}"
         )
+
+    for row in eco_paired_low:
+        shortage = _f(row["min_qty"]) - _f(row["combined"])
+        combined_str = f"{_f(row['combined']):.0f} ({_f(row['main_stock']):.0f} main + {_f(row['eco_stock']):.0f} eco)"
+        lines.append(
+            f"{row['main_name']}" + (f" [{row['main_sku']}]" if row["main_sku"] else "") +
+            f" | combined: {combined_str} / min: {_f(row['min_qty']):.0f} | short by {shortage:.0f} [eco-paired]"
+        )
+        lines.append(
+            f"{row['eco_name']}" + (f" [{row['eco_sku']}]" if row["eco_sku"] else "") +
+            f" | combined: {combined_str} / min: {_f(row['min_qty']):.0f} | short by {shortage:.0f} [eco-paired]"
+        )
+
     for p in low_p_agg:
         shortage = _f(p["total_min"]) - _f(p["total_stock"])
         lines.append(
             f"{p['name']}" + (f" [{p['sku']}]" if p["sku"] else "") +
             f" | stock: {_f(p['total_stock']):.0f} / min: {_f(p['total_min']):.0f} | short by {shortage:.0f} [aggregate]"
         )
+
+    for row in eco_sub_pairs_low:
+        shortage = _f(row["eff_min"]) - _f(row["combined"])
+        combined_str = f"{_f(row['combined']):.0f} ({_f(row['main_stock']):.0f} main + {_f(row['eco_stock']):.0f} eco)"
+        lines.append(
+            f"{row['main_parent_name']} — {row['main_sub_name']}" + (f" [{row['main_sub_sku']}]" if row["main_sub_sku"] else "") +
+            f" | combined: {combined_str} / min: {_f(row['eff_min']):.0f} | short by {shortage:.0f} [eco-paired]"
+        )
+        lines.append(
+            f"{row['eco_parent_name']} — {row['eco_sub_name']}" + (f" [{row['eco_sub_sku']}]" if row["eco_sub_sku"] else "") +
+            f" | combined: {combined_str} / min: {_f(row['eff_min']):.0f} | short by {shortage:.0f} [eco-paired]"
+        )
+
     for s in low_s:
         shortage = _f(s["eff_min"]) - _f(s["stock_qty"])
         lines.append(
             f"{s['parent']} — {s['name']}" + (f" [{s['sku']}]" if s["sku"] else "") +
             f" | stock: {_f(s['stock_qty']):.0f} / min: {_f(s['eff_min']):.0f} | short by {shortage:.0f}"
         )
+
     return jsonify({"result": f"{len(lines)} low-stock alert(s):\n" + "\n".join(lines)})
 
 
@@ -1213,6 +1339,13 @@ def update_product(product_id):
          new_price, new_tax, new_min, new_pcs, 1 if is_active else 0, product_id),
     )
     db.execute("UPDATE sub_products SET tax_rate=? WHERE product_id=?", (new_tax, product_id))
+    # Cascade min_quantity change to eco product (and its subs inherit via min=0)
+    if min_quantity is not None and new_min != _f(p["min_quantity"]):
+        eco = db.execute(
+            "SELECT id FROM products WHERE eco_parent_id=?", (product_id,)
+        ).fetchone()
+        if eco:
+            db.execute("UPDATE products SET min_quantity=? WHERE id=?", (new_min, eco["id"]))
     db.commit()
     return jsonify({"result": f"✓ Product ID {product_id} ('{name}') updated."})
 
@@ -1233,6 +1366,62 @@ def delete_product(product_id):
     db.execute("DELETE FROM products WHERE id=?", (product_id,))
     db.commit()
     return jsonify({"result": f"✓ Product '{p['name']}' (ID: {product_id}) and all sub-products permanently deleted."})
+
+
+@bp.route("/products/<int:product_id>/create-eco-range", methods=["POST"])
+@require_auth
+def create_eco_range(product_id):
+    db = get_db()
+    p = db.execute("SELECT * FROM products WHERE id=?", (product_id,)).fetchone()
+    if not p:
+        return jsonify({"error": f"Product ID {product_id} not found."}), 404
+    if p["has_eco_range"]:
+        return jsonify({"error": f"Product '{p['name']}' already has an eco range."}), 400
+    if p["eco_parent_id"]:
+        return jsonify({"error": f"Product '{p['name']}' is itself an eco product and cannot have its own eco range."}), 400
+
+    data = _jb()
+    unit_price = _f(data.get("unit_price", 0))
+    provided_sku = (data.get("sku") or "").strip() or None
+    eco_sku = provided_sku or (("E-" + p["sku"]) if p["sku"] else None)
+
+    # Create eco product (zero stock)
+    eco_cur = db.execute(
+        """INSERT INTO products (category_id, name, sku, description, unit_price, tax_rate,
+           track_inventory, stock_qty, min_quantity, pcs_per_carton, is_active, eco_parent_id)
+           VALUES (?,?,?,?,?,?,1,0,?,?,1,?)""",
+        (p["category_id"], "Eco " + p["name"], eco_sku, p["description"],
+         unit_price, p["tax_rate"], p["min_quantity"], p["pcs_per_carton"] or 0, product_id),
+    )
+    eco_id = eco_cur.lastrowid
+
+    # Mark main product as having an eco range
+    db.execute("UPDATE products SET has_eco_range=1 WHERE id=?", (product_id,))
+
+    # Mirror sub-products
+    main_subs = db.execute(
+        "SELECT * FROM sub_products WHERE product_id=? AND is_active=1 ORDER BY id",
+        (product_id,)
+    ).fetchall()
+    eco_sub_count = 0
+    for ms in main_subs:
+        eco_sub_sku = (("E-" + ms["sku"]) if ms["sku"] else None)
+        db.execute(
+            """INSERT INTO sub_products (product_id, name, sku, description, unit_price,
+               use_parent_price, tax_rate, track_inventory, stock_qty, min_quantity,
+               production_qty, in_transit_qty, is_active, eco_parent_sub_id)
+               VALUES (?,?,?,?,0,0,?,1,0,?,0,0,1,?)""",
+            (eco_id, "Eco " + ms["name"], eco_sub_sku, ms["description"],
+             ms["tax_rate"], ms["min_quantity"] or 0, ms["id"]),
+        )
+        eco_sub_count += 1
+
+    db.commit()
+    msg = f"✓ Eco range created for '{p['name']}' → 'Eco {p['name']}' (ID: {eco_id})"
+    if eco_sub_count:
+        msg += f" with {eco_sub_count} eco sub-product(s). Set pricing via update_sub_product."
+    msg += " Add stock via adjust_stock."
+    return jsonify({"result": msg})
 
 
 @bp.route("/products/<int:product_id>/adjust-stock", methods=["POST"])

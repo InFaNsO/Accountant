@@ -117,10 +117,27 @@ def product_detail(product_id):
         transit_history    = product_service.get_stock_history(
             product_id=product_id,
             movement_types=["dispatch", "transit_dispatch", "dispatch_add", "dispatch_deduct"])
+
+    # Eco range: load linked eco product (if main) or main product (if eco)
+    eco_product = None
+    main_product = None
+    from ..database import get_db as _get_db
+    db = _get_db()
+    if product.get("has_eco_range"):
+        eco_row = db.execute("SELECT id, name, sku, unit_price FROM products WHERE eco_parent_id=? AND is_active=1", (product_id,)).fetchone()
+        if eco_row:
+            eco_product = dict(eco_row)
+    elif product.get("eco_parent_id"):
+        main_row = db.execute("SELECT id, name FROM products WHERE id=?", (product["eco_parent_id"],)).fetchone()
+        if main_row:
+            main_product = dict(main_row)
+
     return render_template("products/detail.html", product=product, subs=subs,
                            warehouse_history=warehouse_history,
                            production_history=production_history,
-                           transit_history=transit_history)
+                           transit_history=transit_history,
+                           eco_product=eco_product,
+                           main_product=main_product)
 
 
 @bp.route("/<int:product_id>/edit", methods=["GET", "POST"])
@@ -152,6 +169,68 @@ def delete_product(product_id):
     product_service.delete_product(product_id)
     flash("Product deleted.", "success")
     return redirect(url_for("products.list_products"))
+
+
+# ── Eco range ────────────────────────────────────────────────────────────────
+
+@bp.route("/<int:product_id>/eco-range", methods=["POST"])
+@login_required
+@permission_required("products", "create")
+def create_eco_range(product_id):
+    from ..database import get_db as _get_db
+    unit_price_raw = request.form.get("unit_price", "0")
+    sku = request.form.get("sku", "").strip()
+    try:
+        unit_price = float(unit_price_raw)
+    except ValueError:
+        flash("Enter a valid eco product price.", "error")
+        return redirect(url_for("products.product_detail", product_id=product_id))
+
+    db = _get_db()
+    p = db.execute("SELECT * FROM products WHERE id=?", (product_id,)).fetchone()
+    if not p:
+        flash("Product not found.", "error")
+        return redirect(url_for("products.list_products"))
+    if p["has_eco_range"]:
+        flash("This product already has an eco range.", "error")
+        return redirect(url_for("products.product_detail", product_id=product_id))
+    if p["eco_parent_id"]:
+        flash("Eco products cannot have their own eco range.", "error")
+        return redirect(url_for("products.product_detail", product_id=product_id))
+
+    eco_sku = sku or (("E-" + p["sku"]) if p["sku"] else None)
+    eco_cur = db.execute(
+        """INSERT INTO products (category_id, name, sku, description, unit_price, tax_rate,
+           track_inventory, stock_qty, min_quantity, pcs_per_carton, is_active, eco_parent_id)
+           VALUES (?,?,?,?,?,?,1,0,?,?,1,?)""",
+        (p["category_id"], "Eco " + p["name"], eco_sku, p["description"],
+         unit_price, p["tax_rate"], p["min_quantity"], p["pcs_per_carton"] or 0, product_id),
+    )
+    eco_id = eco_cur.lastrowid
+    db.execute("UPDATE products SET has_eco_range=1 WHERE id=?", (product_id,))
+
+    main_subs = db.execute(
+        "SELECT * FROM sub_products WHERE product_id=? AND is_active=1 ORDER BY id", (product_id,)
+    ).fetchall()
+    for ms in main_subs:
+        eco_sub_sku = (("E-" + ms["sku"]) if ms["sku"] else None)
+        db.execute(
+            """INSERT INTO sub_products (product_id, name, sku, description, unit_price,
+               use_parent_price, tax_rate, track_inventory, stock_qty, min_quantity,
+               production_qty, in_transit_qty, is_active, eco_parent_sub_id)
+               VALUES (?,?,?,?,0,0,?,1,0,?,0,0,1,?)""",
+            (eco_id, "Eco " + ms["name"], eco_sub_sku, ms["description"],
+             ms["tax_rate"], ms["min_quantity"] or 0, ms["id"]),
+        )
+    db.commit()
+
+    sub_count = len(main_subs)
+    flash(
+        f"Eco range created: 'Eco {p['name']}'" +
+        (f" with {sub_count} eco sub-product(s) — set their pricing from the eco product page." if sub_count else " — add stock from the eco product page."),
+        "success"
+    )
+    return redirect(url_for("products.product_detail", product_id=eco_id))
 
 
 # ── Stock movement (product level) ────────────────────────────────────────────

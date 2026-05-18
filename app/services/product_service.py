@@ -368,31 +368,88 @@ def get_stock_history(product_id=None, sub_id=None, movement_types=None, limit=1
 def get_stock_alerts():
     db = get_db()
 
-    # Helper: subquery to exclude products that have sub-products
-    no_subs = "NOT EXISTS (SELECT 1 FROM sub_products sp WHERE sp.product_id = p.id)"
+    no_subs = "NOT EXISTS (SELECT 1 FROM sub_products sp WHERE sp.product_id = p.id AND sp.is_active=1)"
 
-    # Products below minimum (exclude parents with sub-products)
+    # Standalone products with no eco linkage
     low_products = db.execute(
         f"""SELECT p.*, c.name AS category_name
            FROM products p LEFT JOIN categories c ON p.category_id=c.id
            WHERE p.track_inventory=1 AND p.min_quantity>0 AND p.stock_qty < p.min_quantity
+             AND p.has_eco_range=0 AND p.eco_parent_id IS NULL
              AND {no_subs}
            ORDER BY (p.stock_qty - p.min_quantity) ASC""",
     ).fetchall()
 
+    # Eco-paired standalone products: alert only when combined stock is low
+    low_eco_pairs = db.execute(
+        f"""SELECT p.*, c.name AS category_name,
+                  eco.stock_qty AS eco_stock_qty,
+                  (p.stock_qty + eco.stock_qty) AS combined_stock
+           FROM products p
+           LEFT JOIN categories c ON p.category_id=c.id
+           JOIN products eco ON eco.eco_parent_id = p.id AND eco.is_active=1
+           WHERE p.track_inventory=1 AND p.min_quantity>0 AND p.has_eco_range=1
+             AND (p.stock_qty + eco.stock_qty) < p.min_quantity
+             AND {no_subs}
+           ORDER BY (p.stock_qty + eco.stock_qty - p.min_quantity) ASC""",
+    ).fetchall()
+
+    # Sub-products with no eco pair
     low_subs = db.execute(
         """SELECT s.*, p.name AS parent_name, p.min_quantity AS parent_min_qty, p.pcs_per_carton,
                   c.name AS category_name
            FROM sub_products s
            JOIN products p ON s.product_id=p.id
            LEFT JOIN categories c ON p.category_id=c.id
-           WHERE s.track_inventory=1
+           WHERE s.track_inventory=1 AND s.is_active=1
+             AND s.eco_parent_sub_id IS NULL
+             AND NOT EXISTS (SELECT 1 FROM sub_products es WHERE es.eco_parent_sub_id=s.id AND es.is_active=1)
              AND (CASE WHEN s.min_quantity>0 THEN s.min_quantity ELSE p.min_quantity END) > 0
              AND s.stock_qty < (CASE WHEN s.min_quantity>0 THEN s.min_quantity ELSE p.min_quantity END)
            ORDER BY s.stock_qty ASC""",
     ).fetchall()
 
-    # In production (exclude parents with sub-products)
+    # Eco-paired sub-products: alert only when combined stock is low
+    low_eco_sub_pairs = db.execute(
+        """SELECT ms.*, p.name AS parent_name, p.pcs_per_carton, c.name AS category_name,
+                  es.stock_qty AS eco_stock_qty,
+                  (ms.stock_qty + es.stock_qty) AS combined_stock,
+                  CASE WHEN ms.min_quantity>0 THEN ms.min_quantity ELSE p.min_quantity END AS eff_min
+           FROM sub_products ms
+           JOIN sub_products es ON es.eco_parent_sub_id = ms.id AND es.is_active=1
+           JOIN products p ON p.id = ms.product_id
+           LEFT JOIN categories c ON p.category_id=c.id
+           WHERE ms.track_inventory=1 AND ms.is_active=1
+             AND (CASE WHEN ms.min_quantity>0 THEN ms.min_quantity ELSE p.min_quantity END) > 0
+             AND (ms.stock_qty + es.stock_qty) <
+                 (CASE WHEN ms.min_quantity>0 THEN ms.min_quantity ELSE p.min_quantity END)
+           ORDER BY (ms.stock_qty + es.stock_qty) ASC""",
+    ).fetchall()
+
+    # Build combined low_stock list: eco-paired entries use combined_stock for display
+    low_stock = [dict(r) for r in low_products]
+    for r in low_eco_pairs:
+        entry = dict(r)
+        entry["stock_qty"] = entry["combined_stock"]
+        entry["eco_paired"] = True
+        low_stock.append(entry)
+
+    subs_list = [dict(r) for r in low_subs]
+    for r in low_eco_sub_pairs:
+        entry = dict(r)
+        entry["stock_qty"]    = entry["combined_stock"]
+        entry["min_quantity"] = entry["eff_min"]
+        entry["eco_paired"]   = True
+        subs_list.append(entry)
+
+    def _deficit(item):
+        eff_min = item.get("min_quantity") or item.get("eff_min") or item.get("parent_min_qty") or 0
+        return item.get("stock_qty", 0) - eff_min
+
+    subs_list.sort(key=_deficit)
+    low_stock += subs_list
+
+    # In production (no eco-awareness needed — independent bucket)
     in_production_p = db.execute(
         f"""SELECT p.*, c.name AS category_name
             FROM products p LEFT JOIN categories c ON p.category_id=c.id
@@ -402,7 +459,7 @@ def get_stock_alerts():
         "SELECT s.*, p.name AS parent_name, p.pcs_per_carton FROM sub_products s JOIN products p ON s.product_id=p.id WHERE s.production_qty>0"
     ).fetchall()
 
-    # In transit (exclude parents with sub-products)
+    # In transit (no eco-awareness needed — independent bucket)
     in_transit_p = db.execute(
         f"""SELECT p.*, c.name AS category_name,
                   m.expected_arrival, m.quantity AS dispatch_qty
@@ -425,7 +482,7 @@ def get_stock_alerts():
     ).fetchall()
 
     return {
-        "low_stock":     [dict(r) for r in low_products] + [dict(r) for r in low_subs],
+        "low_stock":     low_stock,
         "in_production": [dict(r) for r in in_production_p] + [dict(r) for r in in_production_s],
         "in_transit":    [dict(r) for r in in_transit_p] + [dict(r) for r in in_transit_s],
     }

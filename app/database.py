@@ -417,6 +417,9 @@ def _create_schema(db):
     _add_column(db, "invoice_items",    "sku",             "TEXT")
     _add_column(db, "stock_movements",  "dispatch_id",     "INTEGER")
     _add_column(db, "stock_movements",  "invoice_id",      "INTEGER")
-    _add_column(db, "products",         "pcs_per_carton",  "INTEGER DEFAULT 0")
+    _add_column(db, "products",         "pcs_per_carton",    "INTEGER DEFAULT 0")
+    _add_column(db, "products",         "has_eco_range",     "INTEGER DEFAULT 0")
+    _add_column(db, "products",         "eco_parent_id",     "INTEGER")
+    _add_column(db, "sub_products",     "eco_parent_sub_id", "INTEGER")
 
     db.commit()
