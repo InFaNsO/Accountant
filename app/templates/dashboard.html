@@ -240,12 +240,12 @@
 <div style="display:grid;grid-template-columns:repeat({{ col_count }},1fr);gap:18px;margin-top:0">
 
   {% if show_low %}
-  <div class="card">
+  <div class="card" style="display:flex;flex-direction:column">
     <div class="card-header" style="border-left:3px solid var(--danger);padding-left:17px">
       <span class="card-title" style="color:var(--danger)">Low Stock ({{ low|length }})</span>
       <a href="{{ url_for('products.list_products') }}" class="btn btn-ghost btn-sm">View all</a>
     </div>
-    <ul style="list-style:none">
+    <ul style="list-style:none;max-height:300px;overflow-y:auto">
       {% for item in low %}
       <li style="padding:10px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
         <div>
@@ -270,11 +270,11 @@
   {% endif %}
 
   {% if show_prod %}
-  <div class="card">
+  <div class="card" style="display:flex;flex-direction:column">
     <div class="card-header" style="border-left:3px solid var(--success);padding-left:17px">
       <span class="card-title" style="color:var(--success)">In Production ({{ prod|length }})</span>
     </div>
-    <ul style="list-style:none">
+    <ul style="list-style:none;max-height:300px;overflow-y:auto">
       {% for item in prod %}
       <li style="padding:10px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
         <div>
@@ -296,11 +296,11 @@
   {% endif %}
 
   {% if show_transit %}
-  <div class="card">
+  <div class="card" style="display:flex;flex-direction:column">
     <div class="card-header" style="border-left:3px solid var(--warning);padding-left:17px">
       <span class="card-title" style="color:var(--warning)">In Transit ({{ transit|length }})</span>
     </div>
-    <ul style="list-style:none">
+    <ul style="list-style:none;max-height:300px;overflow-y:auto">
       {% for item in transit %}
       <li style="padding:10px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
         <div>
