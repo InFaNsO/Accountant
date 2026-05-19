@@ -245,7 +245,7 @@
       <span class="card-title" style="color:var(--danger)">Low Stock ({{ low|length }})</span>
       <a href="{{ url_for('products.list_products') }}" class="btn btn-ghost btn-sm">View all</a>
     </div>
-    <ul style="list-style:none;max-height:300px;overflow-y:auto">
+    <ul class="stock-scroll" style="list-style:none">
       {% for item in low %}
       <li style="padding:10px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
         <div>
@@ -274,7 +274,7 @@
     <div class="card-header" style="border-left:3px solid var(--success);padding-left:17px">
       <span class="card-title" style="color:var(--success)">In Production ({{ prod|length }})</span>
     </div>
-    <ul style="list-style:none;max-height:300px;overflow-y:auto">
+    <ul class="stock-scroll" style="list-style:none">
       {% for item in prod %}
       <li style="padding:10px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
         <div>
@@ -300,7 +300,7 @@
     <div class="card-header" style="border-left:3px solid var(--warning);padding-left:17px">
       <span class="card-title" style="color:var(--warning)">In Transit ({{ transit|length }})</span>
     </div>
-    <ul style="list-style:none;max-height:300px;overflow-y:auto">
+    <ul class="stock-scroll" style="list-style:none">
       {% for item in transit %}
       <li style="padding:10px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
         <div>

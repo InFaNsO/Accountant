@@ -547,6 +547,21 @@ html.show-boxes .unit-knob { transform:translateX(0); }
 /* ── Touch scrolling on tables ────────────────────────────── */
 .table-wrap { -webkit-overflow-scrolling: touch; }
 
+/* ── Stock card scrollable lists ──────────────────────────── */
+.stock-scroll {
+  max-height: 300px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.stock-scroll::-webkit-scrollbar { width: 4px; }
+.stock-scroll::-webkit-scrollbar-track { background: transparent; }
+.stock-scroll::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 99px;
+}
+.stock-scroll::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
 /* ── Responsive: Tablet + Mobile (≤ 900px) ────────────────── */
 @media (max-width: 900px) {
   .form-grid-2, .form-grid-3 { grid-template-columns: 1fr; }

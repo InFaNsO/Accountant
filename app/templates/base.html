@@ -226,31 +226,35 @@ document.querySelectorAll('.nav-item').forEach(function(el) {
     </div>
 
     <!-- Time-window picker bar -->
-    <div id="ledgerWindowBar" style="padding:8px 16px;border-bottom:1px solid var(--border);background:var(--bg-alt);overflow-x:auto">
-      <div style="display:flex;gap:4px;align-items:center;min-width:max-content">
-        <span style="font-size:11px;color:var(--text-muted);margin-right:4px;white-space:nowrap;font-weight:600">Period:</span>
-        <button class="lw-btn lw-active" data-w="all"           onclick="setLedgerWindow('all')">All Time</button>
-        <button class="lw-btn" data-w="today"          onclick="setLedgerWindow('today')">Today</button>
-        <button class="lw-btn" data-w="yesterday"      onclick="setLedgerWindow('yesterday')">Yesterday</button>
-        <button class="lw-btn" data-w="this_week"      onclick="setLedgerWindow('this_week')">This Week</button>
-        <button class="lw-btn" data-w="last_week"      onclick="setLedgerWindow('last_week')">Last Week</button>
-        <button class="lw-btn" data-w="last_15"        onclick="setLedgerWindow('last_15')">Last 15 Days</button>
-        <button class="lw-btn" data-w="this_month"     onclick="setLedgerWindow('this_month')">This Month</button>
-        <button class="lw-btn" data-w="last_2_months"  onclick="setLedgerWindow('last_2_months')">Last 2 Months</button>
-        <button class="lw-btn" data-w="60_days"        onclick="setLedgerWindow('60_days')">60 Days</button>
-        <button class="lw-btn" data-w="90_days"        onclick="setLedgerWindow('90_days')">90 Days</button>
-        <button class="lw-btn" data-w="this_year"      onclick="setLedgerWindow('this_year')">This Year</button>
-        <button class="lw-btn" data-w="current_fy"     onclick="setLedgerWindow('current_fy')">Current FY</button>
-        <button class="lw-btn" data-w="last_fy"        onclick="setLedgerWindow('last_fy')">Last FY</button>
-        <button class="lw-btn" data-w="custom"         onclick="setLedgerWindow('custom')">Custom…</button>
-      </div>
-      <!-- Custom date pickers -->
-      <div id="lwCustomRow" style="display:none;margin-top:6px;gap:8px;align-items:center">
-        <input type="date" id="lwFrom"
-               style="font-size:12px;padding:3px 8px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg);color:var(--text)">
-        <span style="color:var(--text-muted)">—</span>
-        <input type="date" id="lwTo"
-               style="font-size:12px;padding:3px 8px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg);color:var(--text)">
+    <div id="ledgerWindowBar" style="padding:10px 16px;border-bottom:1px solid var(--border);background:var(--bg-alt)">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <span style="font-size:11px;color:var(--text-muted);font-weight:600;white-space:nowrap">Period:</span>
+        <select id="lwSel" onchange="setLedgerWindow(this.value)"
+                style="width:auto;font-size:13px;padding:5px 10px;border:1px solid var(--border);
+                       border-radius:var(--radius-sm);background:var(--surface);
+                       color:var(--text-primary);cursor:pointer">
+          <option value="all">All Time</option>
+          <option value="today">Today</option>
+          <option value="yesterday">Yesterday</option>
+          <option value="this_week">This Week</option>
+          <option value="last_week">Last Week</option>
+          <option value="last_15">Last 15 Days</option>
+          <option value="this_month">This Month</option>
+          <option value="last_2_months">Last 2 Months</option>
+          <option value="60_days">60 Days</option>
+          <option value="90_days">90 Days</option>
+          <option value="this_year">This Year</option>
+          <option value="current_fy">Current FY</option>
+          <option value="last_fy">Last FY</option>
+          <option value="custom">Custom</option>
+        </select>
+        <input type="date" id="lwFrom" onchange="lwDateChange()"
+               style="width:auto;font-size:13px;padding:5px 8px;border:1px solid var(--border);
+                      border-radius:var(--radius-sm);background:var(--surface);color:var(--text-primary)">
+        <span style="color:var(--text-muted);flex-shrink:0">—</span>
+        <input type="date" id="lwTo" onchange="lwDateChange()"
+               style="width:auto;font-size:13px;padding:5px 8px;border:1px solid var(--border);
+                      border-radius:var(--radius-sm);background:var(--surface);color:var(--text-primary)">
         <button onclick="applyLedgerCustom()" class="btn btn-primary btn-sm">Apply</button>
       </div>
     </div>
@@ -300,26 +304,6 @@ document.querySelectorAll('.nav-item').forEach(function(el) {
 </div>
 
 <style>
-.lw-btn {
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 20px;
-  padding: 3px 10px;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--text-muted);
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background .15s, color .15s, border-color .15s;
-}
-.lw-btn:hover { background: var(--bg); color: var(--text); border-color: var(--accent); }
-.lw-btn.lw-active {
-  background: var(--accent);
-  color: #fff;
-  border-color: var(--accent);
-}
-#lwCustomRow { display: none; }
-#lwCustomRow.show { display: flex; }
 </style>
 
 <script>
@@ -374,24 +358,19 @@ let _ledgerWindow    = 'all';
 /* ── Window selection ────────────────────────────────────────── */
 function setLedgerWindow(w) {
   _ledgerWindow = w;
-  document.querySelectorAll('.lw-btn').forEach(b =>
-    b.classList.toggle('lw-active', b.dataset.w === w)
-  );
-  const customRow = document.getElementById('lwCustomRow');
-  if (w === 'custom') {
-    customRow.classList.add('show');
-    // Pre-fill today if blank
-    if (!document.getElementById('lwFrom').value)
-      document.getElementById('lwFrom').value = _fmt(new Date());
-    if (!document.getElementById('lwTo').value)
-      document.getElementById('lwTo').value   = _fmt(new Date());
-    return;
-  }
-  customRow.classList.remove('show');
+  document.getElementById('lwSel').value = w;
+  if (w === 'custom') return;
   const [df, dt] = _windowDates(w);
   _ledgerDateFrom = df;
   _ledgerDateTo   = dt;
+  document.getElementById('lwFrom').value = df || '';
+  document.getElementById('lwTo').value   = dt || '';
   _reloadLedger();
+}
+
+function lwDateChange() {
+  document.getElementById('lwSel').value = 'custom';
+  _ledgerWindow = 'custom';
 }
 
 function applyLedgerCustom() {
@@ -503,10 +482,9 @@ window.showClientLedger = function(clientId, name) {
   _ledgerDateTo   = null;
   _ledgerWindow   = 'all';
   // Reset picker UI
-  document.querySelectorAll('.lw-btn').forEach(b =>
-    b.classList.toggle('lw-active', b.dataset.w === 'all')
-  );
-  document.getElementById('lwCustomRow').classList.remove('show');
+  document.getElementById('lwSel').value  = 'all';
+  document.getElementById('lwFrom').value = '';
+  document.getElementById('lwTo').value   = '';
   document.getElementById('ledgerModalTitle').textContent = name || 'Client';
   document.getElementById('ledgerFinalBal').textContent   = '';
   document.getElementById('ledgerEmpty').style.display    = 'none';
