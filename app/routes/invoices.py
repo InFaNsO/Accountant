@@ -83,21 +83,22 @@ def list_invoices():
 @login_required
 @permission_required("invoices", "create")
 def new_invoice():
-    clients  = client_service.get_all_clients()
-    products = _build_product_choices()
+    clients       = client_service.get_all_clients()
+    products      = _build_product_choices()
+    all_companies = client_service.get_all_companies_with_client()
     if request.method == "POST":
         data = request.form.to_dict()
         items = _parse_items(request.form)
         if not data.get("client_id"):
             flash("Please select a client.", "error")
-            return render_template("invoices/form.html", invoice=data, items=[], clients=clients, products=products, action="new")
+            return render_template("invoices/form.html", invoice=data, items=[], clients=clients, products=products, all_companies=all_companies, action="new")
         if not items:
             flash("Add at least one line item.", "error")
-            return render_template("invoices/form.html", invoice=data, items=[], clients=clients, products=products, action="new")
+            return render_template("invoices/form.html", invoice=data, items=[], clients=clients, products=products, all_companies=all_companies, action="new")
         invoice_id = invoice_service.create_invoice(data, items)
         flash("Invoice created successfully.", "success")
         return redirect(url_for("invoices.detail", invoice_id=invoice_id))
-    return render_template("invoices/form.html", invoice={}, items=[], clients=clients, products=products, action="new")
+    return render_template("invoices/form.html", invoice={}, items=[], clients=clients, products=products, all_companies=all_companies, action="new")
 
 
 @bp.route("/<int:invoice_id>")
@@ -121,24 +122,25 @@ def edit_invoice(invoice_id):
     if not invoice:
         flash("Invoice not found.", "error")
         return redirect(url_for("invoices.list_invoices"))
-    clients  = client_service.get_all_clients()
-    products = _build_product_choices()
+    clients       = client_service.get_all_clients()
+    products      = _build_product_choices()
+    all_companies = client_service.get_all_companies_with_client()
     if request.method == "POST":
         data = request.form.to_dict()
         items = _parse_items(request.form)
         if not data.get("client_id"):
             flash("Please select a client.", "error")
             existing_items = invoice_service.get_invoice_items(invoice_id)
-            return render_template("invoices/form.html", invoice=data, items=existing_items, clients=clients, products=products, action="edit", invoice_id=invoice_id)
+            return render_template("invoices/form.html", invoice=data, items=existing_items, clients=clients, products=products, all_companies=all_companies, action="edit", invoice_id=invoice_id)
         if not items:
             flash("Add at least one line item.", "error")
             existing_items = invoice_service.get_invoice_items(invoice_id)
-            return render_template("invoices/form.html", invoice=data, items=existing_items, clients=clients, products=products, action="edit", invoice_id=invoice_id)
+            return render_template("invoices/form.html", invoice=data, items=existing_items, clients=clients, products=products, all_companies=all_companies, action="edit", invoice_id=invoice_id)
         invoice_service.update_invoice(invoice_id, data, items)
         flash("Invoice updated.", "success")
         return redirect(url_for("invoices.detail", invoice_id=invoice_id))
     items = invoice_service.get_invoice_items(invoice_id)
-    return render_template("invoices/form.html", invoice=dict(invoice), items=[dict(i) for i in items], clients=clients, products=products, action="edit", invoice_id=invoice_id)
+    return render_template("invoices/form.html", invoice=dict(invoice), items=[dict(i) for i in items], clients=clients, products=products, all_companies=all_companies, action="edit", invoice_id=invoice_id)
 
 
 @bp.route("/<int:invoice_id>/status", methods=["POST"])

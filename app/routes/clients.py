@@ -12,7 +12,7 @@ bp = Blueprint("clients", __name__, url_prefix="/clients")
 @login_required
 @permission_required("clients", "view")
 def list_clients():
-    clients = client_service.get_all_clients()
+    clients = client_service.get_all_clients_with_companies()
     can_financials = current_user.has_permission("clients", "financials")
     return render_template("clients/list.html", clients=clients, can_financials=can_financials)
 
@@ -65,9 +65,16 @@ def detail(client_id):
         flash("Client not found.", "error")
         return redirect(url_for("clients.list_clients"))
     invoices = client_service.get_client_invoices(client_id)
-    companies = client_service.get_companies(client_id)
     can_financials = current_user.has_permission("clients", "financials")
     balance = client_service.get_client_balance(client_id) if can_financials else None
+    companies_raw = client_service.get_companies(client_id)
+    if can_financials:
+        companies = [
+            {**dict(c), "balance": client_service.get_company_balance(c["id"], client_id)}
+            for c in companies_raw
+        ]
+    else:
+        companies = [dict(c) for c in companies_raw]
     return render_template("clients/detail.html", client=client, invoices=invoices,
                            companies=companies, balance=balance, can_financials=can_financials)
 
@@ -109,30 +116,51 @@ def ledger(client_id):
     if not client:
         return jsonify({"error": "Not found"}), 404
 
-    date_from = request.args.get("from")   # YYYY-MM-DD or None
-    date_to   = request.args.get("to")     # YYYY-MM-DD or None
+    date_from  = request.args.get("from")        # YYYY-MM-DD or None
+    date_to    = request.args.get("to")          # YYYY-MM-DD or None
+    company_id = request.args.get("company_id", type=int)
 
     db = get_db()
-    invoices = db.execute(
-        "SELECT i.id, i.invoice_number, i.issue_date, i.total, i.amount_paid, i.status, "
-        "cc.name AS company_name "
-        "FROM invoices i LEFT JOIN client_companies cc ON i.company_id = cc.id "
-        "WHERE i.client_id=? AND i.status != 'cancelled' ORDER BY i.issue_date, i.id",
-        (client_id,),
-    ).fetchall()
-    payments = db.execute(
-        "SELECT p.id, p.amount, p.payment_date, p.method, p.reference, p.notes, p.invoice_id, "
-        "cc.name AS company_name "
-        "FROM payments p LEFT JOIN client_companies cc ON p.company_id = cc.id "
-        "WHERE p.client_id=? ORDER BY p.payment_date, p.id",
-        (client_id,),
-    ).fetchall()
-    manual = db.execute(
-        "SELECT * FROM ledger_entries WHERE client_id=? ORDER BY entry_date, id",
-        (client_id,),
-    ).fetchall()
 
-    opening = float(client["opening_balance"] or 0)
+    if company_id:
+        co_row  = db.execute("SELECT * FROM client_companies WHERE id=?", (company_id,)).fetchone()
+        opening = float(co_row["opening_balance"] or 0) if co_row else 0.0
+        invoices = db.execute(
+            "SELECT i.id, i.invoice_number, i.issue_date, i.total, i.amount_paid, i.status, "
+            "cc.name AS company_name "
+            "FROM invoices i LEFT JOIN client_companies cc ON i.company_id = cc.id "
+            "WHERE i.client_id=? AND i.company_id=? AND i.status != 'cancelled' "
+            "ORDER BY i.issue_date, i.id",
+            (client_id, company_id),
+        ).fetchall()
+        payments = db.execute(
+            "SELECT p.id, p.amount, p.payment_date, p.method, p.reference, p.notes, p.invoice_id, "
+            "cc.name AS company_name "
+            "FROM payments p LEFT JOIN client_companies cc ON p.company_id = cc.id "
+            "WHERE p.client_id=? AND p.company_id=? ORDER BY p.payment_date, p.id",
+            (client_id, company_id),
+        ).fetchall()
+        manual = []
+    else:
+        opening  = float(client["opening_balance"] or 0)
+        invoices = db.execute(
+            "SELECT i.id, i.invoice_number, i.issue_date, i.total, i.amount_paid, i.status, "
+            "cc.name AS company_name "
+            "FROM invoices i LEFT JOIN client_companies cc ON i.company_id = cc.id "
+            "WHERE i.client_id=? AND i.status != 'cancelled' ORDER BY i.issue_date, i.id",
+            (client_id,),
+        ).fetchall()
+        payments = db.execute(
+            "SELECT p.id, p.amount, p.payment_date, p.method, p.reference, p.notes, p.invoice_id, "
+            "cc.name AS company_name "
+            "FROM payments p LEFT JOIN client_companies cc ON p.company_id = cc.id "
+            "WHERE p.client_id=? ORDER BY p.payment_date, p.id",
+            (client_id,),
+        ).fetchall()
+        manual = db.execute(
+            "SELECT * FROM ledger_entries WHERE client_id=? ORDER BY entry_date, id",
+            (client_id,),
+        ).fetchall()
 
     inv_list    = [{"sort": r["issue_date"]    or "", "kind": "invoice", "row": dict(r)} for r in invoices]
     pay_list    = [{"sort": r["payment_date"]  or "", "kind": "payment", "row": dict(r)} for r in payments]

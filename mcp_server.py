@@ -78,7 +78,7 @@ def _call(method: str, path: str, params: dict = None, body: dict = None) -> str
 
 @mcp.tool()
 def search_clients(query: str) -> str:
-    """Search clients by name or company. Returns matching IDs and names."""
+    """Search clients by name or any of their company names. Returns matching IDs, names, and companies."""
     return _call("GET", "clients/search", params={"q": query})
 
 
@@ -90,14 +90,15 @@ def get_all_clients_summary() -> str:
 
 @mcp.tool()
 def get_client_details(client_id: int) -> str:
-    """Get full contact info and current balance for a client."""
+    """Get full contact info, current balance, and list of companies for a client."""
     return _call("GET", f"clients/{client_id}")
 
 
 @mcp.tool()
-def get_client_ledger(client_id: int) -> str:
-    """Full chronological ledger for a client: opening balance, invoices, payments, running balance."""
-    return _call("GET", f"clients/{client_id}/ledger")
+def get_client_ledger(client_id: int, company_id: int = None) -> str:
+    """Full chronological ledger for a client: opening balance, invoices, payments, running balance.
+    Pass company_id to filter the ledger to a specific company under the client."""
+    return _call("GET", f"clients/{client_id}/ledger", params={"company_id": company_id})
 
 
 @mcp.tool()
@@ -113,7 +114,6 @@ def get_client_invoices(client_id: int) -> str:
 @mcp.tool()
 def create_client(
     name: str,
-    company: str = "",
     email: str = "",
     phone: str = "",
     address: str = "",
@@ -123,10 +123,14 @@ def create_client(
     notes: str = "",
     opening_balance_amt: float = 0.0,
     opening_balance_type: str = "debt",
+    companies: list = None,
 ) -> str:
     """
     Create a new client. ONLY call after explicit user confirmation.
     opening_balance_type: 'debt' (client owes us) | 'credit' (client pre-paid)
+    companies: optional list of company dicts, each with:
+      name (required), tax_id (optional), opening_balance_amt (float), opening_balance_type ('debt'|'credit')
+    Example: [{"name": "Acme Pvt Ltd", "tax_id": "22ABCDE1234F1Z5", "opening_balance_amt": 5000, "opening_balance_type": "debt"}]
     """
     return _call("POST", "clients", body={k: v for k, v in locals().items() if k != "self"})
 
@@ -135,7 +139,6 @@ def create_client(
 def update_client(
     client_id: int,
     name: str,
-    company: str = "",
     email: str = "",
     phone: str = "",
     address: str = "",
@@ -145,11 +148,15 @@ def update_client(
     notes: str = "",
     opening_balance_amt: float = None,
     opening_balance_type: str = None,
+    companies: list = None,
 ) -> str:
     """
     Update an existing client. ONLY call after explicit user confirmation.
     Leave opening_balance_amt as None to keep the existing opening balance unchanged.
     opening_balance_type: 'debt' | 'credit'
+    companies: optional list of company updates. Each dict should have:
+      id (int, to update existing) or omit id (to add new), plus name, tax_id, opening_balance_amt, opening_balance_type.
+      Pass None to skip company changes entirely.
     """
     return _call("PUT", f"clients/{client_id}", body={k: v for k, v in locals().items() if k not in ("self", "client_id")})
 
@@ -157,10 +164,70 @@ def update_client(
 @mcp.tool()
 def delete_client(client_id: int) -> str:
     """
-    PERMANENTLY delete a client and ALL their invoices and payments.
+    PERMANENTLY delete a client and ALL their invoices, payments, and companies.
     Only call after the user explicitly confirmed deletion.
     """
     return _call("DELETE", f"clients/{client_id}")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# CLIENT COMPANIES
+# ═════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def get_client_companies(client_id: int) -> str:
+    """List all companies under a client with their current balances."""
+    return _call("GET", f"clients/{client_id}/companies")
+
+
+@mcp.tool()
+def create_company(
+    client_id: int,
+    name: str,
+    tax_id: str = "",
+    opening_balance_amt: float = 0.0,
+    opening_balance_type: str = "debt",
+) -> str:
+    """
+    Add a new company under an existing client. ONLY call after explicit user confirmation.
+    opening_balance_type: 'debt' (company owes us) | 'credit' (company pre-paid)
+    """
+    return _call("POST", f"clients/{client_id}/companies", body={
+        "name": name,
+        "tax_id": tax_id,
+        "opening_balance_amt": opening_balance_amt,
+        "opening_balance_type": opening_balance_type,
+    })
+
+
+@mcp.tool()
+def update_company(
+    client_id: int,
+    company_id: int,
+    name: str,
+    tax_id: str = "",
+    opening_balance_amt: float = None,
+    opening_balance_type: str = None,
+) -> str:
+    """
+    Update an existing company. ONLY call after explicit user confirmation.
+    Leave opening_balance_amt as None to keep the existing opening balance unchanged.
+    """
+    return _call("PUT", f"clients/{client_id}/companies/{company_id}", body={
+        "name": name,
+        "tax_id": tax_id,
+        "opening_balance_amt": opening_balance_amt,
+        "opening_balance_type": opening_balance_type,
+    })
+
+
+@mcp.tool()
+def delete_company(client_id: int, company_id: int) -> str:
+    """
+    PERMANENTLY delete a company record (does not delete invoices/payments linked to it).
+    Only call after the user explicitly confirmed deletion.
+    """
+    return _call("DELETE", f"clients/{client_id}/companies/{company_id}")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -198,6 +265,7 @@ def create_invoice(
     notes: str = "",
     discount_amount: float = 0.0,
     status: str = "issued",
+    company_id: int = None,
 ) -> str:
     """
     Create a new invoice. ONLY call after explicit user confirmation.
@@ -208,6 +276,8 @@ def create_invoice(
 
     Example item: {"description": "Widget A", "quantity": 2, "unit_price": 500, "tax_rate": 18}
 
+    company_id: optional — links invoice to a specific company under the client.
+      Use get_client_companies(client_id) to find company IDs.
     Deducts from warehouse stock automatically for catalog products.
     issue_date / due_date: YYYY-MM-DD format. Defaults to today.
     status: issued | sent | paid
@@ -252,6 +322,7 @@ def record_payment(
     payment_date: str,
     method: str,
     invoice_id: int = None,
+    company_id: int = None,
     reference: str = "",
     notes: str = "",
 ) -> str:
@@ -262,6 +333,8 @@ def record_payment(
     payment_date: YYYY-MM-DD
     invoice_id: optional — links payment to a specific invoice.
       If omitted, automatically allocates: opening balance → oldest invoices → unallocated surplus.
+    company_id: optional — associates payment with a specific company under the client.
+      Use get_client_companies(client_id) to find company IDs.
     """
     return _call("POST", "payments", body={k: v for k, v in locals().items() if k != "self"})
 

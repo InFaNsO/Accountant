@@ -17,7 +17,7 @@
         <div class="form-group">
           <label for="client_search">Client *</label>
           <input type="text" id="client_search"
-                 placeholder="Search by name or company…"
+                 placeholder="Search by client name…"
                  autocomplete="off"
                  oninput="clientCbFilter(this)"
                  onfocus="clientCbOpen(this)"
@@ -25,6 +25,17 @@
                  onkeydown="clientCbKey(event,this)">
           <input type="hidden" id="client_id" name="client_id" value="{{ invoice.get('client_id', '') }}">
           <div id="client_error" style="font-size:11px;color:var(--danger);margin-top:3px;display:none">Please select a client.</div>
+        </div>
+
+        <div class="form-group">
+          <label for="company_search">Company <span style="font-weight:400;color:var(--text-muted)">(auto-fills client)</span></label>
+          <input type="text" id="company_search"
+                 placeholder="Search by company name…"
+                 autocomplete="off"
+                 oninput="companyCbFilter(this)"
+                 onfocus="companyCbOpen(this)"
+                 onblur="companyCbBlur(this)"
+                 onkeydown="companyCbKey(event,this)">
         </div>
 
         <div class="form-group">
@@ -153,28 +164,32 @@
 
 {% block scripts %}
 <script>
-// ── Client list ────────────────────────────────────────────────────────────────
+// ── Data ───────────────────────────────────────────────────────────────────────
 const CLIENT_LIST = [{% for c in clients %}{"id":{{ c.id }},"name":{{ c.name|tojson }},"company":{{ (c.company or '')|tojson }},"payment_terms":{{ c.payment_terms or 0 }}}{% if not loop.last %},{% endif %}{% endfor %}];
+const ALL_COMPANIES = [{% for co in all_companies %}{"id":{{ co.id }},"name":{{ co.name|tojson }},"client_id":{{ co.client_id }},"client_name":{{ co.client_name|tojson }}}{% if not loop.last %},{% endif %}{% endfor %}];
 
-// ── Client combobox ────────────────────────────────────────────────────────────
-const _clientDD = (() => {
+// ── Shared fixed-position dropdown factory ─────────────────────────────────────
+function _makeDD(zIndex) {
   const el = document.createElement('div');
   el.style.cssText =
-    'display:none;position:fixed;z-index:9600;background:var(--bg);' +
+    `display:none;position:fixed;z-index:${zIndex};background:var(--bg);` +
     'border:1px solid var(--border);border-radius:var(--radius-sm);' +
     'box-shadow:0 8px 32px rgba(0,0,0,.22);overflow-y:auto;max-height:310px;min-width:280px';
   el._cursor = -1; el._matches = [];
   document.body.appendChild(el);
   return el;
-})();
-let _clientInput = null;
-
-function _clientPos(inp) {
-  const r = inp.getBoundingClientRect();
-  _clientDD.style.top   = (r.bottom + 3) + 'px';
-  _clientDD.style.left  = r.left + 'px';
-  _clientDD.style.width = Math.max(r.width, 280) + 'px';
 }
+function _ddPos(dd, inp) {
+  const r = inp.getBoundingClientRect();
+  dd.style.top   = (r.bottom + 3) + 'px';
+  dd.style.left  = r.left + 'px';
+  dd.style.width = Math.max(r.width, 280) + 'px';
+}
+
+// ── Client combobox ────────────────────────────────────────────────────────────
+const _clientDD    = _makeDD(9600);
+let   _clientInput = null;
+
 function _clientMatches(q) {
   return q ? CLIENT_LIST.filter(c =>
     c.name.toLowerCase().includes(q) || c.company.toLowerCase().includes(q)
@@ -188,7 +203,7 @@ function clientCbRender(inp, matches) {
         ${c.company ? `<div style="font-size:11px;color:var(--text-muted)">${escHtml(c.company)}</div>` : ''}
       </div>`).join('')
     : '<div style="padding:10px 14px;color:var(--text-muted);font-size:13px;font-style:italic">No clients found</div>';
-  _clientPos(inp);
+  _ddPos(_clientDD, inp);
   _clientDD.style.display = '';
 }
 function clientCbOpen(inp)   { clientCbRender(inp, _clientMatches(inp.value.toLowerCase())); }
@@ -203,16 +218,16 @@ function clientCbSelect(e, optEl) {
   e.preventDefault();
   const c = _clientDD._matches[parseInt(optEl.dataset.idx, 10)];
   if (!c || !_clientInput) return;
-  _clientInput.value = c.name + (c.company ? ' — ' + c.company : '');
+  _clientInput.value = c.name;
   document.getElementById('client_id').value = c.id;
   document.getElementById('client_error').style.display = 'none';
   _clientDD.style.display = 'none'; _clientInput = null;
 
-  // Load companies for this client
+  // Load companies and auto-select first
   loadClientCompanies(c.id);
 
-  // Auto-fill due date from client's payment terms
-  const dueDate = document.getElementById('due_date');
+  // Auto-fill due date from payment terms
+  const dueDate  = document.getElementById('due_date');
   const issueDate = document.getElementById('issue_date');
   if (c.payment_terms > 0) {
     dueDate._clientTerms = c.payment_terms;
@@ -225,25 +240,6 @@ function clientCbSelect(e, optEl) {
   } else {
     dueDate._clientTerms = null;
   }
-}
-
-async function loadClientCompanies(clientId, preselectId) {
-  const wrap = document.getElementById('companyWrap');
-  const sel  = document.getElementById('company_id');
-  sel.innerHTML = '<option value="">— No specific company —</option>';
-  if (!clientId) { wrap.style.display = 'none'; return; }
-  try {
-    const res       = await fetch(`/invoices/api/client-companies/${clientId}`);
-    const companies = await res.json();
-    companies.forEach(co => {
-      const opt = document.createElement('option');
-      opt.value       = co.id;
-      opt.textContent = co.name;
-      if (preselectId && String(co.id) === String(preselectId)) opt.selected = true;
-      sel.appendChild(opt);
-    });
-    wrap.style.display = companies.length ? '' : 'none';
-  } catch(e) { wrap.style.display = 'none'; }
 }
 function clientCbKey(e, inp) {
   if (_clientDD.style.display === 'none' || _clientInput !== inp) {
@@ -277,18 +273,136 @@ function clientCbKey(e, inp) {
     if (_clientDD._cursor >= 0 && opts[_clientDD._cursor]) clientCbSelect(e, opts[_clientDD._cursor]);
   }
 }
-window.addEventListener('scroll', () => { if (_clientInput) _clientPos(_clientInput); }, true);
-window.addEventListener('resize', () => { if (_clientInput) _clientPos(_clientInput); });
 
-// ── Catalog data (injected from server) ────────────────────────────────────────
+// ── Company combobox (searches ALL companies → auto-fills client) ───────────────
+const _companyDD    = _makeDD(9610);
+let   _companyInput = null;
+
+function _companyMatches(q) {
+  return q ? ALL_COMPANIES.filter(co =>
+    co.name.toLowerCase().includes(q) || co.client_name.toLowerCase().includes(q)
+  ) : ALL_COMPANIES;
+}
+function companyCbRender(inp, matches) {
+  _companyInput = inp; _companyDD._matches = matches; _companyDD._cursor = -1;
+  _companyDD.innerHTML = matches.length
+    ? matches.map((co, i) => `<div class="cb-option" data-idx="${i}" onmousedown="companyCbSelect(event,this)">
+        <div style="font-weight:600;font-size:13px">${escHtml(co.name)}</div>
+        <div style="font-size:11px;color:var(--text-muted)">${escHtml(co.client_name)}</div>
+      </div>`).join('')
+    : '<div style="padding:10px 14px;color:var(--text-muted);font-size:13px;font-style:italic">No companies found</div>';
+  _ddPos(_companyDD, inp);
+  _companyDD.style.display = '';
+}
+function companyCbOpen(inp)   { companyCbRender(inp, _companyMatches(inp.value.toLowerCase())); }
+function companyCbFilter(inp) { companyCbRender(inp, _companyMatches(inp.value.toLowerCase())); }
+function companyCbBlur(inp) {
+  setTimeout(() => { if (_companyInput === inp) { _companyDD.style.display = 'none'; _companyInput = null; } }, 180);
+}
+function companyCbSelect(e, optEl) {
+  e.preventDefault();
+  const co = _companyDD._matches[parseInt(optEl.dataset.idx, 10)];
+  if (!co || !_companyInput) return;
+  _companyInput.value = co.name;
+  _companyDD.style.display = 'none'; _companyInput = null;
+
+  // Auto-fill client
+  const clientSearchInp = document.getElementById('client_search');
+  clientSearchInp.value = co.client_name;
+  document.getElementById('client_id').value = co.client_id;
+  document.getElementById('client_error').style.display = 'none';
+
+  // Load companies and select this specific company
+  loadClientCompanies(co.client_id, co.id);
+
+  // Auto-fill due date from client's payment terms
+  const found = CLIENT_LIST.find(c => c.id === co.client_id);
+  if (found && found.payment_terms > 0) {
+    const dueDate   = document.getElementById('due_date');
+    const issueDate = document.getElementById('issue_date');
+    dueDate._clientTerms = found.payment_terms;
+    if (issueDate.value && !dueDate._userSet) {
+      const d = new Date(issueDate.value);
+      d.setDate(d.getDate() + found.payment_terms);
+      dueDate.value = d.toISOString().slice(0, 10);
+    }
+  }
+}
+function companyCbKey(e, inp) {
+  if (_companyDD.style.display === 'none' || _companyInput !== inp) {
+    companyCbOpen(inp);
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const opts = _companyDD.querySelectorAll('.cb-option');
+      if (opts.length) {
+        _companyDD._cursor = e.key === 'ArrowDown' ? 0 : opts.length - 1;
+        opts[_companyDD._cursor].classList.add('cb-active');
+        opts[_companyDD._cursor].scrollIntoView({ block: 'nearest' });
+      }
+    }
+    return;
+  }
+  const opts = _companyDD.querySelectorAll('.cb-option');
+  if (!opts.length) return;
+  if (e.key === 'Escape') { _companyDD.style.display = 'none'; _companyInput = null; return; }
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    _companyDD._cursor = Math.min(_companyDD._cursor + 1, opts.length - 1);
+    opts.forEach((o, i) => o.classList.toggle('cb-active', i === _companyDD._cursor));
+    opts[_companyDD._cursor]?.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    _companyDD._cursor = Math.max(_companyDD._cursor - 1, 0);
+    opts.forEach((o, i) => o.classList.toggle('cb-active', i === _companyDD._cursor));
+    opts[_companyDD._cursor]?.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (_companyDD._cursor >= 0 && opts[_companyDD._cursor]) companyCbSelect(e, opts[_companyDD._cursor]);
+  }
+}
+
+// ── Bill-to Company loader ─────────────────────────────────────────────────────
+async function loadClientCompanies(clientId, preselectId) {
+  // preselectId: undefined = auto-select first, null/''/0 = no preselect, id = select specific
+  const wrap = document.getElementById('companyWrap');
+  const sel  = document.getElementById('company_id');
+  sel.innerHTML = '<option value="">— No specific company —</option>';
+  if (!clientId) { wrap.style.display = 'none'; return; }
+  try {
+    const res       = await fetch(`/invoices/api/client-companies/${clientId}`);
+    const companies = await res.json();
+    companies.forEach(co => {
+      const opt = document.createElement('option');
+      opt.value       = co.id;
+      opt.textContent = co.name;
+      sel.appendChild(opt);
+    });
+    if (wrap) wrap.style.display = companies.length ? '' : 'none';
+
+    if (preselectId !== null && preselectId !== undefined && preselectId !== '' && preselectId !== 0) {
+      sel.value = String(preselectId);
+    } else if (preselectId === undefined && companies.length > 0) {
+      // Auto-select first company when client chosen interactively
+      sel.value = String(companies[0].id);
+    }
+  } catch(e) { wrap.style.display = 'none'; }
+}
+
+window.addEventListener('scroll', () => {
+  if (_clientInput)  _ddPos(_clientDD,  _clientInput);
+  if (_companyInput) _ddPos(_companyDD, _companyInput);
+}, true);
+window.addEventListener('resize', () => {
+  if (_clientInput)  _ddPos(_clientDD,  _clientInput);
+  if (_companyInput) _ddPos(_companyDD, _companyInput);
+});
+
+// ── Catalog data ───────────────────────────────────────────────────────────────
 const CATALOG = {{ products | tojson }};
 
-// ── Row counter (handles non-sequential idx after deletes) ─────────────────────
 let rowCount = {{ items | length }};
 
-// ── Shared dropdown (appended to <body> so it's never clipped by table overflow)
-let _cbInput = null;   // currently active input
-const _cbDD  = (() => {
+const _cbDD = (() => {
   const el = document.createElement('div');
   el.id    = 'cbSharedDropdown';
   el.style.cssText =
@@ -301,6 +415,7 @@ const _cbDD  = (() => {
   el._cursor  = -1;
   return el;
 })();
+let _cbInput = null;
 
 function _cbPos(input) {
   const r = input.getBoundingClientRect();
@@ -337,10 +452,7 @@ function cbBuildOptions(query, excludeInput) {
 }
 
 function cbRender(input, matches) {
-  _cbInput        = input;
-  _cbDD._matches  = matches;
-  _cbDD._cursor   = -1;
-
+  _cbInput = input; _cbDD._matches = matches; _cbDD._cursor = -1;
   if (!matches.length) {
     _cbDD.innerHTML = '<div class="cb-no-match">No products found</div>';
   } else {
@@ -354,10 +466,7 @@ function cbRender(input, matches) {
   _cbDD.style.display = '';
 }
 
-function cbOpen(input) {
-  cbRender(input, cbBuildOptions(input.value, input));
-}
-
+function cbOpen(input)   { cbRender(input, cbBuildOptions(input.value, input)); }
 function cbFilter(input) {
   const wrap = input.closest('.cb-wrap');
   wrap.querySelector('.cb-pid').value  = '';
@@ -365,14 +474,9 @@ function cbFilter(input) {
   cbRender(input, cbBuildOptions(input.value, input));
   recalcTotals();
 }
-
 function cbBlur(input) {
   setTimeout(() => {
-    if (_cbInput === input) {
-      _cbDD.style.display = 'none';
-      _cbDD._cursor = -1;
-      _cbInput = null;
-    }
+    if (_cbInput === input) { _cbDD.style.display = 'none'; _cbDD._cursor = -1; _cbInput = null; }
   }, 180);
 }
 
@@ -398,15 +502,11 @@ function cbSelect(event, optEl) {
   if (taxInp)   taxInp.value   = p.tax_rate || 0;
   if (qtyInp)   { qtyInp.dataset.stockQty = p.stock_qty != null ? p.stock_qty : ''; validateInvQty(qtyInp); }
 
-  _cbDD.style.display = 'none';
-  _cbInput = null;
+  _cbDD.style.display = 'none'; _cbInput = null;
   recalcTotals();
 
-  // Add a blank row if this was the last row
   const rows = document.querySelectorAll('#lineItems tr');
-  if (wrap.closest('tr') === rows[rows.length - 1]) {
-    addLineItem();
-  }
+  if (wrap.closest('tr') === rows[rows.length - 1]) addLineItem();
 }
 
 function validateInvQty(inp) {
@@ -430,16 +530,10 @@ function validateInvQty(inp) {
 }
 
 function cbKey(event, input) {
-  if (_cbDD.style.display === 'none' || _cbInput !== input) {
-    cbOpen(input);
-    return;
-  }
+  if (_cbDD.style.display === 'none' || _cbInput !== input) { cbOpen(input); return; }
   const opts = _cbDD.querySelectorAll('.cb-option');
   if (!opts.length) return;
-
-  if (event.key === 'Escape') {
-    _cbDD.style.display = 'none'; _cbInput = null; return;
-  }
+  if (event.key === 'Escape') { _cbDD.style.display = 'none'; _cbInput = null; return; }
   if (event.key === 'ArrowDown') {
     event.preventDefault();
     _cbDD._cursor = Math.min(_cbDD._cursor + 1, opts.length - 1);
@@ -456,7 +550,6 @@ function cbKey(event, input) {
   }
 }
 
-// Reposition on scroll/resize while open
 window.addEventListener('scroll', () => { if (_cbInput) _cbPos(_cbInput); }, true);
 window.addEventListener('resize', () => { if (_cbInput) _cbPos(_cbInput); });
 
@@ -472,25 +565,14 @@ function addLineItem(desc='', sku='', qty=1, price=0, tax=0, pid='', spid='') {
   tr.innerHTML = `
     <td class="col-desc" style="min-width:280px">
       <div class="cb-wrap">
-        <input type="text"
-               name="items[${idx}][description]"
-               class="cb-input"
-               value="${escHtml(desc)}"
-               placeholder="Search product by name or SKU…"
-               autocomplete="off"
-               oninput="cbFilter(this)"
-               onfocus="cbOpen(this)"
-               onblur="cbBlur(this)"
-               onkeydown="cbKey(event,this)">
+        <input type="text" name="items[${idx}][description]" class="cb-input" value="${escHtml(desc)}"
+               placeholder="Search product by name or SKU…" autocomplete="off"
+               oninput="cbFilter(this)" onfocus="cbOpen(this)" onblur="cbBlur(this)" onkeydown="cbKey(event,this)">
         <div class="cb-dropdown" style="display:none"></div>
         <input type="hidden" name="items[${idx}][product_id]"     class="cb-pid"  value="${escHtml(pid)}">
         <input type="hidden" name="items[${idx}][sub_product_id]" class="cb-spid" value="${escHtml(spid)}">
       </div>
-      <input type="text"
-             name="items[${idx}][sku]"
-             class="cb-sku-inp"
-             value="${escHtml(sku)}"
-             placeholder="SKU (optional)">
+      <input type="text" name="items[${idx}][sku]" class="cb-sku-inp" value="${escHtml(sku)}" placeholder="SKU (optional)">
     </td>
     <td class="col-qty"   style="vertical-align:top;padding-top:10px">
       <input type="number" name="items[${idx}][quantity]"   value="${qty}"   min="0.01" step="any"  oninput="recalcTotals();validateInvQty(this)" style="text-align:right">
@@ -508,19 +590,13 @@ function addLineItem(desc='', sku='', qty=1, price=0, tax=0, pid='', spid='') {
       <button type="button" class="btn btn-danger btn-sm" onclick="removeRow(this)" title="Remove">✕</button>
     </td>`;
   tbody.appendChild(tr);
-  // Mark sku as not user-edited yet
   tr.querySelector('.cb-sku-inp')._userEdited = false;
   tr.querySelector('.cb-sku-inp').addEventListener('input', function() { this._userEdited = true; });
-  // Focus the new combobox
   tr.querySelector('.cb-input').focus();
   recalcTotals();
 }
 
-function removeRow(btn) {
-  btn.closest('tr').remove();
-  renumberRows();
-  recalcTotals();
-}
+function removeRow(btn) { btn.closest('tr').remove(); renumberRows(); recalcTotals(); }
 
 function renumberRows() {
   document.querySelectorAll('#lineItems tr').forEach((tr, i) => {
@@ -539,44 +615,37 @@ function recalcTotals() {
     const price = parseFloat(tr.querySelector('[name$="[unit_price]"]')?.value) || 0;
     const tax   = parseFloat(tr.querySelector('[name$="[tax_rate]"]')?.value)   || 0;
     const lineTotal = qty * price;
-    const lineTax   = lineTotal * tax / 100;
-    subtotal  += lineTotal;
-    taxTotal  += lineTax;
+    subtotal += lineTotal; taxTotal += lineTotal * tax / 100;
     const disp = tr.querySelector('.line-total-disp');
     if (disp) disp.textContent = formatINR(lineTotal);
   });
   const discount = parseFloat(document.getElementById('discount_amount')?.value) || 0;
-  const grand = subtotal + taxTotal - discount;
   document.getElementById('subtotal').textContent        = formatINR(subtotal);
   document.getElementById('taxTotal').textContent        = formatINR(taxTotal);
   document.getElementById('discountDisplay').textContent = formatINR(discount);
-  document.getElementById('grandTotal').textContent      = formatINR(grand);
+  document.getElementById('grandTotal').textContent      = formatINR(subtotal + taxTotal - discount);
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
-  // Pre-populate client combobox in edit mode
-  {
-    const clientIdVal  = document.getElementById('client_id').value;
-    const savedCompany = "{{ invoice.get('company_id', '')|string }}";
-    if (clientIdVal) {
-      const found = CLIENT_LIST.find(c => String(c.id) === String(clientIdVal));
-      if (found) document.getElementById('client_search').value = found.name + (found.company ? ' — ' + found.company : '');
-      loadClientCompanies(clientIdVal, savedCompany || null);
-    }
+  const clientIdVal  = document.getElementById('client_id').value;
+  const savedCompany = "{{ invoice.get('company_id', '')|string }}";
+
+  if (clientIdVal) {
+    const found = CLIENT_LIST.find(c => String(c.id) === String(clientIdVal));
+    if (found) document.getElementById('client_search').value = found.name;
+    // Edit mode: preselect saved company (null if none saved → no auto-select)
+    loadClientCompanies(clientIdVal, savedCompany !== '' ? savedCompany : null);
   }
 
-  // Validate client selection on submit
   document.getElementById('invoiceForm').addEventListener('submit', function(e) {
     if (!document.getElementById('client_id').value) {
       e.preventDefault();
-      const errEl = document.getElementById('client_error');
-      errEl.style.display = '';
+      document.getElementById('client_error').style.display = '';
       document.getElementById('client_search').focus();
     }
   }, true);
 
-  // Set today's date if blank; auto-set due date from client payment terms (fallback: 60 days)
   const issueDate = document.getElementById('issue_date');
   const dueDate   = document.getElementById('due_date');
   function syncDueDate() {
@@ -589,22 +658,18 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   if (!issueDate.value) issueDate.value = new Date().toISOString().slice(0, 10);
   dueDate._userSet = !!dueDate.value;
-  dueDate._clientTerms = null;  // set by clientCbSelect when a client is chosen
+  dueDate._clientTerms = null;
   dueDate.addEventListener('change', () => { dueDate._userSet = true; });
   issueDate.addEventListener('change', syncDueDate);
   if (!dueDate.value) syncDueDate();
 
-  // Pre-populate payment terms from selected client in edit mode
-  const clientIdVal = document.getElementById('client_id').value;
   if (clientIdVal) {
     const found = CLIENT_LIST.find(c => String(c.id) === String(clientIdVal));
     if (found && found.payment_terms > 0) dueDate._clientTerms = found.payment_terms;
   }
 
-  // If no rows exist yet, add a blank one
   if (document.querySelectorAll('#lineItems tr').length === 0) addLineItem();
 
-  // Wire up sku user-edit tracking for server-rendered rows (edit mode)
   document.querySelectorAll('#lineItems .cb-sku-inp').forEach(inp => {
     inp._userEdited = !!inp.value;
     inp.addEventListener('input', function() { this._userEdited = true; });
@@ -612,7 +677,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   recalcTotals();
 
-  // Stock qty submit validation
   document.getElementById('invoiceForm').addEventListener('submit', function(e) {
     const bad = [];
     document.querySelectorAll('#lineItems tr').forEach(tr => {
@@ -620,38 +684,27 @@ document.addEventListener('DOMContentLoaded', () => {
       const descInp = tr.querySelector('[name$="[description]"]');
       if (!qtyInp || !descInp?.value.trim()) return;
       const stock = parseFloat(qtyInp.dataset.stockQty);
-      if (!isNaN(stock) && (parseFloat(qtyInp.value) || 0) > stock) {
+      if (!isNaN(stock) && (parseFloat(qtyInp.value) || 0) > stock)
         bad.push(`${descInp.value.trim()} (stock: ${stock})`);
-      }
     });
     if (bad.length) {
-      e.stopImmediatePropagation();
-      e.preventDefault();
+      e.stopImmediatePropagation(); e.preventDefault();
       alert('Quantity exceeds available warehouse stock for:\n\n' + bad.map(s => '• ' + s).join('\n'));
     }
   });
 
-  // Dirty tracking — flag any change to the form
   let _invFormDirty = false;
-  function _markInvDirty() { _invFormDirty = true; }
   document.querySelectorAll('#invoiceForm input, #invoiceForm select, #invoiceForm textarea')
-    .forEach(el => el.addEventListener('input', _markInvDirty));
+    .forEach(el => el.addEventListener('input', () => { _invFormDirty = true; }));
   document.getElementById('invoiceForm').addEventListener('submit', () => { _invFormDirty = false; });
-  // Observe DOM additions (new line items)
-  new MutationObserver(_markInvDirty).observe(document.getElementById('lineItems'), { childList: true });
-  window.__dirtyCheck = () => ({
-    isDirty: _invFormDirty,
-    label: 'Invoice',
-    save: null,
-  });
+  new MutationObserver(() => { _invFormDirty = true; }).observe(document.getElementById('lineItems'), { childList: true });
+  window.__dirtyCheck = () => ({ isDirty: _invFormDirty, label: 'Invoice', save: null });
 });
 </script>
 
 <style>
-/* ── Combobox ──────────────────────────────────────────────────────────────── */
 .cb-wrap { position: relative; }
 .cb-input { width: 100%; }
-/* .cb-dropdown is now a shared body element — no per-wrap styles needed */
 .cb-option {
   padding: 8px 12px;
   cursor: pointer;
@@ -661,12 +714,11 @@ document.addEventListener('DOMContentLoaded', () => {
 }
 .cb-option:last-child { border-bottom: none; }
 .cb-option:hover, .cb-option.cb-active { background: var(--bg-alt, #f8fafc); }
-.cb-opt-name { font-weight: 600; color: var(--text, #1e293b); }
-.cb-opt-meta { font-size: 11px; color: var(--text-muted, #64748b); margin-top: 2px; display: flex; gap: 6px; align-items: center; }
-.cb-sku-tag  { background: var(--bg-alt, #f1f5f9); border-radius: 3px; padding: 1px 5px; font-family: monospace; }
-.cb-price-tag{ font-weight: 600; color: var(--success, #10b981); }
-.cb-no-match { padding: 10px 12px; color: var(--text-muted, #64748b); font-size: 13px; font-style: italic; }
-/* SKU input under the combobox */
+.cb-opt-name  { font-weight: 600; color: var(--text, #1e293b); }
+.cb-opt-meta  { font-size: 11px; color: var(--text-muted, #64748b); margin-top: 2px; display: flex; gap: 6px; align-items: center; }
+.cb-sku-tag   { background: var(--bg-alt, #f1f5f9); border-radius: 3px; padding: 1px 5px; font-family: monospace; }
+.cb-price-tag { font-weight: 600; color: var(--success, #10b981); }
+.cb-no-match  { padding: 10px 12px; color: var(--text-muted, #64748b); font-size: 13px; font-style: italic; }
 .cb-sku-inp {
   margin-top: 4px;
   width: 100%;

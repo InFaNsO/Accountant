@@ -168,32 +168,32 @@
           <thead>
             <tr>
               <th>Name</th>
-              <th class="col-mobile-hide">GST</th>
-              {% if can_financials %}<th style="text-align:right">Opening Bal.</th>{% endif %}
-              <th></th>
+              {% if can_financials %}<th style="text-align:right">Balance</th>{% endif %}
             </tr>
           </thead>
           <tbody>
             {% for co in companies %}
-            {% set co_ob = co.opening_balance or 0 %}
             <tr id="co-row-{{ co.id }}">
               <td style="font-weight:600;font-size:13px">{{ co.name }}</td>
-              <td class="muted col-mobile-hide" style="font-size:12px;font-family:monospace">{{ co.tax_id or '—' }}</td>
               {% if can_financials %}
-              <td style="text-align:right;font-size:12px">
-                {% if co_ob < 0 %}
-                  <span style="color:var(--success)">{{ (co_ob * -1)|inr }} cr</span>
-                {% elif co_ob > 0 %}
-                  <span style="color:var(--danger)">{{ co_ob|inr }} dr</span>
-                {% else %}
-                  <span class="muted">—</span>
-                {% endif %}
+              {% set bal = co.balance %}
+              <td style="text-align:right">
+                <span onclick="showCompanyLedger({{ client.id }}, {{ co.id }}, {{ co.name|tojson }})"
+                      style="cursor:pointer;text-decoration:underline dotted"
+                      title="Click to view company ledger">
+                  {% if bal < 0 %}
+                    <span style="color:var(--danger);font-weight:700">{{ bal|inr }}</span>
+                    <div style="font-size:11px;color:var(--text-muted)">outstanding</div>
+                  {% elif bal > 0 %}
+                    <span style="color:var(--success);font-weight:700">{{ bal|inr }}</span>
+                    <div style="font-size:11px;color:var(--text-muted)">credit</div>
+                  {% else %}
+                    <span style="color:var(--warning);font-weight:700">{{ bal|inr }}</span>
+                    <div style="font-size:11px;color:var(--text-muted)">settled</div>
+                  {% endif %}
+                </span>
               </td>
               {% endif %}
-              <td style="text-align:right;white-space:nowrap">
-                <button class="btn btn-ghost btn-sm" onclick="editCompany({{ co.id }}, {{ co.name|tojson }}, {{ (co.tax_id or '')|tojson }}, {{ co_ob }})">Edit</button>
-                <button class="btn btn-danger btn-sm" onclick="deleteCompany({{ client.id }}, {{ co.id }}, '{{ co.name|replace("'","\\'") }}')">Del</button>
-              </td>
             </tr>
             {% endfor %}
           </tbody>
@@ -246,6 +246,62 @@
 
 {% block scripts %}
 <script>
+// ── Company ledger (opens the shared modal with company-filtered data) ──────────
+function showCompanyLedger(clientId, companyId, companyName) {
+  document.getElementById('ledgerModalTitle').textContent = companyName;
+  document.getElementById('ledgerFinalBal').textContent   = '';
+  document.getElementById('ledgerEmpty').style.display    = 'none';
+  document.getElementById('ledgerEntryForm').style.display = 'none';
+  document.getElementById('ledgerModal').style.display    = 'flex';
+  try { document.getElementById('lwSel').value  = 'all'; } catch(e) {}
+  try { document.getElementById('lwFrom').value = '';    } catch(e) {}
+  try { document.getElementById('lwTo').value   = '';    } catch(e) {}
+
+  const bodyEl = document.getElementById('ledgerBody');
+  bodyEl.innerHTML = '<tr><td colspan="5" style="padding:30px;text-align:center;color:var(--text-muted)">Loading…</td></tr>';
+
+  fetch(`/clients/${clientId}/ledger?company_id=${companyId}`)
+    .then(r => r.json())
+    .then(data => {
+      const entries = data.entries || [];
+      const bal     = data.final_balance || 0;
+      const balEl   = document.getElementById('ledgerFinalBal');
+      balEl.textContent = formatINR(bal);
+      balEl.style.color = bal < 0 ? 'var(--danger)' : bal > 0 ? 'var(--success)' : 'var(--warning)';
+
+      if (!entries.length) {
+        bodyEl.innerHTML = '';
+        document.getElementById('ledgerEmpty').style.display = '';
+        return;
+      }
+      document.getElementById('ledgerEmpty').style.display = 'none';
+
+      const badge = t => {
+        const map = {
+          opening: 'rgba(99,102,241,.15)|#6366f1|opening',
+          invoice: 'rgba(239,68,68,.12)|var(--danger)|invoice',
+          payment: 'rgba(16,185,129,.12)|var(--success)|payment',
+        };
+        const [bg, color, label] = (map[t] || map.payment).split('|');
+        return `<span style="font-size:10px;background:${bg};color:${color};padding:2px 6px;border-radius:3px;margin-left:6px">${label}</span>`;
+      };
+
+      bodyEl.innerHTML = entries.map(e => {
+        const rc = e.running < 0 ? 'var(--danger)' : e.running > 0 ? 'var(--success)' : 'var(--warning)';
+        return `<tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:10px 16px;color:var(--text-muted);font-family:monospace;font-size:12px">${e.date || '—'}</td>
+          <td style="padding:10px 16px">${e.label}${badge(e.type)}</td>
+          <td style="padding:10px 16px;text-align:right;color:var(--danger);font-weight:${e.debit?600:400}">${e.debit ? formatINR(e.debit) : '—'}</td>
+          <td style="padding:10px 16px;text-align:right;color:var(--success);font-weight:${e.credit?600:400}">${e.credit ? formatINR(e.credit) : '—'}</td>
+          <td style="padding:10px 16px;text-align:right;font-weight:700;color:${rc}">${formatINR(e.running)}</td>
+        </tr>`;
+      }).join('');
+    })
+    .catch(() => {
+      bodyEl.innerHTML = '<tr><td colspan="5" style="padding:20px;text-align:center;color:var(--danger)">Failed to load ledger.</td></tr>';
+    });
+}
+
 async function recalculateBalance(clientId) {
   const btn = document.getElementById('recalcBtn');
   btn.disabled = true;

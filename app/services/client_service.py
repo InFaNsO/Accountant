@@ -40,6 +40,71 @@ def get_all_clients():
     ).fetchall()
 
 
+def get_all_clients_with_companies():
+    """Like get_all_clients() but also attaches per-company financial stats."""
+    db = get_db()
+    clients = db.execute("""
+        SELECT
+            c.*,
+            COALESCE(inv60.purchases_60d, 0)  AS purchases_60d,
+            COALESCE(pay60.payments_60d, 0)   AS payments_60d,
+            COALESCE(t_inv.total_invoiced, 0) AS total_invoiced,
+            COALESCE(t_pay.total_paid, 0)     AS total_paid
+        FROM clients c
+        LEFT JOIN (SELECT client_id, SUM(total) AS purchases_60d FROM invoices
+                   WHERE issue_date >= date('now','-60 days') AND status != 'cancelled'
+                   GROUP BY client_id) inv60 ON c.id = inv60.client_id
+        LEFT JOIN (SELECT client_id, SUM(amount) AS payments_60d FROM payments
+                   WHERE payment_date >= date('now','-60 days') GROUP BY client_id) pay60 ON c.id = pay60.client_id
+        LEFT JOIN (SELECT client_id, SUM(total) AS total_invoiced FROM invoices
+                   WHERE status != 'cancelled' GROUP BY client_id) t_inv ON c.id = t_inv.client_id
+        LEFT JOIN (SELECT client_id, SUM(amount) AS total_paid FROM payments
+                   GROUP BY client_id) t_pay ON c.id = t_pay.client_id
+        ORDER BY c.name
+    """).fetchall()
+
+    company_rows = db.execute("""
+        SELECT
+            cc.*,
+            COALESCE(inv60.purchases_60d, 0)  AS purchases_60d,
+            COALESCE(pay60.payments_60d, 0)   AS payments_60d,
+            COALESCE(t_inv.total_invoiced, 0) AS total_invoiced,
+            COALESCE(t_pay.total_paid, 0)     AS total_paid
+        FROM client_companies cc
+        LEFT JOIN (SELECT company_id, SUM(total) AS purchases_60d FROM invoices
+                   WHERE issue_date >= date('now','-60 days') AND status != 'cancelled'
+                   GROUP BY company_id) inv60 ON cc.id = inv60.company_id
+        LEFT JOIN (SELECT company_id, SUM(amount) AS payments_60d FROM payments
+                   WHERE payment_date >= date('now','-60 days') GROUP BY company_id) pay60 ON cc.id = pay60.company_id
+        LEFT JOIN (SELECT company_id, SUM(total) AS total_invoiced FROM invoices
+                   WHERE status != 'cancelled' GROUP BY company_id) t_inv ON cc.id = t_inv.company_id
+        LEFT JOIN (SELECT company_id, SUM(amount) AS total_paid FROM payments
+                   GROUP BY company_id) t_pay ON cc.id = t_pay.company_id
+        ORDER BY cc.client_id, cc.name
+    """).fetchall()
+
+    co_map = {}
+    for co in company_rows:
+        co_map.setdefault(co['client_id'], []).append(dict(co))
+
+    result = []
+    for c in clients:
+        d = dict(c)
+        d['companies'] = co_map.get(c['id'], [])
+        result.append(d)
+    return result
+
+
+def get_all_companies_with_client():
+    """Return all client_companies joined with client name, for combobox injection."""
+    return get_db().execute("""
+        SELECT cc.id, cc.name, cc.client_id, c.name AS client_name
+        FROM client_companies cc
+        JOIN clients c ON c.id = cc.client_id
+        ORDER BY cc.name
+    """).fetchall()
+
+
 def get_client(client_id):
     return get_db().execute(
         "SELECT * FROM clients WHERE id = ?", (client_id,)

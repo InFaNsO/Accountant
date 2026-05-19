@@ -12,7 +12,7 @@
 <div class="card">
   <div class="card-header">
     <span class="card-title">All Clients ({{ clients|length }})</span>
-    <input type="search" id="clientSearch" placeholder="Search clients…" style="width:220px" oninput="filterTable(this.value,'clientTable')">
+    <input type="search" id="clientSearch" placeholder="Search by client or company…" style="width:240px" oninput="filterClients(this.value)">
   </div>
   {% if clients %}
   <div class="table-wrap">
@@ -30,11 +30,28 @@
       </thead>
       <tbody>
         {% for c in clients %}
-        <tr>
+
+        {# build lowercased search string: client name + all company names #}
+        {% set co_names = c.companies | map(attribute='name') | join(' ') %}
+        <tr class="client-row"
+            data-id="{{ c.id }}"
+            data-name="{{ c.name|lower }}"
+            data-companies="{{ co_names|lower }}">
           <td>
-            <a href="{{ url_for('clients.detail', client_id=c.id) }}"
-               style="font-weight:600;color:var(--accent);text-decoration:none;">{{ c.name }}</a>
-            {% if c.company %}<div style="font-size:12px;color:var(--text-muted)">{{ c.company }}</div>{% endif %}
+            <div style="display:flex;align-items:center;gap:6px">
+              {% if c.companies %}
+              <button class="toggle-btn" id="toggle-{{ c.id }}" onclick="toggleCompanies({{ c.id }})" title="Show companies">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width:12px;height:12px;transition:transform .18s"><polyline points="9 18 15 12 9 6"/></svg>
+              </button>
+              {% endif %}
+              <div>
+                <a href="{{ url_for('clients.detail', client_id=c.id) }}"
+                   style="font-weight:600;color:var(--accent);text-decoration:none;">{{ c.name }}</a>
+                {% if c.companies %}
+                <div style="font-size:11px;color:var(--text-muted);margin-top:1px">{{ c.companies|length }} compan{{ 'y' if c.companies|length == 1 else 'ies' }}</div>
+                {% endif %}
+              </div>
+            </div>
           </td>
           {% if can_financials %}
           {% set ob = (c.opening_balance or 0) %}
@@ -57,12 +74,8 @@
             {% endif %}
             </span>
           </td>
-          <td class="col-mobile-hide" style="text-align:right;font-weight:600;">
-            {{ c.purchases_60d|inr }}
-          </td>
-          <td class="col-mobile-hide" style="text-align:right;font-weight:600;color:var(--success)">
-            {{ c.payments_60d|inr }}
-          </td>
+          <td class="col-mobile-hide" style="text-align:right;font-weight:600;">{{ c.purchases_60d|inr }}</td>
+          <td class="col-mobile-hide" style="text-align:right;font-weight:600;color:var(--success)">{{ c.payments_60d|inr }}</td>
           {% endif %}
           <td style="text-align:right">
             <a href="{{ url_for('clients.detail', client_id=c.id) }}" class="btn btn-secondary btn-sm">View</a>
@@ -73,6 +86,41 @@
             </form>
           </td>
         </tr>
+
+        {# Company sub-rows #}
+        {% for co in c.companies %}
+        {% set ob = (co.opening_balance or 0) %}
+        {% set credit_ob = [0, ob * -1]|max %}
+        {% set debit_ob  = [0, ob]|max %}
+        {% set balance = (co.total_paid + credit_ob) - (co.total_invoiced + debit_ob) %}
+        <tr class="company-row" data-parent="{{ c.id }}" data-name="{{ co.name|lower }}" style="display:none">
+          <td>
+            <div style="display:flex;align-items:center;gap:6px;padding-left:34px">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px;color:var(--text-muted);flex-shrink:0"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+              <span style="font-size:13px;font-weight:500">{{ co.name }}</span>
+              {% if co.tax_id %}<span style="font-size:11px;color:var(--text-muted);font-family:monospace">{{ co.tax_id }}</span>{% endif %}
+            </div>
+          </td>
+          {% if can_financials %}
+          <td style="text-align:right">
+            {% if balance < 0 %}
+              <span style="color:var(--danger);font-weight:600;font-size:13px">{{ balance|inr }}</span>
+              <div style="font-size:11px;color:var(--text-muted)">outstanding</div>
+            {% elif balance > 0 %}
+              <span style="color:var(--success);font-weight:600;font-size:13px">{{ balance|inr }}</span>
+              <div style="font-size:11px;color:var(--text-muted)">credit</div>
+            {% else %}
+              <span style="color:var(--warning);font-weight:600;font-size:13px">{{ balance|inr }}</span>
+              <div style="font-size:11px;color:var(--text-muted)">settled</div>
+            {% endif %}
+          </td>
+          <td class="col-mobile-hide" style="text-align:right;font-size:13px;font-weight:500">{{ co.purchases_60d|inr }}</td>
+          <td class="col-mobile-hide" style="text-align:right;font-size:13px;font-weight:500;color:var(--success)">{{ co.payments_60d|inr }}</td>
+          {% endif %}
+          <td></td>
+        </tr>
+        {% endfor %}
+
         {% endfor %}
       </tbody>
     </table>
@@ -90,4 +138,81 @@
   </div>
   {% endif %}
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const _expandedClients = new Set();
+
+function toggleCompanies(clientId) {
+  const rows = document.querySelectorAll(`.company-row[data-parent="${clientId}"]`);
+  const btn  = document.getElementById('toggle-' + clientId);
+  if (_expandedClients.has(clientId)) {
+    _expandedClients.delete(clientId);
+    rows.forEach(r => r.style.display = 'none');
+    if (btn) btn.classList.remove('expanded');
+  } else {
+    _expandedClients.add(clientId);
+    rows.forEach(r => r.style.display = '');
+    if (btn) btn.classList.add('expanded');
+  }
+}
+
+function filterClients(rawQ) {
+  const q = rawQ.toLowerCase().trim();
+
+  document.querySelectorAll('.client-row').forEach(row => {
+    const cid           = row.dataset.id;
+    const matchClient   = row.dataset.name.includes(q);
+    const matchCompany  = q && row.dataset.companies.includes(q);
+    const companyRows   = document.querySelectorAll(`.company-row[data-parent="${cid}"]`);
+
+    if (!q) {
+      row.style.display = '';
+      companyRows.forEach(r => r.style.display = _expandedClients.has(cid) ? '' : 'none');
+      return;
+    }
+
+    if (matchClient || matchCompany) {
+      row.style.display = '';
+      if (matchCompany) {
+        // Expand and show only matching company rows
+        companyRows.forEach(r => {
+          r.style.display = r.dataset.name.includes(q) ? '' : 'none';
+        });
+        const btn = document.getElementById('toggle-' + cid);
+        if (btn) btn.classList.add('expanded');
+      } else {
+        // Client name matched — respect current expand state
+        companyRows.forEach(r => r.style.display = _expandedClients.has(cid) ? '' : 'none');
+      }
+    } else {
+      row.style.display = 'none';
+      companyRows.forEach(r => r.style.display = 'none');
+    }
+  });
+}
+</script>
+<style>
+.toggle-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transition: background .15s;
+}
+.toggle-btn:hover { background: var(--bg-alt); }
+.toggle-btn.expanded svg { transform: rotate(90deg); }
+.company-row td { background: var(--bg-alt); border-bottom: 1px solid var(--border); }
+.company-row td:first-child { border-left: 3px solid var(--border); }
+.company-row:last-of-type td { border-bottom: none; }
+</style>
 {% endblock %}

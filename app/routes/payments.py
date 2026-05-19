@@ -18,8 +18,9 @@ def list_payments():
 @login_required
 @permission_required("payments", "create")
 def new_payment():
-    clients  = client_service.get_all_clients()
-    invoices = invoice_service.get_all_invoices()
+    clients       = client_service.get_all_clients_with_companies()
+    invoices      = invoice_service.get_all_invoices()
+    all_companies = client_service.get_all_companies_with_client()
 
     # Pre-fill from query string (e.g. coming from invoice detail)
     prefill = {}
@@ -41,14 +42,14 @@ def new_payment():
         if not data.get("client_id") or not data.get("amount"):
             flash("Client and amount are required.", "error")
             return render_template("payments/form.html",
-                                   clients=clients, invoices=invoices, prefill=data)
+                                   clients=clients, invoices=invoices, all_companies=all_companies, prefill=data)
         try:
             payment_service.create_payment(data)
             flash("Payment recorded and allocated.", "success")
         except Exception as e:
             flash(f"Error recording payment: {e}", "error")
             return render_template("payments/form.html",
-                                   clients=clients, invoices=invoices, prefill=data)
+                                   clients=clients, invoices=invoices, all_companies=all_companies, prefill=data)
 
         inv_id = data.get("invoice_id")
         if inv_id:
@@ -56,7 +57,7 @@ def new_payment():
         return redirect(url_for("clients.detail", client_id=data["client_id"]))
 
     return render_template("payments/form.html",
-                           clients=clients, invoices=invoices, prefill=prefill)
+                           clients=clients, invoices=invoices, all_companies=all_companies, prefill=prefill)
 
 
 @bp.route("/<int:payment_id>/delete", methods=["POST"])

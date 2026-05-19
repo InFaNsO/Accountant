@@ -212,19 +212,26 @@ def search_clients():
         return jsonify({"error": "Query parameter 'q' is required"}), 400
     q = f"%{query.lower()}%"
     db = get_db()
+    # Match on client name or any of their company names
     rows = db.execute(
-        "SELECT id, name, company FROM clients "
-        "WHERE LOWER(name) LIKE ? OR LOWER(COALESCE(company,'')) LIKE ? "
-        "ORDER BY name LIMIT 15",
+        """SELECT DISTINCT c.id, c.name
+           FROM clients c
+           LEFT JOIN client_companies cc ON cc.client_id = c.id
+           WHERE LOWER(c.name) LIKE ? OR LOWER(COALESCE(cc.name,'')) LIKE ?
+           ORDER BY c.name LIMIT 15""",
         (q, q),
     ).fetchall()
     if not rows:
         return jsonify({"result": "No clients found matching that query."})
-    text = "\n".join(
-        f"ID {r['id']}: {r['name']}" + (f" ({r['company']})" if r["company"] else "")
-        for r in rows
-    )
-    return jsonify({"result": text})
+    lines = []
+    for r in rows:
+        cos = db.execute(
+            "SELECT name FROM client_companies WHERE client_id=? ORDER BY name",
+            (r["id"],),
+        ).fetchall()
+        co_str = ", ".join(c["name"] for c in cos)
+        lines.append(f"ID {r['id']}: {r['name']}" + (f" [{co_str}]" if co_str else ""))
+    return jsonify({"result": "\n".join(lines)})
 
 
 @bp.route("/clients/summary")
@@ -289,7 +296,7 @@ def get_client_details(client_id):
     pending_count = sum(1 for i in invoices if i["status"] in ("issued", "sent", "partial"))
     lines = [
         f"ID:       {c['id']}",
-        f"Name:     {c['name']}" + (f" / {c['company']}" if c["company"] else ""),
+        f"Name:     {c['name']}",
         f"Email:    {c['email'] or '—'}",
         f"Phone:    {c['phone'] or '—'}",
         f"Address:  {', '.join(filter(None, [c['address'], c['city'], c['country']])) or '—'}",
@@ -301,6 +308,31 @@ def get_client_details(client_id):
     ]
     if ob != 0:
         lines.append(f"Opening:  {_inr(abs(ob))} ({'debt' if ob > 0 else 'credit'})")
+    # Companies
+    companies = db.execute(
+        "SELECT id, name, tax_id, opening_balance FROM client_companies WHERE client_id=? ORDER BY name",
+        (client_id,),
+    ).fetchall()
+    if companies:
+        lines.append(f"\nCompanies ({len(companies)}):")
+        for co in companies:
+            co_ob = _f(co["opening_balance"])
+            co_inv_rows = db.execute(
+                "SELECT total, amount_paid FROM invoices WHERE client_id=? AND company_id=? AND status!='cancelled'",
+                (client_id, co["id"]),
+            ).fetchall()
+            co_paid = _f(db.execute(
+                "SELECT COALESCE(SUM(amount),0) FROM payments WHERE client_id=? AND company_id=?",
+                (client_id, co["id"]),
+            ).fetchone()[0])
+            co_inv_bal = sum(_f(r["total"]) - _f(r["amount_paid"]) for r in co_inv_rows)
+            credit_ob = max(0.0, -co_ob)
+            debit_ob  = max(0.0, co_ob)
+            co_balance = (co_paid + credit_ob) - (co_inv_bal + debit_ob)
+            bal_label = (f"{_inr(abs(co_balance))} owes us" if co_balance < 0
+                         else (f"{_inr(co_balance)} credit" if co_balance > 0 else "settled"))
+            tax_str = f" | GST: {co['tax_id']}" if co["tax_id"] else ""
+            lines.append(f"  ID {co['id']}: {co['name']}{tax_str} — {bal_label}")
     return jsonify({"result": "\n".join(lines)})
 
 
@@ -311,17 +343,37 @@ def get_client_ledger(client_id):
     c = db.execute("SELECT name, opening_balance FROM clients WHERE id=?", (client_id,)).fetchone()
     if not c:
         return jsonify({"error": f"Client ID {client_id} not found."}), 404
-    invoices = db.execute(
-        "SELECT invoice_number, issue_date, total, status FROM invoices "
-        "WHERE client_id=? AND status != 'cancelled' ORDER BY issue_date, id",
-        (client_id,),
-    ).fetchall()
-    payments = db.execute(
-        "SELECT amount, payment_date, method, reference, invoice_id FROM payments "
-        "WHERE client_id=? ORDER BY payment_date, id",
-        (client_id,),
-    ).fetchall()
-    ob = _f(c["opening_balance"])
+    company_id = request.args.get("company_id", type=int)
+    if company_id:
+        co_row = db.execute("SELECT name, opening_balance FROM client_companies WHERE id=? AND client_id=?",
+                            (company_id, client_id)).fetchone()
+        if not co_row:
+            return jsonify({"error": f"Company ID {company_id} not found for this client."}), 404
+        ledger_name = f"{c['name']} / {co_row['name']}"
+        ob = _f(co_row["opening_balance"])
+        invoices = db.execute(
+            "SELECT invoice_number, issue_date, total, status FROM invoices "
+            "WHERE client_id=? AND company_id=? AND status != 'cancelled' ORDER BY issue_date, id",
+            (client_id, company_id),
+        ).fetchall()
+        payments = db.execute(
+            "SELECT amount, payment_date, method, reference, invoice_id FROM payments "
+            "WHERE client_id=? AND company_id=? ORDER BY payment_date, id",
+            (client_id, company_id),
+        ).fetchall()
+    else:
+        ledger_name = c["name"]
+        ob = _f(c["opening_balance"])
+        invoices = db.execute(
+            "SELECT invoice_number, issue_date, total, status FROM invoices "
+            "WHERE client_id=? AND status != 'cancelled' ORDER BY issue_date, id",
+            (client_id,),
+        ).fetchall()
+        payments = db.execute(
+            "SELECT amount, payment_date, method, reference, invoice_id FROM payments "
+            "WHERE client_id=? ORDER BY payment_date, id",
+            (client_id,),
+        ).fetchall()
     entries = []
     if ob != 0:
         entries.append(("", "opening", f"Opening Balance ({'debt' if ob > 0 else 'credit'})",
@@ -341,7 +393,7 @@ def get_client_ledger(client_id):
                 label += f" / {r['reference']}"
             entries.append((r["payment_date"], "payment", label, 0, _f(r["amount"])))
     lines = [
-        f"Ledger for {c['name']}", "─" * 64,
+        f"Ledger for {ledger_name}", "─" * 64,
         f"{'Date':<12} {'Description':<30} {'Debit':>10} {'Credit':>10} {'Balance':>12}",
         "─" * 64,
     ]
@@ -404,18 +456,34 @@ def create_client():
     ob = abs(opening_balance_amt) if opening_balance_type != "credit" else -abs(opening_balance_amt)
     db = get_db()
     cur = db.execute(
-        "INSERT INTO clients (name, company, email, phone, address, city, country, tax_id, notes, opening_balance) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO clients (name, email, phone, address, city, country, tax_id, notes, opening_balance) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
         (name,
-         data.get("company") or None, data.get("email") or None, data.get("phone") or None,
+         data.get("email") or None, data.get("phone") or None,
          data.get("address") or None, data.get("city") or None, data.get("country") or None,
          data.get("tax_id") or None, data.get("notes") or None, ob),
     )
-    db.commit()
     client_id = cur.lastrowid
+    companies = data.get("companies") or []
+    co_names = []
+    for co in companies:
+        co_name = (co.get("name") or "").strip()
+        if not co_name:
+            continue
+        co_ob_amt = _f(co.get("opening_balance_amt", 0))
+        co_ob_type = co.get("opening_balance_type", "debt")
+        co_ob = abs(co_ob_amt) if co_ob_type != "credit" else -abs(co_ob_amt)
+        db.execute(
+            "INSERT INTO client_companies (client_id, name, tax_id, opening_balance) VALUES (?,?,?,?)",
+            (client_id, co_name, co.get("tax_id") or None, co_ob),
+        )
+        co_names.append(co_name)
+    db.commit()
     msg = f"✓ Client '{name}' created (ID: {client_id})."
     if ob != 0:
         msg += f" Opening balance: {_inr(abs(ob))} ({'debt' if ob > 0 else 'credit'})."
+    if co_names:
+        msg += f" Companies: {', '.join(co_names)}."
     return jsonify({"result": msg})
 
 
@@ -439,16 +507,43 @@ def update_client(client_id):
     else:
         ob = old_ob
     db.execute(
-        """UPDATE clients SET name=?, company=?, email=?, phone=?, address=?,
+        """UPDATE clients SET name=?, email=?, phone=?, address=?,
            city=?, country=?, tax_id=?, notes=?, opening_balance=?,
            updated_at=CURRENT_TIMESTAMP WHERE id=?""",
         (name,
-         data.get("company") or None, data.get("email") or None, data.get("phone") or None,
+         data.get("email") or None, data.get("phone") or None,
          data.get("address") or None, data.get("city") or None, data.get("country") or None,
          data.get("tax_id") or None, data.get("notes") or None, ob, client_id),
     )
+    # Update companies if provided
+    companies = data.get("companies")
+    co_msgs = []
+    if companies is not None:
+        for co in companies:
+            co_name = (co.get("name") or "").strip()
+            if not co_name:
+                continue
+            co_ob_amt = _f(co.get("opening_balance_amt", 0))
+            co_ob_type = co.get("opening_balance_type", "debt")
+            co_ob = abs(co_ob_amt) if co_ob_type != "credit" else -abs(co_ob_amt)
+            co_id = co.get("id")
+            if co_id:
+                db.execute(
+                    "UPDATE client_companies SET name=?, tax_id=?, opening_balance=? WHERE id=? AND client_id=?",
+                    (co_name, co.get("tax_id") or None, co_ob, int(co_id), client_id),
+                )
+                co_msgs.append(f"updated '{co_name}'")
+            else:
+                db.execute(
+                    "INSERT INTO client_companies (client_id, name, tax_id, opening_balance) VALUES (?,?,?,?)",
+                    (client_id, co_name, co.get("tax_id") or None, co_ob),
+                )
+                co_msgs.append(f"added '{co_name}'")
     db.commit()
-    return jsonify({"result": f"✓ Client ID {client_id} ('{name}') updated."})
+    msg = f"✓ Client ID {client_id} ('{name}') updated."
+    if co_msgs:
+        msg += f" Companies: {', '.join(co_msgs)}."
+    return jsonify({"result": msg})
 
 
 @bp.route("/clients/<int:client_id>", methods=["DELETE"])
@@ -465,9 +560,116 @@ def delete_client(client_id):
         (client_id,),
     )
     db.execute("DELETE FROM invoices WHERE client_id=?", (client_id,))
+    db.execute("DELETE FROM client_companies WHERE client_id=?", (client_id,))
     db.execute("DELETE FROM clients WHERE id=?", (client_id,))
     db.commit()
     return jsonify({"result": f"✓ Client '{name}' (ID: {client_id}) permanently deleted along with all their invoices and payments."})
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# CLIENT COMPANIES
+# ═════════════════════════════════════════════════════════════════════════════
+
+@bp.route("/clients/<int:client_id>/companies")
+@require_auth
+def get_client_companies(client_id):
+    db = get_db()
+    c = db.execute("SELECT name FROM clients WHERE id=?", (client_id,)).fetchone()
+    if not c:
+        return jsonify({"error": f"Client ID {client_id} not found."}), 404
+    companies = db.execute(
+        "SELECT id, name, tax_id, opening_balance FROM client_companies WHERE client_id=? ORDER BY name",
+        (client_id,),
+    ).fetchall()
+    if not companies:
+        return jsonify({"result": f"No companies on record for {c['name']}."})
+    lines = [f"Companies for {c['name']}:"]
+    for co in companies:
+        co_ob = _f(co["opening_balance"])
+        co_inv_bal = sum(
+            _f(r["total"]) - _f(r["amount_paid"])
+            for r in db.execute(
+                "SELECT total, amount_paid FROM invoices WHERE client_id=? AND company_id=? AND status!='cancelled'",
+                (client_id, co["id"]),
+            ).fetchall()
+        )
+        co_paid = _f(db.execute(
+            "SELECT COALESCE(SUM(amount),0) FROM payments WHERE client_id=? AND company_id=?",
+            (client_id, co["id"]),
+        ).fetchone()[0])
+        co_balance = (co_paid + max(0.0, -co_ob)) - (co_inv_bal + max(0.0, co_ob))
+        bal_label = (f"{_inr(abs(co_balance))} owes us" if co_balance < 0
+                     else (f"{_inr(co_balance)} credit" if co_balance > 0 else "settled"))
+        tax_str = f" | GST: {co['tax_id']}" if co["tax_id"] else ""
+        lines.append(f"  ID {co['id']}: {co['name']}{tax_str} — {bal_label}")
+    return jsonify({"result": "\n".join(lines)})
+
+
+@bp.route("/clients/<int:client_id>/companies", methods=["POST"])
+@require_auth
+def create_company(client_id):
+    db = get_db()
+    if not db.execute("SELECT id FROM clients WHERE id=?", (client_id,)).fetchone():
+        return jsonify({"error": f"Client ID {client_id} not found."}), 404
+    data = _jb()
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "Company name is required."}), 400
+    ob_amt = _f(data.get("opening_balance_amt", 0))
+    ob_type = data.get("opening_balance_type", "debt")
+    ob = abs(ob_amt) if ob_type != "credit" else -abs(ob_amt)
+    cur = db.execute(
+        "INSERT INTO client_companies (client_id, name, tax_id, opening_balance) VALUES (?,?,?,?)",
+        (client_id, name, data.get("tax_id") or None, ob),
+    )
+    db.commit()
+    msg = f"✓ Company '{name}' added to client ID {client_id} (company ID: {cur.lastrowid})."
+    if ob != 0:
+        msg += f" Opening balance: {_inr(abs(ob))} ({'debt' if ob > 0 else 'credit'})."
+    return jsonify({"result": msg})
+
+
+@bp.route("/clients/<int:client_id>/companies/<int:company_id>", methods=["PUT"])
+@require_auth
+def update_company(client_id, company_id):
+    db = get_db()
+    co = db.execute(
+        "SELECT * FROM client_companies WHERE id=? AND client_id=?", (company_id, client_id)
+    ).fetchone()
+    if not co:
+        return jsonify({"error": f"Company ID {company_id} not found for client {client_id}."}), 404
+    data = _jb()
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "Company name is required."}), 400
+    ob_amt = data.get("opening_balance_amt")
+    ob_type = data.get("opening_balance_type")
+    old_ob = _f(co["opening_balance"])
+    if ob_amt is not None:
+        typ = ob_type or ("credit" if old_ob < 0 else "debt")
+        ob = abs(float(ob_amt)) if typ != "credit" else -abs(float(ob_amt))
+    else:
+        ob = old_ob
+    db.execute(
+        "UPDATE client_companies SET name=?, tax_id=?, opening_balance=? WHERE id=?",
+        (name, data.get("tax_id") or None, ob, company_id),
+    )
+    db.commit()
+    return jsonify({"result": f"✓ Company ID {company_id} ('{name}') updated."})
+
+
+@bp.route("/clients/<int:client_id>/companies/<int:company_id>", methods=["DELETE"])
+@require_auth
+def delete_company(client_id, company_id):
+    db = get_db()
+    co = db.execute(
+        "SELECT name FROM client_companies WHERE id=? AND client_id=?", (company_id, client_id)
+    ).fetchone()
+    if not co:
+        return jsonify({"error": f"Company ID {company_id} not found for client {client_id}."}), 404
+    db.execute("DELETE FROM client_companies WHERE id=?", (company_id,))
+    db.commit()
+    return jsonify({"result": f"✓ Company '{co['name']}' (ID: {company_id}) deleted."})
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -618,12 +820,13 @@ def create_invoice():
     )
     total = subtotal + tax_total - discount_amount
 
+    company_id = data.get("company_id") or None
     invoice_number = _next_invoice_number(db)
     cur = db.execute(
-        """INSERT INTO invoices (invoice_number, client_id, status, issue_date, due_date,
+        """INSERT INTO invoices (invoice_number, client_id, company_id, status, issue_date, due_date,
            notes, subtotal, tax_total, discount_amount, total)
-           VALUES (?,?,?,?,?,?,?,?,?,?)""",
-        (invoice_number, client_id, status, issue_date,
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+        (invoice_number, client_id, company_id, status, issue_date,
          due_date or None, notes or None,
          subtotal, tax_total, discount_amount, total),
     )
@@ -758,6 +961,7 @@ def record_payment():
     payment_date = data.get("payment_date", "")
     method = data.get("method", "")
     invoice_id = data.get("invoice_id")
+    company_id = data.get("company_id") or None
     reference = data.get("reference") or ""
     notes = data.get("notes") or ""
 
@@ -781,9 +985,9 @@ def record_payment():
         if not inv:
             return jsonify({"error": f"Invoice ID {invoice_id} not found."}), 404
         db.execute(
-            "INSERT INTO payments (client_id, invoice_id, amount, payment_date, method, reference, notes) "
-            "VALUES (?,?,?,?,?,?,?)",
-            (client_id, invoice_id, amount, payment_date, method,
+            "INSERT INTO payments (client_id, company_id, invoice_id, amount, payment_date, method, reference, notes) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (client_id, company_id, invoice_id, amount, payment_date, method,
              reference or None, notes or "Recorded via Claude"),
         )
         _refresh_invoice_paid(db, invoice_id)
@@ -801,9 +1005,9 @@ def record_payment():
     if ob_rem > 0 and remaining > 0:
         apply = min(ob_rem, remaining)
         db.execute(
-            "INSERT INTO payments (client_id, invoice_id, amount, payment_date, method, reference, notes) "
-            "VALUES (?,NULL,?,?,?,?,?)",
-            (client_id, apply, payment_date, method, reference or None, notes or "Recorded via Claude"),
+            "INSERT INTO payments (client_id, company_id, invoice_id, amount, payment_date, method, reference, notes) "
+            "VALUES (?,?,NULL,?,?,?,?,?)",
+            (client_id, company_id, apply, payment_date, method, reference or None, notes or "Recorded via Claude"),
         )
         allocations.append(f"  {_inr(apply)} → opening balance")
         remaining -= apply
@@ -821,9 +1025,9 @@ def record_payment():
                 break
             apply = min(_f(inv["remaining"]), remaining)
             db.execute(
-                "INSERT INTO payments (client_id, invoice_id, amount, payment_date, method, reference, notes) "
-                "VALUES (?,?,?,?,?,?,?)",
-                (client_id, inv["id"], apply, payment_date, method,
+                "INSERT INTO payments (client_id, company_id, invoice_id, amount, payment_date, method, reference, notes) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (client_id, company_id, inv["id"], apply, payment_date, method,
                  reference or None, notes or "Recorded via Claude"),
             )
             _refresh_invoice_paid(db, inv["id"])
@@ -832,9 +1036,9 @@ def record_payment():
 
     if remaining > 0.001:
         db.execute(
-            "INSERT INTO payments (client_id, invoice_id, amount, payment_date, method, reference, notes) "
-            "VALUES (?,NULL,?,?,?,?,?)",
-            (client_id, remaining, payment_date, method, reference or None, notes or "Recorded via Claude"),
+            "INSERT INTO payments (client_id, company_id, invoice_id, amount, payment_date, method, reference, notes) "
+            "VALUES (?,?,NULL,?,?,?,?,?)",
+            (client_id, company_id, remaining, payment_date, method, reference or None, notes or "Recorded via Claude"),
         )
         allocations.append(f"  {_inr(remaining)} → unallocated surplus (credit)")
 
