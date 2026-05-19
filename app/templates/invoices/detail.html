@@ -2,11 +2,22 @@
 {% block title %}{{ invoice.invoice_number }}{% endblock %}
 {% block page_title %}{{ invoice.invoice_number }}{% endblock %}
 {% block topbar_actions %}
+  {% if invoice.status == 'draft' %}
+  <form method="post" action="{{ url_for('invoices.update_status', invoice_id=invoice.id) }}" id="issueForm">
+    <input type="hidden" name="status" value="issued">
+    <button class="btn btn-primary" {% if stock_status and not stock_status|selectattr('sufficient')|list|length == stock_status|length %}id="issueBtn"{% endif %}>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+      Issue Invoice
+    </button>
+  </form>
+  <a href="{{ url_for('invoices.edit_invoice', invoice_id=invoice.id) }}" class="btn btn-secondary">Edit</a>
+  {% else %}
   <a href="{{ url_for('payments.new_payment') }}?invoice_id={{ invoice.id }}" class="btn btn-primary">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
     <span class="btn-label-mobile">Record Payment</span>
   </a>
   <a href="{{ url_for('invoices.edit_invoice', invoice_id=invoice.id) }}" class="btn btn-secondary">Edit</a>
+  {% endif %}
   <form class="confirm-inline" method="post" action="{{ url_for('invoices.delete_invoice', invoice_id=invoice.id) }}" onsubmit="return confirm('Delete this invoice?')">
     <button class="btn btn-danger">Del</button>
   </form>
@@ -19,27 +30,75 @@
   <div class="card-body invoice-status-bar" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
     <div style="display:flex;align-items:center;gap:12px">
       <span class="badge badge-{{ invoice.status }}" style="font-size:13px;padding:5px 14px">{{ invoice.status|upper }}</span>
+      {% if invoice.status != 'draft' %}
       {% set balance = invoice.total - invoice.amount_paid %}
       <span style="font-size:14px;color:var(--text-secondary)">
         {{ invoice.amount_paid|inr }} paid of {{ invoice.total|inr }}
         {% if balance > 0 %} — <strong onclick="showClientLedger({{ invoice.client_id }}, {{ invoice.client_name|tojson }})" style="color:var(--danger);cursor:pointer" title="View client ledger">{{ balance|inr }} remaining</strong>{% endif %}
       </span>
+      {% else %}
+      <span style="font-size:14px;color:var(--text-muted)">Not yet issued — no stock or balance impact</span>
+      {% endif %}
     </div>
+    {% if invoice.status != 'draft' %}
     <div class="progress-bar-wrap" style="width:220px">
       {% set pct = [(invoice.amount_paid / invoice.total * 100) if invoice.total > 0 else 0, 100]|min %}
       <div class="progress-bar-fill" style="width:{{ pct }}%"></div>
     </div>
+    {% endif %}
     <!-- Quick status change -->
     <form method="post" action="{{ url_for('invoices.update_status', invoice_id=invoice.id) }}" style="display:flex;gap:6px;align-items:center">
       <select name="status" style="width:130px;padding:6px 10px;font-size:13px">
-        <option value="issued"    {{ 'selected' if invoice.status in ('draft','sent','issued') }}>Issued</option>
+        {% if invoice.status == 'draft' %}
+        <option value="draft" selected>Draft</option>
+        <option value="issued">Issued</option>
+        <option value="cancelled">Cancelled</option>
+        {% else %}
+        <option value="issued"    {{ 'selected' if invoice.status in ('sent','issued') }}>Issued</option>
         <option value="paid"      {{ 'selected' if invoice.status=='paid' }}>Paid</option>
         <option value="cancelled" {{ 'selected' if invoice.status=='cancelled' }}>Cancelled</option>
+        {% endif %}
       </select>
-      <button class="btn btn-secondary btn-sm">Update status</button>
+      <button class="btn btn-secondary btn-sm">Update</button>
     </form>
   </div>
 </div>
+
+{% if invoice.status == 'draft' and stock_status %}
+<!-- Stock availability for draft invoices -->
+<div class="card" style="margin-bottom:18px">
+  <div class="card-header">
+    <span class="card-title">Stock Availability</span>
+    {% set all_ok = stock_status | selectattr('sufficient') | list | length == stock_status | length %}
+    {% if all_ok %}
+    <span style="font-size:12px;color:var(--success);font-weight:600">✓ All items available</span>
+    {% else %}
+    <span style="font-size:12px;color:var(--danger);font-weight:600">⚠ Some items are short — resolve before issuing</span>
+    {% endif %}
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Item</th><th style="text-align:right">Required</th><th style="text-align:right">In Warehouse</th><th style="text-align:right">Status</th></tr></thead>
+      <tbody>
+        {% for s in stock_status %}
+        <tr>
+          <td style="font-weight:500">{{ s.name }}</td>
+          <td style="text-align:right">{{ s.required | indian }}</td>
+          <td style="text-align:right{% if not s.sufficient %};color:var(--danger);font-weight:600{% endif %}">{{ s.available | indian }}</td>
+          <td style="text-align:right">
+            {% if s.sufficient %}
+            <span style="color:var(--success);font-weight:600;font-size:12px">✓ OK</span>
+            {% else %}
+            <span style="color:var(--danger);font-weight:600;font-size:12px">✗ Short by {{ (s.required - s.available) | indian }}</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
 
 <!-- Main detail grid -->
 <div class="invoice-header-box">
@@ -117,7 +176,8 @@
   </div>
 </div>
 
-<!-- Payments -->
+<!-- Payments (hidden for drafts) -->
+{% if invoice.status != 'draft' %}
 <div class="card">
   <div class="card-header">
     <span class="card-title">Payment History</span>
@@ -152,4 +212,5 @@
   </div>
   {% endif %}
 </div>
+{% endif %}{# end draft check #}
 {% endblock %}

@@ -111,7 +111,10 @@ def detail(invoice_id):
         return redirect(url_for("invoices.list_invoices"))
     items = invoice_service.get_invoice_items(invoice_id)
     payments = invoice_service.get_invoice_payments(invoice_id)
-    return render_template("invoices/detail.html", invoice=invoice, items=items, payments=payments)
+    stock_status = (invoice_service.check_stock_for_issue(invoice_id)
+                    if invoice["status"] == "draft" else [])
+    return render_template("invoices/detail.html", invoice=invoice, items=items,
+                           payments=payments, stock_status=stock_status)
 
 
 @bp.route("/<int:invoice_id>/edit", methods=["GET", "POST"])
@@ -148,8 +151,19 @@ def edit_invoice(invoice_id):
 @permission_required("invoices", "edit")
 def update_status(invoice_id):
     status = request.form.get("status")
-    if status in ("issued", "paid", "cancelled", "partial"):
-        invoice_service.update_invoice_status(invoice_id, status)
+    valid = {"draft", "issued", "paid", "cancelled", "partial"}
+    if status not in valid:
+        flash("Invalid status.", "error")
+        return redirect(url_for("invoices.detail", invoice_id=invoice_id))
+    ok, errors = invoice_service.update_invoice_status(invoice_id, status)
+    if not ok:
+        for e in errors:
+            flash(
+                f"Cannot issue — insufficient stock for '{e['name']}': "
+                f"need {e['required']:.0f}, have {e['available']:.0f} in warehouse.",
+                "error",
+            )
+    else:
         flash(f"Status updated to {status}.", "success")
     return redirect(url_for("invoices.detail", invoice_id=invoice_id))
 

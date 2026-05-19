@@ -289,8 +289,9 @@ def create_invoice(
 def update_invoice_status(invoice_id: int, status: str) -> str:
     """
     Change the status of an invoice. ONLY call after explicit user confirmation.
-    status: issued | sent | partial | paid | cancelled
-    Setting to 'cancelled' restores warehouse stock for catalog items.
+    status: draft | issued | sent | partial | paid | cancelled
+    draft→issued: checks warehouse stock first — fails with error if any item is short.
+    Setting to 'cancelled' restores warehouse stock (only if invoice was previously issued, not draft).
     """
     return _call("PUT", f"invoices/{invoice_id}/status", body={"status": status})
 

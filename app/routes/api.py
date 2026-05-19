@@ -821,6 +821,7 @@ def create_invoice():
     total = subtotal + tax_total - discount_amount
 
     company_id = data.get("company_id") or None
+    is_draft = status == "draft"
     invoice_number = _next_invoice_number(db)
     cur = db.execute(
         """INSERT INTO invoices (invoice_number, client_id, company_id, status, issue_date, due_date,
@@ -847,7 +848,8 @@ def create_invoice():
              it["description"], qty, price,
              _f(it.get("tax_rate", 0)), line_total),
         )
-        if pid or spid:
+        # Draft invoices don't deduct stock
+        if not is_draft and (pid or spid):
             tbl = "sub_products" if spid else "products"
             pk = spid if spid else pid
             db.execute(f"UPDATE {tbl} SET stock_qty=stock_qty-? WHERE id=?", (qty, pk))
@@ -858,8 +860,9 @@ def create_invoice():
                 (pid, spid, "sale", qty, f"Invoice {invoice_number}", invoice_id),
             )
     db.commit()
-    _apply_client_credit(db, client_id, invoice_id)
-    db.commit()
+    if not is_draft:
+        _apply_client_credit(db, client_id, invoice_id)
+        db.commit()
 
     return jsonify({"result": (
         f"✓ Invoice {invoice_number} (ID: {invoice_id}) created for {client['name']}.\n"
@@ -872,16 +875,69 @@ def create_invoice():
 def update_invoice_status(invoice_id):
     data = _jb()
     status = data.get("status", "")
-    valid = {"issued", "sent", "partial", "paid", "cancelled"}
+    valid = {"draft", "issued", "sent", "partial", "paid", "cancelled"}
     if status not in valid:
         return jsonify({"error": f"Invalid status. Must be one of: {', '.join(sorted(valid))}"}), 400
     db = get_db()
-    inv = db.execute("SELECT invoice_number, status FROM invoices WHERE id=?", (invoice_id,)).fetchone()
+    inv = db.execute(
+        "SELECT invoice_number, status, client_id, company_id, issue_date FROM invoices WHERE id=?",
+        (invoice_id,),
+    ).fetchone()
     if not inv:
         return jsonify({"error": f"Invoice ID {invoice_id} not found."}), 404
     prev = inv["status"]
+
+    # Draft → Issued: check warehouse stock first
+    if prev == "draft" and status == "issued":
+        items = db.execute(
+            """SELECT ii.description, ii.quantity, ii.product_id, ii.sub_product_id,
+                      p.name AS product_name, sp.name AS sub_name
+               FROM invoice_items ii
+               LEFT JOIN products p ON ii.product_id = p.id
+               LEFT JOIN sub_products sp ON ii.sub_product_id = sp.id
+               WHERE ii.invoice_id = ?""",
+            (invoice_id,),
+        ).fetchall()
+        short = []
+        for it in items:
+            pid = it["product_id"]; spid = it["sub_product_id"]
+            if not pid and not spid:
+                continue
+            tbl = "sub_products" if spid else "products"
+            pk = spid if spid else pid
+            row = db.execute(f"SELECT stock_qty FROM {tbl} WHERE id=?", (pk,)).fetchone()
+            available = _f(row["stock_qty"] or 0) if row else 0.0
+            required = _f(it["quantity"])
+            name = it["sub_name"] or it["product_name"] or it["description"]
+            if available < required:
+                short.append(f"  '{name}': need {required:.0f}, have {available:.0f}")
+        if short:
+            return jsonify({"error": "Cannot issue — insufficient warehouse stock:\n" + "\n".join(short)}), 400
+        # Apply stock deductions
+        for it in items:
+            pid = it["product_id"]; spid = it["sub_product_id"]
+            if not pid and not spid:
+                continue
+            tbl = "sub_products" if spid else "products"
+            pk = spid if spid else pid
+            qty = _f(it["quantity"])
+            db.execute(f"UPDATE {tbl} SET stock_qty=stock_qty-? WHERE id=?", (qty, pk))
+            db.execute(
+                "INSERT INTO stock_movements "
+                "(product_id, sub_product_id, movement_type, quantity, notes, invoice_id) "
+                "VALUES (?,?,?,?,?,?)",
+                (it["product_id"], it["sub_product_id"], "sale", qty,
+                 f"Invoice {inv['invoice_number']}", invoice_id),
+            )
+        db.execute("UPDATE invoices SET status=? WHERE id=?", (status, invoice_id))
+        db.commit()
+        _apply_client_credit(db, inv["client_id"], invoice_id)
+        db.commit()
+        return jsonify({"result": f"✓ Invoice {inv['invoice_number']} issued. Stock deducted and ledger updated."})
+
     db.execute("UPDATE invoices SET status=? WHERE id=?", (status, invoice_id))
-    if status == "cancelled" and prev != "cancelled":
+    # Restore stock when cancelling a previously-issued invoice (draft never held stock)
+    if status == "cancelled" and prev not in ("cancelled", "draft"):
         rows = db.execute(
             "SELECT product_id, sub_product_id, quantity FROM invoice_items WHERE invoice_id=?",
             (invoice_id,),
