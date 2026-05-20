@@ -382,7 +382,7 @@ def sub_detail(product_id, sub_id):
 @permission_required("products", "edit")
 def inline_sub_save(product_id, sub_id):
     data = request.get_json(silent=True) or {}
-    allowed = {"name", "unit_price", "tax_rate", "min_quantity", "use_parent_price"}
+    allowed = {"name", "sku", "unit_price", "tax_rate", "min_quantity", "use_parent_price"}
     update = {k: v for k, v in data.items() if k in allowed}
     if not update.get("name"):
         return jsonify({"ok": False, "error": "Name is required"}), 400

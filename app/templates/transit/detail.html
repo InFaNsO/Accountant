@@ -69,7 +69,14 @@
 
 <!-- Items -->
 <div class="card">
-  <div class="card-header"><span class="card-title">Dispatch Items</span></div>
+  <div class="card-header">
+    <span class="card-title">Dispatch Items</span>
+    <button class="unit-toggle" onclick="toggleStockUnit()">
+      <span class="unit-knob"></span>
+      <span class="unit-opt">Boxes</span>
+      <span class="unit-opt">Pcs</span>
+    </button>
+  </div>
   {% if items %}
   <form method="post" action="{{ url_for('transit.receive', dispatch_id=dispatch.id) }}" id="receiveForm">
   <div class="table-wrap">
@@ -92,10 +99,10 @@
         {% set pct = ((it.qty_received or 0) / it.quantity * 100)|round(0)|int if it.quantity > 0 else 0 %}
         <tr>
           <td class="fw-700">{{ it.display_name }}</td>
-          <td style="text-align:right">{{ it.quantity | indian }}</td>
-          <td style="text-align:right;color:var(--success);font-weight:600">{{ it.qty_received | indian if it.qty_received else 0 }}</td>
+          <td style="text-align:right">{{ stock_val(it.quantity, it.pcs_per_carton) }}</td>
+          <td style="text-align:right;color:var(--success);font-weight:600">{{ stock_val(it.qty_received or 0, it.pcs_per_carton) }}</td>
           <td style="text-align:right;font-weight:700;color:{% if remaining <= 0 %}var(--success){% else %}var(--text){% endif %}">
-            {{ remaining | indian }}
+            {{ stock_val(remaining, it.pcs_per_carton) }}
           </td>
           <td style="text-align:right">{% if it.price %}{{ it.price|inr }}{% else %}<span class="muted">—</span>{% endif %}</td>
           <td style="text-align:right">{% if it.cbm %}{{ it.cbm }}{% else %}<span class="muted">—</span>{% endif %}</td>

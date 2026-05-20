@@ -53,7 +53,14 @@
 
 <!-- Items table -->
 <div class="card">
-  <div class="card-header"><span class="card-title">Order Items</span></div>
+  <div class="card-header">
+    <span class="card-title">Order Items</span>
+    <button class="unit-toggle" onclick="toggleStockUnit()">
+      <span class="unit-knob"></span>
+      <span class="unit-opt">Boxes</span>
+      <span class="unit-opt">Pcs</span>
+    </button>
+  </div>
   {% if items %}
   <div class="table-wrap">
     <table>
@@ -73,10 +80,10 @@
         {% set pct = ((it.qty_dispatched or 0) / it.quantity * 100)|round(0)|int if it.quantity > 0 else 0 %}
         <tr>
           <td class="fw-700">{{ it.display_name }}</td>
-          <td style="text-align:right">{{ it.quantity | indian }}</td>
-          <td style="text-align:right;color:var(--warning)">{{ it.qty_dispatched | indian if it.qty_dispatched else 0 }}</td>
+          <td style="text-align:right">{{ stock_val(it.quantity, it.pcs_per_carton) }}</td>
+          <td style="text-align:right;color:var(--warning)">{{ stock_val(it.qty_dispatched or 0, it.pcs_per_carton) }}</td>
           <td style="text-align:right;font-weight:700;color:{% if remaining <= 0 %}var(--success){% else %}var(--text){% endif %}">
-            {{ remaining | indian }}
+            {{ stock_val(remaining, it.pcs_per_carton) }}
           </td>
           <td style="text-align:right">{% if it.price %}{{ it.price|inr }}{% else %}<span class="muted">—</span>{% endif %}</td>
           <td style="min-width:120px">

@@ -1809,10 +1809,21 @@ def delete_sub_product(sub_id):
     ).fetchone()
     if not s:
         return jsonify({"error": f"Sub-product ID {sub_id} not found."}), 404
+    display_name = f"{s['parent']} — {s['name']}"
+    db.execute(
+        "UPDATE purchase_order_items SET product_name=?, sub_product_id=NULL WHERE sub_product_id=?",
+        (display_name, sub_id),
+    )
+    db.execute(
+        "UPDATE dispatch_items SET product_name=?, sub_product_id=NULL WHERE sub_product_id=?",
+        (display_name, sub_id),
+    )
+    db.execute("UPDATE invoice_items SET sub_product_id=NULL WHERE sub_product_id=?", (sub_id,))
+    db.execute("DELETE FROM stock_tally_items WHERE sub_id=?", (sub_id,))
     db.execute("DELETE FROM stock_movements WHERE sub_product_id=?", (sub_id,))
     db.execute("DELETE FROM sub_products WHERE id=?", (sub_id,))
     db.commit()
-    return jsonify({"result": f"✓ Sub-product '{s['parent']} — {s['name']}' (ID: {sub_id}) permanently deleted."})
+    return jsonify({"result": f"✓ Sub-product '{display_name}' (ID: {sub_id}) permanently deleted."})
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1937,6 +1948,8 @@ def get_purchase_order_details(po_id):
     items = db.execute(
         """SELECT CASE WHEN poi.sub_product_id IS NOT NULL
                       THEN par.name || ' — ' || sub.name
+                      WHEN poi.product_name IS NOT NULL
+                      THEN poi.product_name
                       ELSE p.name END AS display_name,
                   poi.quantity, poi.qty_dispatched, poi.price
            FROM purchase_order_items poi
@@ -2122,6 +2135,8 @@ def get_dispatch_details(dispatch_id):
         """SELECT di.id, di.quantity, di.qty_received,
                   CASE WHEN di.sub_product_id IS NOT NULL
                        THEN par.name || ' — ' || sub.name
+                       WHEN di.product_name IS NOT NULL
+                       THEN di.product_name
                        ELSE p.name END AS display_name
            FROM dispatch_items di
            LEFT JOIN products p ON p.id=di.product_id

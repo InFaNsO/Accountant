@@ -9,8 +9,8 @@ def _update_qty(db, product_id, sub_product_id, field, delta):
 
 # ── FIFO deduction from purchase order items ─────────────────────────────────
 
-def _deduct_production_fifo(db, product_id, sub_product_id, qty_needed):
-    """Reduce oldest open PO items by qty_needed. Returns list of (po_item_id, qty_taken)."""
+def _deduct_production_fifo(db, product_id, sub_product_id, qty_needed, supplier_id=None):
+    """Reduce oldest open PO items by qty_needed for the given supplier. Returns list of (po_item_id, qty_taken)."""
     rows = db.execute(
         """SELECT poi.id, poi.quantity, poi.qty_dispatched
            FROM purchase_order_items poi
@@ -19,8 +19,9 @@ def _deduct_production_fifo(db, product_id, sub_product_id, qty_needed):
              AND (poi.product_id IS ? OR (poi.product_id IS NULL AND ? IS NULL))
              AND (poi.sub_product_id IS ? OR (poi.sub_product_id IS NULL AND ? IS NULL))
              AND poi.quantity > poi.qty_dispatched
+             AND (po.supplier_id IS ? OR (po.supplier_id IS NULL AND ? IS NULL))
            ORDER BY po.created_at ASC, poi.id ASC""",
-        (product_id, product_id, sub_product_id, sub_product_id),
+        (product_id, product_id, sub_product_id, sub_product_id, supplier_id, supplier_id),
     ).fetchall()
 
     allocations = []
@@ -83,8 +84,11 @@ def get_dispatch_items(dispatch_id):
         """SELECT di.*,
                   CASE WHEN di.sub_product_id IS NOT NULL
                        THEN par.name || ' — ' || sub.name
+                       WHEN di.product_name IS NOT NULL
+                       THEN di.product_name
                        ELSE p.name END AS display_name,
-                  p.sku AS product_sku, sub.sku AS sub_sku
+                  p.sku AS product_sku, sub.sku AS sub_sku,
+                  p.pcs_per_carton
            FROM dispatch_items di
            LEFT JOIN products p       ON di.product_id=p.id
            LEFT JOIN sub_products sub ON di.sub_product_id=sub.id
@@ -112,6 +116,10 @@ def create_dispatch(data, items):
     )
     dispatch_id = cur.lastrowid
 
+    supplier_id = data.get("supplier_id") or None
+    if supplier_id:
+        supplier_id = int(supplier_id)
+
     warnings = []
     for it in items:
         product_id     = int(it["product_id"]) if it.get("product_id") else None
@@ -129,9 +137,9 @@ def create_dispatch(data, items):
         )
         di_id = di_cur.lastrowid
 
-        # FIFO deduction from open POs
+        # FIFO deduction from open POs — only for this dispatch's supplier
         allocations, leftover = _deduct_production_fifo(
-            db, product_id, sub_product_id, qty
+            db, product_id, sub_product_id, qty, supplier_id
         )
         for po_item_id, alloc_qty in allocations:
             db.execute(

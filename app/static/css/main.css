@@ -23,6 +23,7 @@
   --text-muted:  #94A3B8;
   --border:      #E2E8F0;
   --border-focus:#6366F1;
+  --bg-alt:      #F8FAFC;
   --radius:      10px;
   --radius-sm:   6px;
   --radius-lg:   14px;
@@ -443,8 +444,9 @@ body.dark {
   --sidebar-hover:#1E293B;
   --text-primary: #F1F5F9;
   --text-secondary:#94A3B8;
-  --text-muted:   #475569;
+  --text-muted:   #64748B;
   --border:       #334155;
+  --bg-alt:       #1E293B;
   --accent-light: #1E1B4B;
   --success-light:#052E16;
   --warning-light:#451A03;

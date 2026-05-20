@@ -43,8 +43,11 @@ def get_po_items(po_id):
         """SELECT poi.*,
                   CASE WHEN poi.sub_product_id IS NOT NULL
                        THEN par.name || ' — ' || sub.name
+                       WHEN poi.product_name IS NOT NULL
+                       THEN poi.product_name
                        ELSE p.name END AS display_name,
-                  p.sku AS product_sku, sub.sku AS sub_sku
+                  p.sku AS product_sku, sub.sku AS sub_sku,
+                  p.pcs_per_carton
            FROM purchase_order_items poi
            LEFT JOIN products p      ON poi.product_id=p.id
            LEFT JOIN sub_products sub ON poi.sub_product_id=sub.id

@@ -177,7 +177,8 @@ function cbKey(e, inp) {
     opts[_cbDD._cursor]?.scrollIntoView({ block: 'nearest' });
   } else if (e.key === 'Enter') {
     e.preventDefault();
-    if (_cbDD._cursor >= 0 && opts[_cbDD._cursor]) cbSelectShared(e, opts[_cbDD._cursor]);
+    const cursor = _cbDD._cursor >= 0 ? _cbDD._cursor : 0;
+    if (opts[cursor]) cbSelectShared(e, opts[cursor]);
   }
 }
 

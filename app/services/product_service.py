@@ -189,18 +189,21 @@ def create_sub_product(data):
 def update_sub_product(sub_id, data):
     db = get_db()
     use_parent = 1 if data.get("use_parent_price") else 0
-    sub_row = get_db().execute("SELECT product_id FROM sub_products WHERE id=?", (sub_id,)).fetchone()
+    sub_row = get_db().execute("SELECT * FROM sub_products WHERE id=?", (sub_id,)).fetchone()
     parent = get_product(sub_row["product_id"]) if sub_row else None
     parent_tax = _to_float(parent["tax_rate"], 18.0) if parent else 18.0
+    sku = data["sku"] if "sku" in data else (sub_row["sku"] if sub_row else None)
+    description = data["description"] if "description" in data else (sub_row["description"] if sub_row else None)
+    is_active = (1 if data.get("is_active", True) else 0) if "is_active" in data else (sub_row["is_active"] if sub_row else 1)
     db.execute(
         """UPDATE sub_products SET name=?, sku=?, description=?, use_parent_price=?,
                unit_price=?, tax_rate=?, min_quantity=?, is_active=? WHERE id=?""",
         (
-            data["name"], data.get("sku"), data.get("description"),
+            data["name"], sku, description,
             use_parent, _to_float(data.get("unit_price")),
             parent_tax,
             _to_float(data.get("min_quantity")),
-            1 if data.get("is_active", True) else 0,
+            is_active,
             sub_id,
         ),
     )
@@ -209,6 +212,22 @@ def update_sub_product(sub_id, data):
 
 def delete_sub_product(sub_id):
     db = get_db()
+    row = db.execute(
+        "SELECT s.name, p.name AS parent_name FROM sub_products s JOIN products p ON p.id=s.product_id WHERE s.id=?",
+        (sub_id,),
+    ).fetchone()
+    if row:
+        display_name = f"{row['parent_name']} — {row['name']}"
+        db.execute(
+            "UPDATE purchase_order_items SET product_name=?, sub_product_id=NULL WHERE sub_product_id=?",
+            (display_name, sub_id),
+        )
+        db.execute(
+            "UPDATE dispatch_items SET product_name=?, sub_product_id=NULL WHERE sub_product_id=?",
+            (display_name, sub_id),
+        )
+    db.execute("UPDATE invoice_items SET sub_product_id=NULL WHERE sub_product_id=?", (sub_id,))
+    db.execute("DELETE FROM stock_tally_items WHERE sub_id=?", (sub_id,))
     db.execute("DELETE FROM stock_movements WHERE sub_product_id=?", (sub_id,))
     db.execute("DELETE FROM sub_products WHERE id=?", (sub_id,))
     db.commit()

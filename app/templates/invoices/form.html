@@ -538,7 +538,19 @@ function validateInvQty(inp) {
 }
 
 function cbKey(event, input) {
-  if (_cbDD.style.display === 'none' || _cbInput !== input) { cbOpen(input); return; }
+  if (_cbDD.style.display === 'none' || _cbInput !== input) {
+    cbOpen(input);
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const opts = _cbDD.querySelectorAll('.cb-option');
+      if (opts.length) {
+        _cbDD._cursor = event.key === 'ArrowDown' ? 0 : opts.length - 1;
+        opts[_cbDD._cursor].classList.add('cb-active');
+        opts[_cbDD._cursor].scrollIntoView({ block: 'nearest' });
+      }
+    }
+    return;
+  }
   const opts = _cbDD.querySelectorAll('.cb-option');
   if (!opts.length) return;
   if (event.key === 'Escape') { _cbDD.style.display = 'none'; _cbInput = null; return; }
@@ -554,7 +566,8 @@ function cbKey(event, input) {
     opts[_cbDD._cursor]?.scrollIntoView({ block: 'nearest' });
   } else if (event.key === 'Enter') {
     event.preventDefault();
-    if (_cbDD._cursor >= 0 && opts[_cbDD._cursor]) cbSelect(event, opts[_cbDD._cursor]);
+    const cursor = _cbDD._cursor >= 0 ? _cbDD._cursor : 0;
+    if (opts[cursor]) cbSelect(event, opts[cursor]);
   }
 }
 
@@ -722,7 +735,7 @@ document.addEventListener('DOMContentLoaded', () => {
 }
 .cb-option:last-child { border-bottom: none; }
 .cb-option:hover, .cb-option.cb-active { background: var(--bg-alt, #f8fafc); }
-.cb-opt-name  { font-weight: 600; color: var(--text, #1e293b); }
+.cb-opt-name  { font-weight: 600; color: var(--text-primary); }
 .cb-opt-meta  { font-size: 11px; color: var(--text-muted, #64748b); margin-top: 2px; display: flex; gap: 6px; align-items: center; }
 .cb-sku-tag   { background: var(--bg-alt, #f1f5f9); border-radius: 3px; padding: 1px 5px; font-family: monospace; }
 .cb-price-tag { font-weight: 600; color: var(--success, #10b981); }
