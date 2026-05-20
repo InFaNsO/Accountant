@@ -416,13 +416,14 @@ def delete_category(cat_id: int) -> str:
 
 @mcp.tool()
 def search_products(query: str) -> str:
-    """Search products and sub-products by name or SKU."""
+    """Search products and sub-products by name or SKU. Returns name, SKU, price, stock, and pcs_per_carton (pieces per carton)."""
     return _call("GET", "products/search", params={"q": query})
 
 
 @mcp.tool()
 def get_stock_summary() -> str:
     """Current stock levels for all products and sub-products (warehouse / production / transit).
+    Also shows pcs_per_carton (pieces per carton) for each product/sub-product.
     Eco-paired products are shown merged with their main product, displaying combined stock figures."""
     return _call("GET", "products/stock")
 

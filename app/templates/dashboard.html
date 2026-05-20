@@ -145,7 +145,7 @@
       <a href="{{ url_for('invoices.list_invoices') }}" class="btn btn-ghost btn-sm">View all</a>
     </div>
     {% if stats.recent_invoices %}
-      <ul style="list-style:none">
+      <ul class="invoice-scroll">
         {% for inv in stats.recent_invoices %}
         <li style="padding:12px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
           <div>
@@ -176,9 +176,12 @@
 </div>
 {% endif %}
 
+<!-- ── Production + Stock sections (reordered on mobile) ───────── -->
+<div class="dash-bottom-sections">
+
 <!-- ── Production Orders Due Soon ──────────────────────────────── -->
 {% if 'production_due' in dash_sections and pos_due_soon %}
-<div class="card" style="margin-top:18px">
+<div class="card dash-production-due" style="margin-top:18px">
   <div class="card-header" style="border-left:3px solid var(--warning);padding-left:17px">
     <span class="card-title" style="color:var(--warning)">
       Production Orders Due Soon ({{ pos_due_soon|length }})
@@ -230,6 +233,7 @@
 
 {% if show_low or show_prod or show_transit %}
 {% set col_count = (1 if show_low else 0) + (1 if show_prod else 0) + (1 if show_transit else 0) %}
+<div class="dash-stock-grid">
 <div style="display:flex;justify-content:flex-end;margin-top:18px;margin-bottom:6px">
   <button class="unit-toggle" onclick="toggleStockUnit()">
     <span class="unit-knob"></span>
@@ -237,7 +241,7 @@
     <span class="unit-opt">Pcs</span>
   </button>
 </div>
-<div style="display:grid;grid-template-columns:repeat({{ col_count }},1fr);gap:18px;margin-top:0">
+<div class="stock-inner-grid" style="display:grid;grid-template-columns:repeat({{ col_count }},1fr);gap:18px;margin-top:0">
 
   {% if show_low %}
   <div class="card" style="display:flex;flex-direction:column">
@@ -322,7 +326,10 @@
   {% endif %}
 
 </div>
+</div><!-- /.dash-stock-grid -->
 {% endif %}
+
+</div><!-- /.dash-bottom-sections -->
 
 <!-- Empty state -->
 {% if not show_any_stat and not show_chart and not show_invoices

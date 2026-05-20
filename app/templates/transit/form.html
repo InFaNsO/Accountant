@@ -172,22 +172,25 @@ function cbSelectShared(e, optEl) {
 }
 
 function cbKey(e, inp) {
-  if (_cbDD.style.display === 'none' || _cbInput !== inp) {
-    cbOpen(inp);
+  if (e.key === 'Escape') { _cbDD.style.display = 'none'; _cbInput = null; return; }
+
+  const ddVisible = _cbDD.style.display !== 'none' && _cbInput === inp;
+
+  if (!ddVisible) {
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
+      cbOpen(inp);
       const opts = _cbDD.querySelectorAll('.cb-option');
       if (opts.length) {
         _cbDD._cursor = e.key === 'ArrowDown' ? 0 : opts.length - 1;
-        opts[_cbDD._cursor].classList.add('cb-active');
+        opts.forEach((o, i) => o.classList.toggle('cb-active', i === _cbDD._cursor));
         opts[_cbDD._cursor].scrollIntoView({ block: 'nearest' });
       }
     }
     return;
   }
+
   const opts = _cbDD.querySelectorAll('.cb-option');
-  if (!opts.length) return;
-  if (e.key === 'Escape') { _cbDD.style.display = 'none'; _cbInput = null; return; }
   if (e.key === 'ArrowDown') {
     e.preventDefault();
     _cbDD._cursor = Math.min(_cbDD._cursor + 1, opts.length - 1);
@@ -200,6 +203,7 @@ function cbKey(e, inp) {
     opts[_cbDD._cursor]?.scrollIntoView({ block: 'nearest' });
   } else if (e.key === 'Enter') {
     e.preventDefault();
+    if (!opts.length) return;
     const cursor = _cbDD._cursor >= 0 ? _cbDD._cursor : 0;
     if (opts[cursor]) cbSelectShared(e, opts[cursor]);
   }

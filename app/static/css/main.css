@@ -564,6 +564,22 @@ html.show-boxes .unit-knob { transform:translateX(0); }
 }
 .stock-scroll::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
+/* ── Invoice list — max 5 items visible then scroll ───────── */
+.invoice-scroll {
+  max-height: 305px;
+  overflow-y: auto;
+  list-style: none;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.invoice-scroll::-webkit-scrollbar { width: 4px; }
+.invoice-scroll::-webkit-scrollbar-track { background: transparent; }
+.invoice-scroll::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 99px;
+}
+.invoice-scroll::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
 /* ── Responsive: Tablet + Mobile (≤ 900px) ────────────────── */
 @media (max-width: 900px) {
   .form-grid-2, .form-grid-3 { grid-template-columns: 1fr; }
@@ -652,6 +668,17 @@ html.show-boxes .unit-knob { transform:translateX(0); }
   /* Invoice status bar wraps cleanly */
   .invoice-status-bar { flex-direction: column; align-items: flex-start !important; gap: 10px !important; }
   .invoice-status-bar .progress-bar-wrap { width: 100% !important; }
+
+  /* ── Dashboard bottom sections: stock cards before production due ── */
+  .dash-bottom-sections {
+    display: flex;
+    flex-direction: column;
+  }
+  .dash-stock-grid  { order: 1; }
+  .dash-production-due { order: 2; }
+
+  /* Stock cards collapse to single column, full width */
+  .stock-inner-grid { grid-template-columns: 1fr !important; }
 }
 
 /* ── Responsive: Small phones (≤ 480px) ──────────────────── */

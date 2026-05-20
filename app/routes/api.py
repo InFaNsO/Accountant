@@ -1276,13 +1276,14 @@ def search_products():
     q = f"%{query.lower()}%"
     db = get_db()
     products = db.execute(
-        "SELECT id, name, sku, unit_price, stock_qty FROM products "
+        "SELECT id, name, sku, unit_price, stock_qty, pcs_per_carton FROM products "
         "WHERE is_active=1 AND (LOWER(name) LIKE ? OR LOWER(COALESCE(sku,'')) LIKE ?) "
         "ORDER BY name LIMIT 10",
         (q, q),
     ).fetchall()
     subs = db.execute(
-        """SELECT s.id, s.name, s.sku, s.unit_price, s.stock_qty, p.name AS parent, p.id AS parent_id
+        """SELECT s.id, s.name, s.sku, s.unit_price, s.stock_qty,
+                  p.name AS parent, p.id AS parent_id, p.pcs_per_carton
            FROM sub_products s JOIN products p ON p.id=s.product_id
            WHERE s.is_active=1 AND (LOWER(s.name) LIKE ? OR LOWER(COALESCE(s.sku,'')) LIKE ?)
            ORDER BY p.name, s.name LIMIT 10""",
@@ -1293,13 +1294,15 @@ def search_products():
         lines.append(
             f"Product ID {p['id']}: {p['name']}" +
             (f" [{p['sku']}]" if p["sku"] else "") +
-            f" | {_inr(p['unit_price'])} | stock: {_f(p['stock_qty']):.0f}"
+            f" | {_inr(p['unit_price'])} | stock: {_f(p['stock_qty']):.0f}" +
+            (f" | pcs/ctn: {p['pcs_per_carton']}" if p["pcs_per_carton"] else "")
         )
     for s in subs:
         lines.append(
             f"Sub-product ID {s['id']}: {s['parent']} (ID:{s['parent_id']}) — {s['name']}" +
             (f" [{s['sku']}]" if s["sku"] else "") +
-            f" | {_inr(s['unit_price'])} | stock: {_f(s['stock_qty']):.0f}"
+            f" | {_inr(s['unit_price'])} | stock: {_f(s['stock_qty']):.0f}" +
+            (f" | pcs/ctn: {s['pcs_per_carton']}" if s["pcs_per_carton"] else "")
         )
     return jsonify({"result": "\n".join(lines) if lines else "No products found matching that query."})
 
@@ -1310,11 +1313,12 @@ def get_stock_summary():
     db = get_db()
     products = db.execute(
         "SELECT id, name, sku, stock_qty, production_qty, in_transit_qty, min_quantity, "
-        "has_eco_range, eco_parent_id "
+        "has_eco_range, eco_parent_id, pcs_per_carton "
         "FROM products WHERE is_active=1 ORDER BY name"
     ).fetchall()
     subs = db.execute(
         """SELECT p.id AS parent_id, p.name AS parent, p.eco_parent_id AS parent_eco_parent,
+                  p.pcs_per_carton,
                   s.id, s.name, s.sku, s.eco_parent_sub_id,
                   s.stock_qty, s.production_qty, s.in_transit_qty, s.min_quantity
            FROM sub_products s JOIN products p ON p.id=s.product_id
@@ -1335,10 +1339,11 @@ def get_stock_summary():
     # Build lookup: main product id → eco product row
     eco_by_main = {p["eco_parent_id"]: p for p in products if p["eco_parent_id"]}
 
-    def _row(name, sku, stock, prod, transit, min_qty):
+    def _row(name, sku, stock, prod, transit, min_qty, pcs_per_carton=0):
         alert = " ⚠ LOW" if min_qty and _f(stock) < _f(min_qty) else ""
+        pcs = f" | pcs/ctn: {pcs_per_carton}" if pcs_per_carton else ""
         return (f"{name}" + (f" [{sku}]" if sku else "") +
-                f" | wh:{_f(stock):.0f} prod:{_f(prod):.0f} transit:{_f(transit):.0f}{alert}")
+                f" | wh:{_f(stock):.0f} prod:{_f(prod):.0f} transit:{_f(transit):.0f}{pcs}{alert}")
 
     lines = ["=== Products ==="]
     for p in products:
@@ -1365,7 +1370,7 @@ def get_stock_summary():
                     f" prod:{combined_prod:.0f} transit:{combined_transit:.0f}{alert}"
                 )
             else:
-                lines.append(_row(p["name"], p["sku"], agg["stock"], agg["prod"], agg["transit"], agg["min"]))
+                lines.append(_row(p["name"], p["sku"], agg["stock"], agg["prod"], agg["transit"], agg["min"], p["pcs_per_carton"]))
         else:
             if eco:
                 # Standalone eco-paired product — merge stock
@@ -1380,7 +1385,7 @@ def get_stock_summary():
                     f" prod:{combined_prod:.0f} transit:{combined_transit:.0f}{alert}"
                 )
             else:
-                lines.append(_row(p["name"], p["sku"], p["stock_qty"], p["production_qty"], p["in_transit_qty"], p["min_quantity"]))
+                lines.append(_row(p["name"], p["sku"], p["stock_qty"], p["production_qty"], p["in_transit_qty"], p["min_quantity"], p["pcs_per_carton"]))
 
     if subs:
         lines.append("\n=== Sub-products ===")
@@ -1403,7 +1408,7 @@ def get_stock_summary():
                     f" prod:{combined_prod:.0f} transit:{combined_transit:.0f}{alert}"
                 )
             else:
-                lines.append(_row(f"{s['parent']} — {s['name']}", s["sku"], s["stock_qty"], s["production_qty"], s["in_transit_qty"], s["min_quantity"]))
+                lines.append(_row(f"{s['parent']} — {s['name']}", s["sku"], s["stock_qty"], s["production_qty"], s["in_transit_qty"], s["min_quantity"], s["pcs_per_carton"]))
     return jsonify({"result": "\n".join(lines)})
 
 
