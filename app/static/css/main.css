@@ -584,7 +584,7 @@ html.show-boxes .unit-knob { transform:translateX(0); }
 @media (max-width: 900px) {
   .form-grid-2, .form-grid-3 { grid-template-columns: 1fr; }
   .form-group.span-2, .form-group.span-3 { grid-column: span 1; }
-  .dashboard-grid, .detail-grid, .invoice-header-box { grid-template-columns: 1fr; }
+  .dashboard-grid, .detail-grid, .invoice-header-box { grid-template-columns: minmax(0, 1fr); }
 
   /* Sidebar becomes off-canvas drawer */
   .sidebar {
@@ -641,6 +641,8 @@ html.show-boxes .unit-knob { transform:translateX(0); }
 
   /* Hide secondary table columns on mobile */
   .col-mobile-hide { display: none !important; }
+  /* Show elements only on mobile */
+  .col-mobile-show { display: block !important; }
 
   /* Hide long button labels on mobile — keep SVG icon visible */
   .btn-label-mobile { display: none !important; }
@@ -679,10 +681,28 @@ html.show-boxes .unit-knob { transform:translateX(0); }
 
   /* Stock cards collapse to single column, full width */
   .stock-inner-grid { grid-template-columns: 1fr !important; }
+
+  /* ── Dashboard invoice list ── */
+  .dash-inv-row { padding: 10px 12px !important; }
+  .dash-inv-meta { min-width: 0; flex: 1; overflow: hidden; }
+  .dash-inv-meta a,
+  .dash-inv-meta div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dash-inv-amount { flex-shrink: 0; max-width: 42%; text-align: right; }
+
+  /* ── Dashboard chart header: stack title then controls ── */
+  .dash-chart-header { flex-direction: column !important; align-items: flex-start !important; }
+  .dash-chart-form { width: 100% !important; }
+  .dash-chart-form select,
+  .dash-chart-form input[type="date"] { flex: 1 1 0; min-width: 0; font-size: 12px !important; padding: 4px 6px !important; }
+  .dash-chart-form .btn { align-self: flex-end; }
 }
 
 /* ── Responsive: Small phones (≤ 480px) ──────────────────── */
 @media (max-width: 480px) {
   .stats-grid { grid-template-columns: 1fr 1fr; gap: 12px; }
-  .stat-value { font-size: 22px; }
+  /* Smaller stat cards so values don't wrap */
+  .stat-card { padding: 14px; }
+  .stat-value { font-size: 17px; letter-spacing: -0.5px; }
+  .stat-icon { width: 32px; height: 32px; }
+  .stat-icon svg { width: 15px; height: 15px; }
 }
