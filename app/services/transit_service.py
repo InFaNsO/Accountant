@@ -204,6 +204,20 @@ def delete_dispatch(dispatch_id):
     db.commit()
 
 
+def get_dispatches_due_soon(days=14):
+    return get_db().execute(
+        """SELECT d.*, s.name AS supplier_name,
+                  COUNT(di.id) AS item_count,
+                  julianday(d.expected_arrival) - julianday('now') AS days_remaining
+           FROM dispatches d
+           LEFT JOIN suppliers s ON d.supplier_id=s.id
+           LEFT JOIN dispatch_items di ON di.dispatch_id=d.id
+           WHERE d.status IN ('in_transit', 'partially_received')
+           GROUP BY d.id
+           ORDER BY d.expected_arrival ASC"""
+    ).fetchall()
+
+
 def receive_items(dispatch_id, received):
     """
     received: dict of {dispatch_item_id: qty_to_receive}

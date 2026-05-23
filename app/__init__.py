@@ -37,6 +37,26 @@ def _format_inr(value):
     return f"-{result}" if negative else result
 
 
+def _format_inr_compact(value):
+    """Compact INR: shows Lakhs/Crore for values above 99,999.99, else full format.
+    Examples: 1,47,000 → ₹1.47 L  |  35,88,563 → ₹35.88 L  |  6,53,42,125 → ₹6.53 Cr
+    """
+    try:
+        num = float(value or 0)
+    except (TypeError, ValueError):
+        num = 0.0
+    negative = num < 0
+    abs_num  = abs(num)
+    if abs_num > 9_999_999.99:            # >= 1 Crore
+        formatted = f"₹{abs_num / 1_00_00_000:.2f} Cr"
+    elif abs_num > 99_999.99:             # >= 1 Lakh
+        formatted = f"₹{abs_num / 1_00_000:.2f} L"
+    else:
+        integer_part, decimal_part = f"{abs_num:.2f}".split(".")
+        formatted = f"₹{_indian_commas(integer_part)}.{decimal_part}"
+    return f"-{formatted}" if negative else formatted
+
+
 def _format_indian(value):
     """Format a quantity with Indian comma grouping, no currency symbol.
     Whole numbers show no decimal; fractional values show up to 2 d.p.
@@ -86,10 +106,11 @@ def create_app():
         os.path.dirname(os.path.dirname(__file__)), "data", "ledger.db"
     )
 
-    app.jinja_env.filters["inr"]       = _format_inr
-    app.jinja_env.filters["indian"]    = _format_indian
-    app.jinja_env.filters["enumerate"] = enumerate
-    app.jinja_env.globals["stock_val"] = _stock_val
+    app.jinja_env.filters["inr"]         = _format_inr
+    app.jinja_env.filters["inr_compact"] = _format_inr_compact
+    app.jinja_env.filters["indian"]      = _format_indian
+    app.jinja_env.filters["enumerate"]   = enumerate
+    app.jinja_env.globals["stock_val"]   = _stock_val
 
     @app.context_processor
     def inject_today():

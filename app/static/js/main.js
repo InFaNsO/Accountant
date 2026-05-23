@@ -15,6 +15,17 @@ function formatINR(value) {
   return (num < 0 ? '-' : '') + '₹' + _indianCommas(intRaw) + '.' + dec;
 }
 
+// Compact INR: ≥1 Cr → "₹X.XX Cr", ≥1 L → "₹X.XX L", else full format
+function formatINRCompact(value) {
+  const num = parseFloat(value) || 0;
+  const sign = num < 0 ? '-' : '';
+  const abs = Math.abs(num);
+  if (abs > 9999999.99) return sign + '₹' + (abs / 1e7).toFixed(2) + ' Cr';
+  if (abs > 99999.99)   return sign + '₹' + (abs / 1e5).toFixed(2) + ' L';
+  const [intRaw, dec] = abs.toFixed(2).split('.');
+  return sign + '₹' + _indianCommas(intRaw) + '.' + dec;
+}
+
 // Indian quantity formatter (no ₹, no forced decimals): 100000 → "1,00,000"
 function formatIndian(value) {
   const num = parseFloat(value);

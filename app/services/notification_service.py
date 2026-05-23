@@ -150,22 +150,26 @@ def check_low_stock(app):
 
         try:
             conn = sqlite3.connect(db_path)
-            rows = conn.execute(
-                """
-                SELECT id, name, stock_qty, min_quantity
-                FROM products
-                WHERE track_inventory = 1
-                  AND min_quantity > 0
-                  AND stock_qty < min_quantity
-                  AND is_active = 1
-                """,
+            # Standalone products (no sub-products)
+            prod_rows = conn.execute(
+                """SELECT p.id, p.name, p.stock_qty, p.min_quantity
+                   FROM products p
+                   WHERE p.is_active=1 AND p.min_quantity>0 AND p.stock_qty<p.min_quantity
+                     AND NOT EXISTS (SELECT 1 FROM sub_products sp WHERE sp.product_id=p.id AND sp.is_active=1)""",
+            ).fetchall()
+            # Sub-products
+            sub_rows = conn.execute(
+                """SELECT s.id, p.name || ' — ' || s.name, s.stock_qty, s.min_quantity
+                   FROM sub_products s
+                   JOIN products p ON p.id=s.product_id
+                   WHERE s.is_active=1 AND s.min_quantity>0 AND s.stock_qty<s.min_quantity""",
             ).fetchall()
             conn.close()
         except Exception as e:
             logger.error("DB query failed (low stock): %s", e)
             return
 
-        for prod_id, name, stock, minimum in rows:
+        for prod_id, name, stock, minimum in prod_rows:
             if _already_notified(db_path, "low_stock", prod_id, today):
                 continue
             _send_multicast(
@@ -175,3 +179,52 @@ def check_low_stock(app):
                 data={"url": "/products", "type": "low_stock", "db_path": db_path},
             )
             _mark_notified(db_path, "low_stock", prod_id, today)
+
+        for sub_id, name, stock, minimum in sub_rows:
+            if _already_notified(db_path, "low_stock_sub", sub_id, today):
+                continue
+            _send_multicast(
+                tokens,
+                title="Low Stock Alert",
+                body=f"{name} · {stock:.0f} remaining (min {minimum:.0f})",
+                data={"url": "/products", "type": "low_stock_sub", "db_path": db_path},
+            )
+            _mark_notified(db_path, "low_stock_sub", sub_id, today)
+
+
+def check_transit_due(app):
+    with app.app_context():
+        db_path = app.config["DATABASE"]
+        today = date.today().isoformat()
+        tokens = _get_all_tokens(db_path)
+        if not tokens:
+            return
+
+        try:
+            conn = sqlite3.connect(db_path)
+            rows = conn.execute(
+                """SELECT d.id, d.name, d.expected_arrival, s.name AS supplier_name
+                   FROM dispatches d
+                   LEFT JOIN suppliers s ON s.id=d.supplier_id
+                   WHERE d.status IN ('in_transit','partially_received')
+                     AND d.expected_arrival IS NOT NULL
+                     AND d.expected_arrival <= date('now','+3 days')""",
+            ).fetchall()
+            conn.close()
+        except Exception as e:
+            logger.error("DB query failed (transit due): %s", e)
+            return
+
+        for dispatch_id, name, arrival, supplier in rows:
+            if _already_notified(db_path, "transit_due", dispatch_id, today):
+                continue
+            overdue = arrival < today
+            label = "Overdue" if overdue else f"Due {arrival}"
+            supplier_str = f" · {supplier}" if supplier else ""
+            _send_multicast(
+                tokens,
+                title="Transit Order Due" if not overdue else "Transit Order Overdue",
+                body=f"{name}{supplier_str} · {label}",
+                data={"url": "/transit", "type": "transit_due", "db_path": db_path},
+            )
+            _mark_notified(db_path, "transit_due", dispatch_id, today)

@@ -357,12 +357,28 @@ def get_dashboard_stats(date_from=None, date_to=None):
             "WHERE issue_date BETWEEN ? AND ? AND status != 'cancelled'",
             (date_from, date_to),
         ).fetchone()["v"]
+        total_tax = db.execute(
+            "SELECT COALESCE(SUM(tax_total),0) AS v FROM invoices "
+            "WHERE issue_date BETWEEN ? AND ? AND status != 'cancelled'",
+            (date_from, date_to),
+        ).fetchone()["v"]
+        payment_count = db.execute(
+            "SELECT COUNT(*) AS v FROM payments WHERE payment_date BETWEEN ? AND ?",
+            (date_from, date_to),
+        ).fetchone()["v"]
+        unique_payers = db.execute(
+            "SELECT COUNT(DISTINCT client_id) AS v FROM payments WHERE payment_date BETWEEN ? AND ?",
+            (date_from, date_to),
+        ).fetchone()["v"]
     else:
         total_revenue  = db.execute(
             "SELECT COALESCE(SUM(amount),0) AS v FROM payments"
         ).fetchone()["v"]
         total_invoiced = None
         invoice_count  = None
+        total_tax      = None
+        payment_count  = None
+        unique_payers  = None
 
     # ── Always-current stats ─────────────────────────────────────────────────
     outstanding = db.execute(
@@ -377,19 +393,30 @@ def get_dashboard_stats(date_from=None, date_to=None):
 
     total_clients = db.execute("SELECT COUNT(*) AS v FROM clients").fetchone()["v"]
 
-    # ── Monthly revenue for chart ────────────────────────────────────────────
+    # ── Daily sales and revenue for chart ───────────────────────────────────
     if windowed:
-        monthly = db.execute(
-            "SELECT strftime('%Y-%m', payment_date) AS month, SUM(amount) AS total "
+        daily_sales = db.execute(
+            "SELECT issue_date AS day, SUM(total) AS total "
+            "FROM invoices WHERE issue_date BETWEEN ? AND ? AND status != 'cancelled' "
+            "GROUP BY day ORDER BY day",
+            (date_from, date_to),
+        ).fetchall()
+        daily_revenue = db.execute(
+            "SELECT payment_date AS day, SUM(amount) AS total "
             "FROM payments WHERE payment_date BETWEEN ? AND ? "
-            "GROUP BY month ORDER BY month",
+            "GROUP BY day ORDER BY day",
             (date_from, date_to),
         ).fetchall()
     else:
-        monthly = db.execute(
-            "SELECT strftime('%Y-%m', payment_date) AS month, SUM(amount) AS total "
-            "FROM payments WHERE payment_date >= date('now','-12 months') "
-            "GROUP BY month ORDER BY month"
+        daily_sales = db.execute(
+            "SELECT issue_date AS day, SUM(total) AS total "
+            "FROM invoices WHERE status != 'cancelled' "
+            "GROUP BY day ORDER BY day"
+        ).fetchall()
+        daily_revenue = db.execute(
+            "SELECT payment_date AS day, SUM(amount) AS total "
+            "FROM payments "
+            "GROUP BY day ORDER BY day"
         ).fetchall()
 
     # ── Recent / windowed invoices ───────────────────────────────────────────
@@ -408,13 +435,29 @@ def get_dashboard_stats(date_from=None, date_to=None):
             "ORDER BY i.created_at DESC LIMIT 5"
         ).fetchall()
 
+    # Merge daily sales and revenue by day
+    sales_dict = {dict(r)['day']: dict(r)['total'] for r in daily_sales}
+    revenue_dict = {dict(r)['day']: dict(r)['total'] for r in daily_revenue}
+    all_days = sorted(set(sales_dict.keys()) | set(revenue_dict.keys()))
+    monthly_merged = [
+        {
+            'month': d,
+            'sales': sales_dict.get(d, 0),
+            'revenue': revenue_dict.get(d, 0)
+        }
+        for d in all_days
+    ]
+
     return {
         "total_revenue":   total_revenue,
         "total_invoiced":  total_invoiced,
         "invoice_count":   invoice_count,
+        "total_tax":       total_tax,
+        "payment_count":   payment_count,
+        "unique_payers":   unique_payers,
         "outstanding":     outstanding,
         "overdue_count":   overdue,
         "total_clients":   total_clients,
-        "monthly_revenue": [dict(r) for r in monthly],
+        "monthly_revenue": monthly_merged,
         "recent_invoices": recent_invoices,
     }

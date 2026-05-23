@@ -29,12 +29,13 @@
         <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
       </svg>
     </div>
-    <div class="stat-label">Revenue Collected</div>
-    <div class="stat-value">{{ stats.total_revenue|inr }}</div>
+    <div class="stat-label">Sales</div>
+    <div class="stat-value">{{ stats.total_invoiced|inr_compact }}</div>
     <div class="stat-sub">{{ window_label }}</div>
     {% if stats.total_invoiced is not none %}
     <div style="font-size:11px;color:var(--text-muted);margin-top:4px">
-      {{ stats.invoice_count }} invoice(s) raised · {{ stats.total_invoiced|inr }} invoiced
+      {{ stats.invoice_count }} invoice(s)
+      {% if stats.total_tax %} · GST {{ stats.total_tax|inr_compact }}{% endif %}
     </div>
     {% endif %}
   </div>
@@ -49,24 +50,11 @@
       </svg>
     </div>
     <div class="stat-label">Outstanding</div>
-    <div class="stat-value">{{ stats.outstanding|inr }}</div>
+    <div class="stat-value">{{ stats.outstanding|inr_compact }}</div>
     <div class="stat-sub">Pending collection (current)</div>
-  </div>
-  {% endif %}
-
-  {% if 'stat_clients' in dash_sections %}
-  <div class="stat-card">
-    <div class="stat-icon stat-icon-green" style="float:right">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-           stroke-linecap="round" stroke-linejoin="round">
-        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
-        <circle cx="9" cy="7" r="4"/>
-        <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>
-      </svg>
+    <div style="font-size:11px;color:var(--text-muted);margin-top:4px">
+      {{ stats.overdue_count }} invoice(s) overdue
     </div>
-    <div class="stat-label">Clients</div>
-    <div class="stat-value">{{ stats.total_clients | indian }}</div>
-    <div class="stat-sub">Total clients</div>
   </div>
   {% endif %}
 
@@ -75,13 +63,19 @@
     <div class="stat-icon stat-icon-blue" style="float:right">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
            stroke-linecap="round" stroke-linejoin="round">
-        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
-        <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+        <rect x="1" y="4" width="22" height="16" rx="2" ry="2"/>
+        <line x1="1" y1="10" x2="23" y2="10"/>
       </svg>
     </div>
-    <div class="stat-label">Overdue</div>
-    <div class="stat-value">{{ stats.overdue_count | indian }}</div>
-    <div class="stat-sub">Invoices past due (current)</div>
+    <div class="stat-label">Revenue Collected</div>
+    <div class="stat-value">{{ stats.total_revenue|inr_compact }}</div>
+    <div class="stat-sub">
+      {% if stats.payment_count is not none %}
+        {{ stats.payment_count }} payment(s) · {{ stats.unique_payers }} client(s)
+      {% else %}
+        {{ window_label }}
+      {% endif %}
+    </div>
   </div>
   {% endif %}
 
@@ -99,7 +93,7 @@
   <div class="card">
     <!-- Revenue card header: dropdown + always-visible date range pickers -->
     <div class="card-header" style="align-items:center;gap:10px;flex-wrap:wrap">
-      <span class="card-title" style="white-space:nowrap">Revenue</span>
+      <span class="card-title" style="white-space:nowrap">Sales & Revenue</span>
       <form id="dashWinForm" method="get" action="{{ url_for('dashboard.index') }}"
             style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;flex:1;min-width:0">
         <select id="dashWinSel" name="window" onchange="dashWinSelect(this.value)"
@@ -179,41 +173,44 @@
 <!-- ── Production + Stock sections (reordered on mobile) ───────── -->
 <div class="dash-bottom-sections">
 
-<!-- ── Production Orders Due Soon ──────────────────────────────── -->
-{% if 'production_due' in dash_sections and pos_due_soon %}
+<!-- ── Transit Orders Due Soon ──────────────────────────────────── -->
+{% if 'production_due' in dash_sections and dispatches_due_soon %}
 <div class="card dash-production-due" style="margin-top:18px">
   <div class="card-header" style="border-left:3px solid var(--warning);padding-left:17px">
     <span class="card-title" style="color:var(--warning)">
-      Production Orders Due Soon ({{ pos_due_soon|length }})
+      Transit Orders Due Soon ({{ dispatches_due_soon|length }})
     </span>
-    <a href="{{ url_for('production.list_production') }}" class="btn btn-ghost btn-sm">View all</a>
+    <a href="{{ url_for('transit.list_transit') }}" class="btn btn-ghost btn-sm">View all</a>
   </div>
   <div class="table-wrap">
     <table>
       <thead>
         <tr>
-          <th>Order</th><th>Supplier</th><th>Expected Completion</th>
-          <th style="text-align:center">Items</th><th style="text-align:right">Dispatched</th><th></th>
+          <th>Order</th><th>Supplier</th><th>Expected Arrival</th>
+          <th style="text-align:center">Items</th><th style="text-align:right">Received</th><th></th>
         </tr>
       </thead>
       <tbody>
-        {% for po in pos_due_soon %}
+        {% for dispatch in dispatches_due_soon %}
         <tr>
           <td class="fw-700">
-            <a href="{{ url_for('production.detail', po_id=po.id) }}"
-               style="color:var(--accent);text-decoration:none">{{ po.name }}</a>
+            <a href="{{ url_for('transit.detail', dispatch_id=dispatch.id) }}"
+               style="color:var(--accent);text-decoration:none">{{ dispatch.name }}</a>
           </td>
-          <td class="muted">{{ po.supplier_name or '—' }}</td>
-          <td><span style="font-weight:600;color:var(--warning)">{{ po.expected_completion or '—' }}</span></td>
-          <td style="text-align:center" class="muted">{{ po.item_count or '—' }}</td>
+          <td class="muted">{{ dispatch.supplier_name or '—' }}</td>
+          <td><span style="font-weight:600;color:var(--warning)">{{ dispatch.expected_arrival or '—' }}</span></td>
+          <td style="text-align:center" class="muted">{{ dispatch.item_count or '—' }}</td>
           <td style="text-align:right">
-            {% if po.total_qty and po.total_qty > 0 %}
-              {% set pct = ((po.dispatched_qty or 0) / po.total_qty * 100)|round(0)|int %}
-              <span style="color:var(--text-muted);font-size:12px">{{ pct }}%</span>
-            {% else %}—{% endif %}
+            {% if dispatch.status == 'received' %}
+              <span style="color:var(--success);font-size:12px">100%</span>
+            {% elif dispatch.status == 'partially_received' %}
+              <span style="color:var(--text-muted);font-size:12px">Partial</span>
+            {% else %}
+              <span style="color:var(--text-muted);font-size:12px">—</span>
+            {% endif %}
           </td>
           <td style="text-align:right">
-            <a href="{{ url_for('production.detail', po_id=po.id) }}" class="btn btn-secondary btn-sm">View</a>
+            <a href="{{ url_for('transit.detail', dispatch_id=dispatch.id) }}" class="btn btn-secondary btn-sm">View</a>
           </td>
         </tr>
         {% endfor %}
@@ -249,27 +246,77 @@
       <span class="card-title" style="color:var(--danger)">Low Stock ({{ low|length }})</span>
       <a href="{{ url_for('products.list_products') }}" class="btn btn-ghost btn-sm">View all</a>
     </div>
-    <ul class="stock-scroll" style="list-style:none">
-      {% for item in low %}
-      <li style="padding:10px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
-        <div>
-          <div>
-          <div style="font-weight:600;font-size:13px">
-            {% if item.get('parent_name') %}{{ item.parent_name }} — {% endif %}{{ item.name }}
-            {% if item.get('eco_paired') %}<span style="font-size:10px;background:rgba(16,185,129,.15);color:#10b981;padding:1px 6px;border-radius:8px;margin-left:5px;font-weight:500">+ Eco combined</span>{% endif %}
-          </div>
-          {% if item.get('category_name') %}
-          <div style="font-size:11px;color:var(--text-muted)">{{ item.category_name }}</div>
-          {% endif %}
+    <!-- Column headers -->
+    <div style="display:grid;grid-template-columns:1fr 80px 80px;padding:6px 14px;font-size:10px;font-weight:700;color:var(--text-muted);border-bottom:1px solid var(--border);text-transform:uppercase;letter-spacing:.05em">
+      <span>Product</span><span style="text-align:right">Stock</span><span style="text-align:right">Min</span>
+    </div>
+    <div class="stock-scroll">
+      {% set cat_ctr = namespace(n=0) %}
+      {% for cat_name, cat_iter in low | groupby('category_name') %}
+        {% set cat_ctr.n = cat_ctr.n + 1 %}
+        {% set cid = 'lscat' ~ cat_ctr.n %}
+        {% set cat_list = cat_iter | list %}
+
+        <!-- Category row -->
+        <div onclick="lsCat('{{ cid }}')"
+             style="display:flex;align-items:center;gap:8px;padding:7px 14px;background:var(--bg-alt);border-bottom:1px solid var(--border);cursor:pointer;user-select:none">
+          <span id="{{ cid }}-chev" style="font-size:9px;color:var(--text-muted);display:inline-block;transition:transform .15s">▶</span>
+          <span style="font-size:11px;font-weight:700;color:var(--text-muted);flex:1;text-transform:uppercase;letter-spacing:.05em">{{ cat_name or 'Uncategorised' }}</span>
+          <span style="font-size:11px;color:var(--text-muted)">{{ cat_list | length }}</span>
         </div>
-        <div style="text-align:right;font-size:13px">
-          <span style="color:var(--danger);font-weight:700">{{ stock_val(item.stock_qty, item.pcs_per_carton) }}</span>
-          {% set min_qty = item.get('min_quantity') or item.get('eff_min') or item.get('parent_min_qty') %}
-          <span style="color:var(--text-muted)"> / {{ stock_val(min_qty, item.pcs_per_carton) }}</span>
-        </div>
-      </li>
+
+        <!-- Category body (collapsed by default) -->
+        <div id="{{ cid }}-body" style="display:none">
+          {% set par_ctr = namespace(n=0) %}
+          {% for par_name, par_iter in cat_list | groupby('parent_name') %}
+            {% set par_list = par_iter | list %}
+
+            {% if par_name %}
+              <!-- Parent product header (has sub-products) -->
+              {% set par_ctr.n = par_ctr.n + 1 %}
+              {% set pid = cid ~ 'p' ~ par_ctr.n %}
+              <div style="display:flex;align-items:center;gap:8px;padding:9px 14px;border-bottom:1px solid var(--border)">
+                <button id="{{ pid }}-btn" onclick="lsPar('{{ pid }}')"
+                        style="background:none;border:1px solid var(--border);border-radius:3px;width:16px;height:16px;font-size:8px;cursor:pointer;color:var(--text-muted);display:flex;align-items:center;justify-content:center;flex-shrink:0;padding:0;line-height:1">▶</button>
+                <span style="font-size:13px;font-weight:600;flex:1">{{ par_name }}</span>
+                <span style="font-size:11px;color:var(--text-muted)">{{ par_list | length }} var.</span>
+              </div>
+              <!-- Sub-product rows (collapsed by default) -->
+              <div id="{{ pid }}-subs" style="display:none">
+                {% for item in par_list %}
+                  {% set min_qty = item.get('min_quantity') or item.get('eff_min') or item.get('parent_min_qty') %}
+                  <div style="display:grid;grid-template-columns:1fr 80px 80px;align-items:center;padding:7px 14px 7px 38px;border-bottom:1px solid var(--border);background:var(--bg-alt)">
+                    <div>
+                      <span style="color:var(--text-muted);font-size:11px;margin-right:3px">↳</span>
+                      <span style="font-size:12px;font-weight:500">{{ item.name }}</span>
+                      {% if item.get('eco_paired') %}<span style="font-size:9px;background:rgba(16,185,129,.15);color:#10b981;padding:1px 5px;border-radius:5px;margin-left:4px">Eco</span>{% endif %}
+                      {% if item.get('sku') %}<div style="font-size:10px;color:var(--text-muted);font-family:monospace;margin-left:14px">{{ item.sku }}</div>{% endif %}
+                    </div>
+                    <div style="text-align:right;font-size:12px;font-weight:700;color:var(--danger)">{{ stock_val(item.stock_qty, item.pcs_per_carton) }}</div>
+                    <div style="text-align:right;font-size:12px;color:var(--text-muted)">{{ stock_val(min_qty, item.pcs_per_carton) }}</div>
+                  </div>
+                {% endfor %}
+              </div>
+
+            {% else %}
+              <!-- Standalone product rows (no parent) -->
+              {% for item in par_list %}
+                {% set min_qty = item.get('min_quantity') or item.get('eff_min') or item.get('parent_min_qty') %}
+                <div style="display:grid;grid-template-columns:1fr 80px 80px;align-items:center;padding:9px 14px;border-bottom:1px solid var(--border)">
+                  <div>
+                    <div style="font-size:13px;font-weight:600">{{ item.name }}{% if item.get('eco_paired') %}<span style="font-size:9px;background:rgba(16,185,129,.15);color:#10b981;padding:1px 5px;border-radius:5px;margin-left:5px">Eco</span>{% endif %}</div>
+                    {% if item.get('sku') %}<div style="font-size:10px;color:var(--text-muted);font-family:monospace">{{ item.sku }}</div>{% endif %}
+                  </div>
+                  <div style="text-align:right;font-size:13px;font-weight:700;color:var(--danger)">{{ stock_val(item.stock_qty, item.pcs_per_carton) }}</div>
+                  <div style="text-align:right;font-size:13px;color:var(--text-muted)">{{ stock_val(min_qty, item.pcs_per_carton) }}</div>
+                </div>
+              {% endfor %}
+            {% endif %}
+
+          {% endfor %}
+        </div><!-- /cat body -->
       {% endfor %}
-    </ul>
+    </div><!-- /stock-scroll -->
   </div>
   {% endif %}
 
@@ -278,24 +325,61 @@
     <div class="card-header" style="border-left:3px solid var(--success);padding-left:17px">
       <span class="card-title" style="color:var(--success)">In Production ({{ prod|length }})</span>
     </div>
-    <ul class="stock-scroll" style="list-style:none">
-      {% for item in prod %}
-      <li style="padding:10px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
-        <div>
-          <div style="font-weight:600;font-size:13px">
-            {% if item.get('parent_name') %}{{ item.parent_name }} — {% endif %}{{ item.name }}
-          </div>
-          {% if item.get('category_name') %}
-          <div style="font-size:11px;color:var(--text-muted)">{{ item.category_name }}</div>
-          {% endif %}
+    <div style="display:grid;grid-template-columns:1fr 90px;padding:6px 14px;font-size:10px;font-weight:700;color:var(--text-muted);border-bottom:1px solid var(--border);text-transform:uppercase;letter-spacing:.05em">
+      <span>Product</span><span style="text-align:right">In Prod</span>
+    </div>
+    <div class="stock-scroll">
+      {% set prcat_ctr = namespace(n=0) %}
+      {% for cat_name, cat_iter in prod | groupby('category_name') %}
+        {% set prcat_ctr.n = prcat_ctr.n + 1 %}
+        {% set cid = 'prcat' ~ prcat_ctr.n %}
+        {% set cat_list = cat_iter | list %}
+        <div onclick="lsCat('{{ cid }}')"
+             style="display:flex;align-items:center;gap:8px;padding:7px 14px;background:var(--bg-alt);border-bottom:1px solid var(--border);cursor:pointer;user-select:none">
+          <span id="{{ cid }}-chev" style="font-size:9px;color:var(--text-muted);display:inline-block;transition:transform .15s">▶</span>
+          <span style="font-size:11px;font-weight:700;color:var(--text-muted);flex:1;text-transform:uppercase;letter-spacing:.05em">{{ cat_name or 'Uncategorised' }}</span>
+          <span style="font-size:11px;color:var(--text-muted)">{{ cat_list | length }}</span>
         </div>
-        <div style="text-align:right;font-size:13px">
-          <span style="color:var(--success);font-weight:700">{{ stock_val(item.production_qty, item.pcs_per_carton) }}</span>
-          <span style="color:var(--text-muted)"> in production</span>
+        <div id="{{ cid }}-body" style="display:none">
+          {% set prpar_ctr = namespace(n=0) %}
+          {% for par_name, par_iter in cat_list | groupby('parent_name') %}
+            {% set par_list = par_iter | list %}
+            {% if par_name %}
+              {% set prpar_ctr.n = prpar_ctr.n + 1 %}
+              {% set pid = cid ~ 'p' ~ prpar_ctr.n %}
+              <div style="display:flex;align-items:center;gap:8px;padding:9px 14px;border-bottom:1px solid var(--border)">
+                <button id="{{ pid }}-btn" onclick="lsPar('{{ pid }}')"
+                        style="background:none;border:1px solid var(--border);border-radius:3px;width:16px;height:16px;font-size:8px;cursor:pointer;color:var(--text-muted);display:flex;align-items:center;justify-content:center;flex-shrink:0;padding:0;line-height:1">▶</button>
+                <span style="font-size:13px;font-weight:600;flex:1">{{ par_name }}</span>
+                <span style="font-size:11px;color:var(--text-muted)">{{ par_list | length }} var.</span>
+              </div>
+              <div id="{{ pid }}-subs" style="display:none">
+                {% for item in par_list %}
+                  <div style="display:grid;grid-template-columns:1fr 90px;align-items:center;padding:7px 14px 7px 38px;border-bottom:1px solid var(--border);background:var(--bg-alt)">
+                    <div>
+                      <span style="color:var(--text-muted);font-size:11px;margin-right:3px">↳</span>
+                      <span style="font-size:12px;font-weight:500">{{ item.name }}</span>
+                      {% if item.get('sku') %}<div style="font-size:10px;color:var(--text-muted);font-family:monospace;margin-left:14px">{{ item.sku }}</div>{% endif %}
+                    </div>
+                    <div style="text-align:right;font-size:12px;font-weight:700;color:var(--success)">{{ stock_val(item.production_qty, item.pcs_per_carton) }}</div>
+                  </div>
+                {% endfor %}
+              </div>
+            {% else %}
+              {% for item in par_list %}
+                <div style="display:grid;grid-template-columns:1fr 90px;align-items:center;padding:9px 14px;border-bottom:1px solid var(--border)">
+                  <div>
+                    <div style="font-size:13px;font-weight:600">{{ item.name }}</div>
+                    {% if item.get('sku') %}<div style="font-size:10px;color:var(--text-muted);font-family:monospace">{{ item.sku }}</div>{% endif %}
+                  </div>
+                  <div style="text-align:right;font-size:13px;font-weight:700;color:var(--success)">{{ stock_val(item.production_qty, item.pcs_per_carton) }}</div>
+                </div>
+              {% endfor %}
+            {% endif %}
+          {% endfor %}
         </div>
-      </li>
       {% endfor %}
-    </ul>
+    </div>
   </div>
   {% endif %}
 
@@ -304,24 +388,61 @@
     <div class="card-header" style="border-left:3px solid var(--warning);padding-left:17px">
       <span class="card-title" style="color:var(--warning)">In Transit ({{ transit|length }})</span>
     </div>
-    <ul class="stock-scroll" style="list-style:none">
-      {% for item in transit %}
-      <li style="padding:10px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
-        <div>
-          <div style="font-weight:600;font-size:13px">
-            {% if item.get('parent_name') %}{{ item.parent_name }} — {% endif %}{{ item.name }}
-          </div>
-          {% if item.expected_arrival %}
-          <div style="font-size:11px;color:var(--text-muted)">Expected: {{ item.expected_arrival }}</div>
-          {% endif %}
+    <div style="display:grid;grid-template-columns:1fr 90px;padding:6px 14px;font-size:10px;font-weight:700;color:var(--text-muted);border-bottom:1px solid var(--border);text-transform:uppercase;letter-spacing:.05em">
+      <span>Product</span><span style="text-align:right">In Transit</span>
+    </div>
+    <div class="stock-scroll">
+      {% set trcat_ctr = namespace(n=0) %}
+      {% for cat_name, cat_iter in transit | groupby('category_name') %}
+        {% set trcat_ctr.n = trcat_ctr.n + 1 %}
+        {% set cid = 'trcat' ~ trcat_ctr.n %}
+        {% set cat_list = cat_iter | list %}
+        <div onclick="lsCat('{{ cid }}')"
+             style="display:flex;align-items:center;gap:8px;padding:7px 14px;background:var(--bg-alt);border-bottom:1px solid var(--border);cursor:pointer;user-select:none">
+          <span id="{{ cid }}-chev" style="font-size:9px;color:var(--text-muted);display:inline-block;transition:transform .15s">▶</span>
+          <span style="font-size:11px;font-weight:700;color:var(--text-muted);flex:1;text-transform:uppercase;letter-spacing:.05em">{{ cat_name or 'Uncategorised' }}</span>
+          <span style="font-size:11px;color:var(--text-muted)">{{ cat_list | length }}</span>
         </div>
-        <div style="text-align:right;font-size:13px">
-          <span style="color:var(--warning);font-weight:700">{{ stock_val(item.in_transit_qty, item.pcs_per_carton) }}</span>
-          <span style="color:var(--text-muted)"> in transit</span>
+        <div id="{{ cid }}-body" style="display:none">
+          {% set trpar_ctr = namespace(n=0) %}
+          {% for par_name, par_iter in cat_list | groupby('parent_name') %}
+            {% set par_list = par_iter | list %}
+            {% if par_name %}
+              {% set trpar_ctr.n = trpar_ctr.n + 1 %}
+              {% set pid = cid ~ 'p' ~ trpar_ctr.n %}
+              <div style="display:flex;align-items:center;gap:8px;padding:9px 14px;border-bottom:1px solid var(--border)">
+                <button id="{{ pid }}-btn" onclick="lsPar('{{ pid }}')"
+                        style="background:none;border:1px solid var(--border);border-radius:3px;width:16px;height:16px;font-size:8px;cursor:pointer;color:var(--text-muted);display:flex;align-items:center;justify-content:center;flex-shrink:0;padding:0;line-height:1">▶</button>
+                <span style="font-size:13px;font-weight:600;flex:1">{{ par_name }}</span>
+                <span style="font-size:11px;color:var(--text-muted)">{{ par_list | length }} var.</span>
+              </div>
+              <div id="{{ pid }}-subs" style="display:none">
+                {% for item in par_list %}
+                  <div style="display:grid;grid-template-columns:1fr 90px;align-items:center;padding:7px 14px 7px 38px;border-bottom:1px solid var(--border);background:var(--bg-alt)">
+                    <div>
+                      <span style="color:var(--text-muted);font-size:11px;margin-right:3px">↳</span>
+                      <span style="font-size:12px;font-weight:500">{{ item.name }}</span>
+                      {% if item.get('expected_arrival') %}<div style="font-size:10px;color:var(--text-muted);font-family:monospace;margin-left:14px">ETA: {{ item.expected_arrival }}</div>{% endif %}
+                    </div>
+                    <div style="text-align:right;font-size:12px;font-weight:700;color:var(--warning)">{{ stock_val(item.in_transit_qty, item.pcs_per_carton) }}</div>
+                  </div>
+                {% endfor %}
+              </div>
+            {% else %}
+              {% for item in par_list %}
+                <div style="display:grid;grid-template-columns:1fr 90px;align-items:center;padding:9px 14px;border-bottom:1px solid var(--border)">
+                  <div>
+                    <div style="font-size:13px;font-weight:600">{{ item.name }}</div>
+                    {% if item.get('expected_arrival') %}<div style="font-size:11px;color:var(--text-muted)">ETA: {{ item.expected_arrival }}</div>{% endif %}
+                  </div>
+                  <div style="text-align:right;font-size:13px;font-weight:700;color:var(--warning)">{{ stock_val(item.in_transit_qty, item.pcs_per_carton) }}</div>
+                </div>
+              {% endfor %}
+            {% endif %}
+          {% endfor %}
         </div>
-      </li>
       {% endfor %}
-    </ul>
+    </div>
   </div>
   {% endif %}
 
@@ -345,6 +466,26 @@
 {% endblock %}
 
 {% block scripts %}
+<script>
+/* ── Low-stock expand/collapse ─────────────────────────────── */
+function lsCat(cid) {
+  const body = document.getElementById(cid + '-body');
+  const chev = document.getElementById(cid + '-chev');
+  if (!body) return;
+  const open = body.style.display !== 'none';
+  body.style.display = open ? 'none' : '';
+  if (chev) chev.style.transform = open ? '' : 'rotate(90deg)';
+}
+function lsPar(pid) {
+  const subs = document.getElementById(pid + '-subs');
+  const btn  = document.getElementById(pid + '-btn');
+  if (!subs) return;
+  const open = subs.style.display !== 'none';
+  subs.style.display = open ? 'none' : '';
+  if (btn) btn.textContent = open ? '▶' : '▼';
+}
+</script>
+
 <!-- Period-picker: compute resolved dates for each preset, auto-submit on dropdown change -->
 <script>
 function _winDates(w) {
@@ -394,41 +535,68 @@ function dashDateChange() {
 <script>
 const monthlyData = {{ stats.monthly_revenue | tojson }};
 const labels = monthlyData.map(d => {
-  const [y, m] = d.month.split('-');
-  return new Date(y, m-1).toLocaleString('default', {month:'short', year:'2-digit'});
+  const [y, mo, day] = d.month.split('-');
+  return new Date(y, mo-1, day).toLocaleString('default', {day:'numeric', month:'short'});
 });
-const values = monthlyData.map(d => d.total);
+const salesValues = monthlyData.map(d => d.sales || 0);
+const revenueValues = monthlyData.map(d => d.revenue || 0);
 const ctx = document.getElementById('revenueChart');
 if (ctx && typeof Chart !== 'undefined') {
   new Chart(ctx, {
     type: 'bar',
     data: {
       labels,
-      datasets: [{
-        label: 'Revenue',
-        data: values,
-        backgroundColor: 'rgba(99,102,241,.18)',
-        borderColor: '#6366F1',
-        borderWidth: 2,
-        borderRadius: 5,
-        hoverBackgroundColor: 'rgba(99,102,241,.35)',
-      }]
+      datasets: [
+        {
+          label: 'Sales',
+          data: salesValues,
+          type: 'line',
+          borderColor: '#10b981',
+          backgroundColor: 'rgba(16,185,129,.1)',
+          borderWidth: 2.5,
+          fill: true,
+          tension: 0.4,
+          pointRadius: 4,
+          pointBackgroundColor: '#10b981',
+          pointBorderColor: '#fff',
+          pointBorderWidth: 2,
+          yAxisID: 'y',
+        },
+        {
+          label: 'Revenue Collected',
+          data: revenueValues,
+          type: 'bar',
+          backgroundColor: 'rgba(99,102,241,.18)',
+          borderColor: '#6366F1',
+          borderWidth: 2,
+          borderRadius: 5,
+          hoverBackgroundColor: 'rgba(99,102,241,.35)',
+          yAxisID: 'y',
+        }
+      ]
     },
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: {
+          display: true,
+          position: 'top',
+          labels: { font: { size: 12 }, usePointStyle: true, padding: 15 }
+        }
+      },
       scales: {
         x: { grid: { display: false }, ticks: { font: { size: 11 } } },
         y: {
           grid: { color: 'rgba(0,0,0,.05)' },
-          ticks: { font: { size: 11 }, callback: v => formatINR(v) }
+          ticks: { font: { size: 11 }, callback: v => formatINRCompact(v) }
         }
       }
     }
   });
 } else if (ctx) {
-  ctx.parentElement.innerHTML = '<p style="color:var(--text-muted);font-size:13px;text-align:center;padding-top:80px">No revenue data for this period.</p>';
+  ctx.parentElement.innerHTML = '<p style="color:var(--text-muted);font-size:13px;text-align:center;padding-top:80px">No data for this period.</p>';
 }
 </script>
 {% endif %}

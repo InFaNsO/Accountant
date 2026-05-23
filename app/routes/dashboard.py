@@ -2,7 +2,7 @@ from flask import Blueprint, render_template, request
 from flask_login import login_required, current_user
 from ..services.payment_service import get_dashboard_stats
 from ..services.product_service import get_stock_alerts
-from ..services.production_service import get_pos_due_soon
+from ..services.transit_service import get_dispatches_due_soon
 from datetime import date, timedelta
 
 bp = Blueprint("dashboard", __name__)
@@ -80,13 +80,13 @@ def index():
     dash_sections = current_user.get_dashboard_sections()
     stats         = get_dashboard_stats(date_from=date_from, date_to=date_to)
     alerts        = get_stock_alerts()
-    pos_due_soon  = get_pos_due_soon(days=14)
+    dispatches_due_soon  = get_dispatches_due_soon(days=14)
 
     return render_template(
         "dashboard.html",
         stats=stats,
         alerts=alerts,
-        pos_due_soon=pos_due_soon,
+        dispatches_due_soon=dispatches_due_soon,
         dash_sections=dash_sections,
         window=window,
         window_label=WINDOW_LABELS.get(window, "Custom Range"),

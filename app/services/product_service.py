@@ -453,6 +453,12 @@ def get_stock_alerts():
         entry["eco_paired"] = True
         low_stock.append(entry)
 
+    # Ensure all items have string values for groupby sorting (None breaks comparisons)
+    for item in low_stock:
+        item.setdefault("parent_name", "")
+        if item.get("category_name") is None:
+            item["category_name"] = ""
+
     subs_list = [dict(r) for r in low_subs]
     for r in low_eco_sub_pairs:
         entry = dict(r)
@@ -475,7 +481,11 @@ def get_stock_alerts():
             WHERE p.production_qty>0 AND {no_subs}"""
     ).fetchall()
     in_production_s = db.execute(
-        "SELECT s.*, p.name AS parent_name, p.pcs_per_carton FROM sub_products s JOIN products p ON s.product_id=p.id WHERE s.production_qty>0"
+        """SELECT s.*, p.name AS parent_name, p.pcs_per_carton, c.name AS category_name
+           FROM sub_products s
+           JOIN products p ON s.product_id=p.id
+           LEFT JOIN categories c ON p.category_id=c.id
+           WHERE s.production_qty>0"""
     ).fetchall()
 
     # In transit (no eco-awareness needed — independent bucket)
@@ -490,18 +500,31 @@ def get_stock_alerts():
            GROUP BY p.id ORDER BY m.expected_arrival ASC"""
     ).fetchall()
     in_transit_s = db.execute(
-        """SELECT s.*, p.name AS parent_name, p.pcs_per_carton,
+        """SELECT s.*, p.name AS parent_name, p.pcs_per_carton, c.name AS category_name,
                   m.expected_arrival, m.quantity AS dispatch_qty
            FROM sub_products s
            JOIN products p ON s.product_id=p.id
+           LEFT JOIN categories c ON p.category_id=c.id
            JOIN stock_movements m ON m.sub_product_id=s.id
                                  AND m.movement_type IN ('dispatch', 'transit_dispatch')
            WHERE s.in_transit_qty>0
            GROUP BY s.id ORDER BY m.expected_arrival ASC"""
     ).fetchall()
 
+    in_prod_list = [dict(r) for r in in_production_p] + [dict(r) for r in in_production_s]
+    for item in in_prod_list:
+        item.setdefault("parent_name", "")
+        if item.get("category_name") is None:
+            item["category_name"] = ""
+
+    in_transit_list = [dict(r) for r in in_transit_p] + [dict(r) for r in in_transit_s]
+    for item in in_transit_list:
+        item.setdefault("parent_name", "")
+        if item.get("category_name") is None:
+            item["category_name"] = ""
+
     return {
         "low_stock":     low_stock,
-        "in_production": [dict(r) for r in in_production_p] + [dict(r) for r in in_production_s],
-        "in_transit":    [dict(r) for r in in_transit_p] + [dict(r) for r in in_transit_s],
+        "in_production": in_prod_list,
+        "in_transit":    in_transit_list,
     }

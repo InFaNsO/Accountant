@@ -1165,6 +1165,9 @@ def get_business_stats():
     today = date.today().isoformat()
     db = get_db()
     total_revenue = _f(db.execute("SELECT COALESCE(SUM(amount),0) FROM payments").fetchone()[0])
+    total_invoiced_all = _f(db.execute(
+        "SELECT COALESCE(SUM(total),0) FROM invoices WHERE status!='cancelled'"
+    ).fetchone()[0])
     outstanding = _f(db.execute(
         "SELECT COALESCE(SUM(total-amount_paid),0) FROM invoices WHERE status NOT IN ('paid','cancelled')"
     ).fetchone()[0])
@@ -1179,13 +1182,30 @@ def get_business_stats():
     recent_pmts = _f(db.execute(
         "SELECT COALESCE(SUM(amount),0) FROM payments WHERE payment_date>=date('now','-30 days')"
     ).fetchone()[0])
+    recent_pmt_count = db.execute(
+        "SELECT COUNT(*) FROM payments WHERE payment_date>=date('now','-30 days')"
+    ).fetchone()[0]
+    recent_pmt_clients = db.execute(
+        "SELECT COUNT(DISTINCT client_id) FROM payments WHERE payment_date>=date('now','-30 days')"
+    ).fetchone()[0]
     recent_inv = _f(db.execute(
         "SELECT COALESCE(SUM(total),0) FROM invoices WHERE issue_date>=date('now','-30 days') AND status!='cancelled'"
+    ).fetchone()[0])
+    recent_inv_count = db.execute(
+        "SELECT COUNT(*) FROM invoices WHERE issue_date>=date('now','-30 days') AND status!='cancelled'"
+    ).fetchone()[0]
+    recent_tax = _f(db.execute(
+        "SELECT COALESCE(SUM(tax_total),0) FROM invoices WHERE issue_date>=date('now','-30 days') AND status!='cancelled'"
     ).fetchone()[0])
     inv_count = db.execute("SELECT COUNT(*) FROM invoices WHERE status!='cancelled'").fetchone()[0]
     product_count = db.execute("SELECT COUNT(*) FROM products WHERE is_active=1").fetchone()[0]
     supplier_count = db.execute("SELECT COUNT(*) FROM suppliers WHERE is_active=1").fetchone()[0]
+    in_transit_count = db.execute(
+        "SELECT COUNT(*) FROM dispatches WHERE status IN ('in_transit','partially_received')"
+    ).fetchone()[0]
     text = "\n".join([
+        f"─── All-time ───────────────────────",
+        f"Total sales (invoiced)  : {_inr(total_invoiced_all)}",
         f"Total revenue collected : {_inr(total_revenue)}",
         f"Outstanding (unpaid)    : {_inr(outstanding)}",
         f"Overdue                 : {overdue_count} invoice(s) totalling {_inr(overdue_amt)}",
@@ -1193,9 +1213,10 @@ def get_business_stats():
         f"Invoices (active)       : {inv_count}",
         f"Active products         : {product_count}",
         f"Active suppliers        : {supplier_count}",
+        f"In-transit dispatches   : {in_transit_count}",
         f"─── Last 30 days ───────────────────",
-        f"Invoiced                : {_inr(recent_inv)}",
-        f"Payments received       : {_inr(recent_pmts)}",
+        f"Sales (invoiced)        : {_inr(recent_inv)} across {recent_inv_count} invoice(s) · GST {_inr(recent_tax)}",
+        f"Revenue collected       : {_inr(recent_pmts)} · {recent_pmt_count} payment(s) from {recent_pmt_clients} client(s)",
     ])
     return jsonify({"result": text})
 
