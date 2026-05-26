@@ -13,6 +13,7 @@ MODULES = [
     "suppliers",
     "production",
     "transit",
+    "palm_purchase",
 ]
 
 # Dashboard sections (key, display label)

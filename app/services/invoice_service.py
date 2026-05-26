@@ -130,15 +130,59 @@ def check_stock_for_issue(invoice_id):
         row = db.execute(f"SELECT stock_qty FROM {tbl} WHERE id=?", (pk,)).fetchone()
         available = float(row["stock_qty"] or 0) if row else 0.0
         required  = float(it["quantity"])
-        name = it["sub_name"] or it["product_name"] or it["description"]
+        # Build a full name matching the line items display: "Parent — Variant"
+        if it["sub_name"] and it["product_name"]:
+            name = f"{it['product_name']} — {it['sub_name']}"
+        elif it["sub_name"]:
+            name = it["sub_name"]
+        elif it["product_name"]:
+            name = it["product_name"]
+        else:
+            name = it["description"]
         result.append({
-            "name":        name,
-            "description": it["description"],
-            "required":    required,
-            "available":   available,
-            "sufficient":  available >= required,
+            "name":           name,
+            "description":    it["description"],
+            "product_id":     pid,
+            "sub_product_id": spid,
+            "required":       required,
+            "available":      available,
+            "sufficient":     available >= required,
         })
     return result
+
+
+def _item_net(it):
+    """Per-line net (after item-level discount) and tax. Returns (line_net, line_tax)."""
+    qty   = float(it.get("quantity", 0) or 0)
+    price = float(it.get("unit_price", 0) or 0)
+    dval  = float(it.get("discount_value", 0) or 0)
+    dtype = (it.get("discount_type") or "percent").lower()
+    if dtype == "percent":
+        eff_price = price * (1.0 - dval / 100.0)
+    else:
+        eff_price = price - dval
+    if eff_price < 0:
+        eff_price = 0
+    line_net = eff_price * qty
+    line_tax = line_net * float(it.get("tax_rate", 0) or 0) / 100.0
+    return line_net, line_tax
+
+
+def _compute_totals(items, invoice_discount_value, invoice_discount_type):
+    subtotal  = 0.0
+    tax_total = 0.0
+    for it in items:
+        n, t = _item_net(it)
+        subtotal  += n
+        tax_total += t
+    dval  = float(invoice_discount_value or 0)
+    dtype = (invoice_discount_type or "value").lower()
+    if dtype == "percent":
+        discount_amount = (subtotal + tax_total) * dval / 100.0
+    else:
+        discount_amount = dval
+    total = subtotal + tax_total - discount_amount
+    return subtotal, tax_total, discount_amount, total
 
 
 def create_invoice(data, items):
@@ -146,27 +190,23 @@ def create_invoice(data, items):
     invoice_number = _next_invoice_number(db)
     is_draft = data.get("status", "issued") == "draft"
 
-    subtotal = sum(float(it["unit_price"]) * float(it["quantity"]) for it in items)
-    tax_total = sum(
-        float(it["unit_price"]) * float(it["quantity"]) * float(it.get("tax_rate", 0)) / 100
-        for it in items
-    )
-    discount = float(data.get("discount_amount", 0))
-    total = subtotal + tax_total - discount
+    inv_dtype = (data.get("discount_type") or "value").lower()
+    inv_dval  = float(data.get("discount_amount", 0) or 0)
+    subtotal, tax_total, discount, total = _compute_totals(items, inv_dval, inv_dtype)
 
     company_id = int(data["company_id"]) if data.get("company_id") else None
 
     cur = db.execute(
         """INSERT INTO invoices (invoice_number, client_id, company_id, status, issue_date, due_date,
-           notes, subtotal, tax_total, discount_amount, total)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           notes, subtotal, tax_total, discount_amount, discount_type, discount_value, total)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             invoice_number, data["client_id"], company_id,
             data.get("status", "issued"),
             data.get("issue_date", str(date.today())),
             data.get("due_date"),
             data.get("notes"),
-            subtotal, tax_total, discount, total,
+            subtotal, tax_total, discount, inv_dtype, inv_dval, total,
         ),
     )
     invoice_id = cur.lastrowid
@@ -175,11 +215,12 @@ def create_invoice(data, items):
         pid  = it.get("product_id") or None
         spid = it.get("sub_product_id") or None
         qty  = float(it["quantity"])
-        line_total = float(it["unit_price"]) * qty
+        line_net, _ = _item_net(it)
         db.execute(
             """INSERT INTO invoice_items
-               (invoice_id, product_id, sub_product_id, sku, description, quantity, unit_price, tax_rate, line_total)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               (invoice_id, product_id, sub_product_id, sku, description, quantity, unit_price,
+                tax_rate, discount_type, discount_value, line_total)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 invoice_id, pid, spid,
                 it.get("sku") or None,
@@ -187,7 +228,9 @@ def create_invoice(data, items):
                 qty,
                 float(it["unit_price"]),
                 float(it.get("tax_rate", 0)),
-                line_total,
+                (it.get("discount_type") or "percent").lower(),
+                float(it.get("discount_value", 0) or 0),
+                line_net,
             ),
         )
         # Deduct warehouse stock only when not saving as draft
@@ -278,34 +321,31 @@ def update_invoice_status(invoice_id, status):
 def update_invoice(invoice_id, data, items):
     db = get_db()
 
-    subtotal = sum(float(it["unit_price"]) * float(it["quantity"]) for it in items)
-    tax_total = sum(
-        float(it["unit_price"]) * float(it["quantity"]) * float(it.get("tax_rate", 0)) / 100
-        for it in items
-    )
-    discount = float(data.get("discount_amount", 0))
-    total = subtotal + tax_total - discount
+    inv_dtype = (data.get("discount_type") or "value").lower()
+    inv_dval  = float(data.get("discount_amount", 0) or 0)
+    subtotal, tax_total, discount, total = _compute_totals(items, inv_dval, inv_dtype)
 
     company_id = int(data["company_id"]) if data.get("company_id") else None
 
     db.execute(
         """UPDATE invoices SET client_id=?, company_id=?, status=?, issue_date=?, due_date=?,
-           notes=?, subtotal=?, tax_total=?, discount_amount=?, total=?
+           notes=?, subtotal=?, tax_total=?, discount_amount=?, discount_type=?, discount_value=?, total=?
            WHERE id=?""",
         (
             data["client_id"], company_id, data.get("status", "issued"),
             data.get("issue_date"), data.get("due_date"),
-            data.get("notes"), subtotal, tax_total, discount, total,
+            data.get("notes"), subtotal, tax_total, discount, inv_dtype, inv_dval, total,
             invoice_id,
         ),
     )
     db.execute("DELETE FROM invoice_items WHERE invoice_id = ?", (invoice_id,))
     for it in items:
-        line_total = float(it["unit_price"]) * float(it["quantity"])
+        line_net, _ = _item_net(it)
         db.execute(
             """INSERT INTO invoice_items
-               (invoice_id, product_id, sub_product_id, sku, description, quantity, unit_price, tax_rate, line_total)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               (invoice_id, product_id, sub_product_id, sku, description, quantity, unit_price,
+                tax_rate, discount_type, discount_value, line_total)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 invoice_id,
                 it.get("product_id") or None,
@@ -315,7 +355,9 @@ def update_invoice(invoice_id, data, items):
                 float(it["quantity"]),
                 float(it["unit_price"]),
                 float(it.get("tax_rate", 0)),
-                line_total,
+                (it.get("discount_type") or "percent").lower(),
+                float(it.get("discount_value", 0) or 0),
+                line_net,
             ),
         )
     db.commit()

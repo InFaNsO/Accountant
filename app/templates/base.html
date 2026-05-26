@@ -111,6 +111,17 @@
       Transit
     </a>
     {% endif %}
+    {% if current_user.has_permission('palm_purchase', 'view') %}
+    <a href="{{ url_for('palm_purchase.list_purchases') }}" class="nav-item {% if 'palm_purchase' in request.endpoint %}active{% endif %}">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 7h18l-2 13H5L3 7z"/>
+        <path d="M8 7V4a4 4 0 0 1 8 0v3"/>
+        <line x1="12" y1="11" x2="12" y2="16"/>
+        <line x1="9.5" y1="13.5" x2="14.5" y2="13.5"/>
+      </svg>
+      Palm Purchase
+    </a>
+    {% endif %}
     {% if current_user.is_god() %}
     <a href="{{ url_for('users.list_users') }}" class="nav-item {% if 'users' in request.endpoint %}active{% endif %}">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

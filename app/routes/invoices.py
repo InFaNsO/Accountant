@@ -11,10 +11,20 @@ def _build_product_choices():
     choices = []
     for p in product_service.get_all_products(active_only=True):
         subs = product_service.get_sub_products(p["id"])
+        # pcs_per_carton may not exist on older sub_products rows; fall back to parent's
+        ppc_parent = 0
+        try:
+            ppc_parent = int(p["pcs_per_carton"] or 0)
+        except (KeyError, IndexError, TypeError):
+            ppc_parent = 0
         if subs:
             for s in subs:
                 if not s["is_active"]:
                     continue
+                try:
+                    ppc_sub = int(s["pcs_per_carton"] or 0)
+                except (KeyError, IndexError, TypeError):
+                    ppc_sub = 0
                 choices.append({
                     "id":             f"sub_{s['id']}",
                     "product_id":     p["id"],
@@ -24,6 +34,7 @@ def _build_product_choices():
                     "unit_price":     p["unit_price"] if s["use_parent_price"] else (s["unit_price"] or 0),
                     "tax_rate":       p["tax_rate"] or 0,
                     "stock_qty":      s["stock_qty"] or 0,
+                    "pcs_per_carton": ppc_sub or ppc_parent,
                 })
         else:
             choices.append({
@@ -35,6 +46,7 @@ def _build_product_choices():
                 "unit_price":     p["unit_price"] or 0,
                 "tax_rate":       p["tax_rate"] or 0,
                 "stock_qty":      p["stock_qty"] or 0,
+                "pcs_per_carton": ppc_parent,
             })
     return choices
 
@@ -60,6 +72,8 @@ def _parse_items(form):
                 "quantity":       form.get(f"items[{idx}][quantity]", 1),
                 "unit_price":     form.get(f"items[{idx}][unit_price]", 0),
                 "tax_rate":       form.get(f"items[{idx}][tax_rate]", 0),
+                "discount_type":  (form.get(f"items[{idx}][discount_type]") or "percent").lower(),
+                "discount_value": form.get(f"items[{idx}][discount_value]", 0),
             })
     return items
 
@@ -69,6 +83,22 @@ def _parse_items(form):
 def api_client_companies(client_id):
     companies = client_service.get_companies(client_id)
     return jsonify([{"id": c["id"], "name": c["name"]} for c in companies])
+
+
+@bp.route("/api/stock-refresh")
+@login_required
+def api_stock_refresh():
+    """Return a map of current stock_qty for all products + sub-products.
+    Response: { "products": [{id, stock_qty}, ...], "sub_products": [{id, stock_qty}, ...] }
+    """
+    from ..database import get_db
+    db = get_db()
+    p_rows = db.execute("SELECT id, stock_qty FROM products WHERE is_active=1").fetchall()
+    s_rows = db.execute("SELECT id, stock_qty FROM sub_products WHERE is_active=1").fetchall()
+    return jsonify({
+        "products":     [{"id": r["id"], "stock_qty": float(r["stock_qty"] or 0)} for r in p_rows],
+        "sub_products": [{"id": r["id"], "stock_qty": float(r["stock_qty"] or 0)} for r in s_rows],
+    })
 
 
 @bp.route("/")
@@ -113,8 +143,32 @@ def detail(invoice_id):
     payments = invoice_service.get_invoice_payments(invoice_id)
     stock_status = (invoice_service.check_stock_for_issue(invoice_id)
                     if invoice["status"] == "draft" else [])
+    # Build pcs-per-carton map for the pcs/box toggle on the line items table
+    from ..database import get_db
+    db = get_db()
+    item_ppc = {}
+    for it in items:
+        ppc = 0
+        if it["sub_product_id"]:
+            try:
+                row = db.execute("SELECT pcs_per_carton FROM sub_products WHERE id=?",
+                                 (it["sub_product_id"],)).fetchone()
+                if row and row["pcs_per_carton"]:
+                    ppc = int(row["pcs_per_carton"] or 0)
+            except Exception:
+                ppc = 0
+        if not ppc and it["product_id"]:
+            try:
+                row = db.execute("SELECT pcs_per_carton FROM products WHERE id=?",
+                                 (it["product_id"],)).fetchone()
+                if row and row["pcs_per_carton"]:
+                    ppc = int(row["pcs_per_carton"] or 0)
+            except Exception:
+                ppc = 0
+        item_ppc[it["id"]] = ppc
     return render_template("invoices/detail.html", invoice=invoice, items=items,
-                           payments=payments, stock_status=stock_status)
+                           payments=payments, stock_status=stock_status,
+                           item_ppc=item_ppc)
 
 
 @bp.route("/<int:invoice_id>/edit", methods=["GET", "POST"])

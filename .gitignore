@@ -11,9 +11,12 @@ venv/
 *.env
 
 # Database (never commit production data)
-data/ledger.db
-data/*.db
-data/ledger.db
+data/
+*.db
+*.db-shm
+*.db-wal
+*.bak
+*.bak-*
 
 # Logs
 logs/

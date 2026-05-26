@@ -1,0 +1,272 @@
+{% extends "base.html" %}
+{% block title %}New Palm Purchase{% endblock %}
+{% block page_title %}New Palm Purchase{% endblock %}
+{% block topbar_actions %}
+  <a href="{{ url_for('palm_purchase.list_purchases') }}" class="btn btn-secondary">Cancel</a>
+{% endblock %}
+{% block content %}
+<div class="card">
+  <div class="card-header"><span class="card-title">Purchase Details</span></div>
+  <div class="card-body">
+    <form id="ppForm" method="post" action="{{ url_for('palm_purchase.new_purchase') }}">
+      <div class="form-grid form-grid-2" style="margin-bottom:24px">
+        <div class="form-group">
+          <label>Reference Name</label>
+          <input type="text" name="name" value="{{ pp.get('name','') }}" placeholder="e.g. Cash buy from local market">
+        </div>
+        <div class="form-group">
+          <label>Supplier</label>
+          <select name="supplier_id">
+            <option value="">— None / Walk-in —</option>
+            {% for s in suppliers %}
+            <option value="{{ s.id }}" {{ 'selected' if pp.get('supplier_id')|string == s.id|string }}>{{ s.name }}{% if s.company %} ({{ s.company }}){% endif %}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Purchase Date *</label>
+          <input type="date" name="purchase_date" value="{{ pp.get('purchase_date','') or today }}" required>
+        </div>
+        <div class="form-group">
+          <label>Notes</label>
+          <input type="text" name="notes" value="{{ pp.get('notes','') }}" placeholder="Bill no., remarks…">
+        </div>
+      </div>
+
+      <div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);margin-bottom:10px">Products</div>
+      <div class="alert" style="background:rgba(99,102,241,.08);border-left:3px solid #6366f1;padding:10px 14px;border-radius:4px;font-size:12px;color:var(--text-secondary);margin-bottom:14px">
+        ℹ Saving this purchase will <strong>immediately increase warehouse stock</strong> for each product by the quantity entered.
+      </div>
+      <div class="table-wrap" style="margin-bottom:12px">
+        <table id="itemsTable" style="table-layout:fixed;width:100%">
+          <colgroup>
+            <col style="width:42%"><col style="width:14%"><col style="width:14%"><col style="width:14%"><col style="width:auto"><col style="width:40px">
+          </colgroup>
+          <thead>
+            <tr>
+              <th>Product</th>
+              <th style="text-align:center">In Warehouse</th>
+              <th>Quantity *</th>
+              <th>Unit Cost (₹)</th>
+              <th>Notes</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="itemsBody"></tbody>
+        </table>
+      </div>
+      <button type="button" class="btn btn-secondary btn-sm" onclick="addRow()" style="margin-bottom:24px">+ Add Product</button>
+
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Save & Add to Stock</button>
+        <a href="{{ url_for('palm_purchase.list_purchases') }}" class="btn btn-secondary">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const CATALOG = {{ products | tojson }};
+let rowCount = 0;
+
+function escapeHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+/* ── Shared combobox dropdown (fixed-position, never clipped) ─────────────── */
+const _cbDD = (() => {
+  const el = document.createElement('div');
+  el.id = 'ppCbDropdown';
+  el.style.cssText =
+    'display:none;position:fixed;z-index:9500;background:var(--bg);' +
+    'border:1px solid var(--border);border-radius:var(--radius-sm);' +
+    'box-shadow:0 8px 32px rgba(0,0,0,.22);overflow-y:auto;' +
+    'max-height:310px;min-width:380px';
+  el._cursor = -1; el._matches = [];
+  document.body.appendChild(el);
+  return el;
+})();
+let _cbInput = null;
+
+function _cbPos(inp) {
+  const r = inp.getBoundingClientRect();
+  _cbDD.style.top   = (r.bottom + 3) + 'px';
+  _cbDD.style.left  = r.left + 'px';
+  _cbDD.style.width = Math.max(r.width, 400) + 'px';
+}
+window.addEventListener('scroll', () => { if (_cbInput) _cbPos(_cbInput); }, true);
+window.addEventListener('resize', () => { if (_cbInput) _cbPos(_cbInput); });
+
+function getSelectedKeys(excludeInput) {
+  const keys = new Set();
+  document.querySelectorAll('#itemsBody tr').forEach(tr => {
+    const cbInp = tr.querySelector('.cb-input');
+    if (cbInp === excludeInput) return;
+    const pid  = tr.querySelector('.pp-pid')?.value;
+    const spid = tr.querySelector('.pp-spid')?.value;
+    if (pid || spid) keys.add(spid ? `p${pid}_s${spid}` : `p${pid}`);
+  });
+  return keys;
+}
+
+function cbBuildOptions(query, excludeInput) {
+  const selectedKeys = getSelectedKeys(excludeInput);
+  const q = (query || '').trim().toLowerCase();
+  const filtered = CATALOG.filter(p => {
+    const key = p.sub_product_id ? `p${p.product_id}_s${p.sub_product_id}` : `p${p.product_id}`;
+    return !selectedKeys.has(key);
+  });
+  return q === ''
+    ? filtered
+    : filtered.filter(p =>
+        p.name.toLowerCase().includes(q) ||
+        (p.sku && p.sku.toLowerCase().includes(q))
+      );
+}
+
+function cbRender(input, matches) {
+  _cbInput = input; _cbDD._matches = matches; _cbDD._cursor = -1;
+  if (!matches.length) {
+    _cbDD.innerHTML = '<div style="padding:10px 14px;color:var(--text-muted);font-size:13px;font-style:italic">No products found</div>';
+  } else {
+    _cbDD.innerHTML = matches.map((p, i) => `
+      <div class="cb-option" data-idx="${i}" onmousedown="cbSelect(event,this)"
+           style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border);font-size:13px;line-height:1.4">
+        <div style="font-weight:600">${escapeHtml(p.name)}</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:2px;display:flex;gap:6px;align-items:center">
+          ${p.sku ? '<span style="background:var(--bg-alt);border-radius:3px;padding:1px 5px;font-family:monospace">' + escapeHtml(p.sku) + '</span>' : ''}
+          <span style="font-weight:600;color:var(--success)">₹${(p.unit_price||0).toFixed(2)}</span>
+          · <span>Stock: ${Number(p.stock_qty||0).toLocaleString('en-IN')}</span>
+        </div>
+      </div>`).join('');
+  }
+  _cbPos(input);
+  _cbDD.style.display = '';
+}
+
+function cbOpen(input) { cbRender(input, cbBuildOptions(input.value, input)); }
+
+function cbFilter(input) {
+  const tr = input.closest('tr');
+  tr.querySelector('.pp-pid').value  = '';
+  tr.querySelector('.pp-spid').value = '';
+  tr.querySelector('.pp-stock').textContent = '—';
+  cbRender(input, cbBuildOptions(input.value, input));
+}
+
+function cbBlur(input) {
+  setTimeout(() => {
+    if (_cbInput === input) { _cbDD.style.display = 'none'; _cbDD._cursor = -1; _cbInput = null; }
+  }, 180);
+}
+
+function cbSelect(event, optEl) {
+  event.preventDefault();
+  const idx = parseInt(optEl.dataset.idx, 10);
+  const p   = _cbDD._matches[idx];
+  if (!p || !_cbInput) return;
+
+  const tr = _cbInput.closest('tr');
+  _cbInput.value = p.name;
+  tr.querySelector('.pp-pid').value  = p.product_id     || '';
+  tr.querySelector('.pp-spid').value = p.sub_product_id || '';
+  tr.querySelector('.pp-stock').textContent =
+    (p.stock_qty != null ? Number(p.stock_qty).toLocaleString('en-IN') : '—');
+
+  const costInp = tr.querySelector('[name^="unit_cost_"]');
+  if (costInp && !costInp.value) costInp.value = (p.unit_price || 0);
+
+  _cbDD.style.display = 'none'; _cbInput = null;
+
+  // Auto-add a new row if this was the last row
+  const rows = document.querySelectorAll('#itemsBody tr');
+  if (tr === rows[rows.length - 1]) addRow();
+
+  // Move focus to the qty input
+  const qtyInp = tr.querySelector('[name^="quantity_"]');
+  if (qtyInp) qtyInp.focus();
+}
+
+function cbKey(event, input) {
+  if (_cbDD.style.display === 'none' || _cbInput !== input) {
+    cbOpen(input);
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const opts = _cbDD.querySelectorAll('.cb-option');
+      if (opts.length) {
+        _cbDD._cursor = event.key === 'ArrowDown' ? 0 : opts.length - 1;
+        opts[_cbDD._cursor].classList.add('cb-active');
+        opts[_cbDD._cursor].scrollIntoView({ block: 'nearest' });
+      }
+    }
+    return;
+  }
+  const opts = _cbDD.querySelectorAll('.cb-option');
+  if (!opts.length) return;
+  if (event.key === 'Escape') { _cbDD.style.display = 'none'; _cbInput = null; return; }
+  if (event.key === 'ArrowDown') {
+    event.preventDefault();
+    _cbDD._cursor = Math.min(_cbDD._cursor + 1, opts.length - 1);
+    opts.forEach((o, i) => o.classList.toggle('cb-active', i === _cbDD._cursor));
+    opts[_cbDD._cursor]?.scrollIntoView({ block: 'nearest' });
+  } else if (event.key === 'ArrowUp') {
+    event.preventDefault();
+    _cbDD._cursor = Math.max(_cbDD._cursor - 1, 0);
+    opts.forEach((o, i) => o.classList.toggle('cb-active', i === _cbDD._cursor));
+    opts[_cbDD._cursor]?.scrollIntoView({ block: 'nearest' });
+  } else if (event.key === 'Enter') {
+    event.preventDefault();
+    const cursor = _cbDD._cursor >= 0 ? _cbDD._cursor : 0;
+    if (opts[cursor]) cbSelect(event, opts[cursor]);
+  }
+}
+
+function addRow(prefill) {
+  const i = rowCount++;
+  prefill = prefill || {};
+  // Resolve initial display name from prefill (used when re-rendering on form errors)
+  let initName = '';
+  let initStock = '—';
+  let initUnitPrice = '';
+  if (prefill.product_id || prefill.sub_product_id) {
+    const m = CATALOG.find(p =>
+      String(p.product_id) === String(prefill.product_id) &&
+      String(p.sub_product_id || '') === String(prefill.sub_product_id || ''));
+    if (m) {
+      initName = m.name;
+      initStock = (m.stock_qty != null ? Number(m.stock_qty).toLocaleString('en-IN') : '—');
+      initUnitPrice = m.unit_price || '';
+    }
+  }
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td>
+      <input type="text" class="cb-input" value="${escapeHtml(initName)}"
+             placeholder="Search product by name or SKU…" autocomplete="off"
+             oninput="cbFilter(this)" onfocus="cbOpen(this)" onblur="cbBlur(this)" onkeydown="cbKey(event,this)"
+             style="width:100%">
+      <input type="hidden" name="product_id_${i}"     class="pp-pid"  value="${prefill.product_id || ''}">
+      <input type="hidden" name="sub_product_id_${i}" class="pp-spid" value="${prefill.sub_product_id || ''}">
+    </td>
+    <td style="text-align:center" class="pp-stock muted">${initStock}</td>
+    <td><input type="number" name="quantity_${i}"  min="0.01" step="any"  value="${prefill.quantity || ''}"  required style="text-align:right"></td>
+    <td><input type="number" name="unit_cost_${i}" min="0"    step="0.01" value="${prefill.unit_cost || initUnitPrice}" style="text-align:right"></td>
+    <td><input type="text"   name="notes_${i}"     value="${escapeHtml(prefill.notes || 'Palm Purchase')}" placeholder="Optional"></td>
+    <td><button type="button" class="btn btn-danger btn-sm" onclick="this.closest('tr').remove()" title="Remove">✕</button></td>
+  `;
+  document.getElementById('itemsBody').appendChild(tr);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  addRow();
+});
+</script>
+
+<style>
+#ppCbDropdown .cb-option:hover,
+#ppCbDropdown .cb-option.cb-active { background: var(--bg-alt, #f8fafc); }
+#ppCbDropdown .cb-option:last-child { border-bottom: none; }
+</style>
+{% endblock %}

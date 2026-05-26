@@ -145,6 +145,7 @@ def create_app():
         from .routes.suppliers  import bp as suppliers_bp
         from .routes.production import bp as production_bp
         from .routes.transit    import bp as transit_bp
+        from .routes.palm_purchase import bp as palm_purchase_bp
         from .routes.api        import bp as api_bp
         from .routes.tallies    import bp as tallies_bp
         from .routes.mobile     import bp as mobile_bp
@@ -159,6 +160,7 @@ def create_app():
         app.register_blueprint(suppliers_bp)
         app.register_blueprint(production_bp)
         app.register_blueprint(transit_bp)
+        app.register_blueprint(palm_purchase_bp)
         app.register_blueprint(api_bp)
         app.register_blueprint(tallies_bp)
         app.register_blueprint(mobile_bp)

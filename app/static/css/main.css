@@ -580,6 +580,32 @@ html.show-boxes .unit-knob { transform:translateX(0); }
 }
 .invoice-scroll::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
+/* ── Global scrollbar theming ──────────────────────────────
+   Applies to every scroll container (horizontal + vertical),
+   including table overflow wrappers. Firefox uses the two
+   `scrollbar-*` properties; WebKit/Chromium uses ::-webkit-*. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner { background: var(--bg-alt); }
+*::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 99px;
+  border: 2px solid var(--bg-alt);   /* inset look — matches the track */
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:active {
+  background: var(--accent);
+  background-clip: padding-box;
+}
+
 /* ── Responsive: Tablet + Mobile (≤ 900px) ────────────────── */
 @media (max-width: 900px) {
   .form-grid-2, .form-grid-3 { grid-template-columns: 1fr; }

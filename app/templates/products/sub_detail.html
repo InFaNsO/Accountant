@@ -160,12 +160,17 @@
                 <span class="badge" style="background:rgba(239,68,68,.12);color:var(--danger)">▼ Reduced</span>
               {% elif m.movement_type == 'add' %}
                 <span class="badge badge-active">Correction / Added</span>
+              {% elif m.movement_type == 'palm_purchase' %}
+                <span class="badge" style="background:rgba(16,185,129,.15);color:#10b981">▲ Palm Purchase</span>
+                {% if m.palm_purchase_id %}<span class="muted" style="font-size:12px;margin-left:6px">PP #{{ m.palm_purchase_id }}</span>{% endif %}
+              {% elif m.movement_type == 'palm_purchase_reversed' %}
+                <span class="badge" style="background:rgba(239,68,68,.12);color:var(--danger)">▼ Palm Purchase Reversed</span>
               {% else %}
                 <span class="badge">{{ m.movement_type }}</span>
               {% endif %}
             </td>
-            <td style="text-align:right;font-weight:700;color:{% if m.movement_type in ('sale','warehouse_deduct') %}#ef9a9a{% else %}var(--success){% endif %}">
-              {% if m.movement_type in ('sale','warehouse_deduct') %}-{% else %}+{% endif %}{{ stock_val(m.quantity, product.pcs_per_carton) }}
+            <td style="text-align:right;font-weight:700;color:{% if m.movement_type in ('sale','warehouse_deduct','palm_purchase_reversed') %}#ef9a9a{% else %}var(--success){% endif %}">
+              {% if m.movement_type in ('sale','warehouse_deduct','palm_purchase_reversed') %}-{% else %}+{% endif %}{{ stock_val(m.quantity, product.pcs_per_carton) }}
             </td>
             <td class="muted" style="font-size:12px">{{ m.notes or '—' }}</td>
           </tr>

@@ -2483,3 +2483,224 @@ def apply_tally_api(tally_id):
     if not ok:
         return jsonify({"error": err}), 400
     return jsonify({"result": f"Tally {tally_id} applied — stock quantities updated to match physical counts."})
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PALM PURCHASES — instant warehouse stock-in
+# ═════════════════════════════════════════════════════════════════════════════
+
+@bp.route("/palm-purchases")
+@require_auth
+def api_list_palm_purchases():
+    from ..services import palm_purchase_service
+    rows = palm_purchase_service.get_all_palm_purchases()
+    out = []
+    for r in rows:
+        out.append({
+            "id":            r["id"],
+            "name":          r["name"],
+            "supplier_id":   r["supplier_id"],
+            "supplier_name": r["supplier_name"],
+            "purchase_date": r["purchase_date"],
+            "total_cost":    r["total_cost"],
+            "total_qty":     r["total_qty"],
+            "item_count":    r["item_count"],
+            "notes":         r["notes"],
+            "created_at":    r["created_at"],
+        })
+    return jsonify({"result": out})
+
+
+@bp.route("/palm-purchases/<int:pp_id>")
+@require_auth
+def api_get_palm_purchase(pp_id):
+    from ..services import palm_purchase_service
+    pp = palm_purchase_service.get_palm_purchase(pp_id)
+    if not pp:
+        return jsonify({"error": f"Palm purchase {pp_id} not found"}), 404
+    items = palm_purchase_service.get_palm_purchase_items(pp_id)
+    return jsonify({"result": {
+        "id":            pp["id"],
+        "name":          pp["name"],
+        "supplier_id":   pp["supplier_id"],
+        "supplier_name": pp["supplier_name"],
+        "purchase_date": pp["purchase_date"],
+        "total_cost":    pp["total_cost"],
+        "notes":         pp["notes"],
+        "created_at":    pp["created_at"],
+        "items": [{
+            "id":             it["id"],
+            "product_id":     it["product_id"],
+            "sub_product_id": it["sub_product_id"],
+            "display_name":   it["display_name"],
+            "sku":            it["sub_sku"] or it["product_sku"],
+            "quantity":       it["quantity"],
+            "unit_cost":      it["unit_cost"],
+            "line_cost":      (it["quantity"] or 0) * (it["unit_cost"] or 0),
+            "notes":          it["notes"],
+        } for it in items],
+    }})
+
+
+@bp.route("/palm-purchases", methods=["POST"])
+@require_auth
+def api_create_palm_purchase():
+    """Create a palm purchase. Body:
+       { "supplier_id": int|null, "purchase_date": "YYYY-MM-DD" (default today),
+         "name": str?, "notes": str?,
+         "items": [ {"product_id":int, "sub_product_id":int?, "quantity":number, "unit_cost":number?, "notes":str?}, ... ] }
+       Increments warehouse stock_qty for each item and records a stock_movement of type 'palm_purchase'.
+    """
+    from ..services import palm_purchase_service
+    data = _jb()
+    items = data.get("items") or []
+    if not isinstance(items, list) or not items:
+        return jsonify({"error": "items[] is required (list of {product_id, sub_product_id?, quantity, unit_cost?})"}), 400
+    pdata = {
+        "name":          data.get("name") or "",
+        "supplier_id":   data.get("supplier_id") or None,
+        "purchase_date": data.get("purchase_date") or str(date.today()),
+        "notes":         data.get("notes") or "",
+    }
+    try:
+        pp_id = palm_purchase_service.create_palm_purchase(pdata, items)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    pp = palm_purchase_service.get_palm_purchase(pp_id)
+    out = palm_purchase_service.get_palm_purchase_items(pp_id)
+    total_qty = sum(float(it["quantity"] or 0) for it in out)
+    lines = [
+        f"✓ Palm purchase #{pp_id} recorded — warehouse stock increased.",
+        f"  Date: {pp['purchase_date']} | Supplier: {pp['supplier_name'] or 'walk-in'} | Items: {len(out)} | Total qty added: {total_qty:.2f}",
+    ]
+    for it in out:
+        lines.append(f"  • {it['display_name']}: +{float(it['quantity']):.2f}"
+                     + (f"  @ {_inr(it['unit_cost'])}" if it["unit_cost"] else ""))
+    return jsonify({"result": "\n".join(lines)})
+
+
+@bp.route("/palm-purchases/<int:pp_id>", methods=["DELETE"])
+@require_auth
+def api_delete_palm_purchase(pp_id):
+    from ..services import palm_purchase_service
+    pp = palm_purchase_service.get_palm_purchase(pp_id)
+    if not pp:
+        return jsonify({"error": f"Palm purchase {pp_id} not found"}), 404
+    palm_purchase_service.delete_palm_purchase(pp_id)
+    return jsonify({"result": f"✓ Palm purchase #{pp_id} deleted — warehouse stock reversed."})
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# STOCK HISTORY — movement audit trail
+# ═════════════════════════════════════════════════════════════════════════════
+
+# Buckets group movement_types so callers can filter by where stock lives.
+_BUCKET_MOVEMENT_TYPES = {
+    "warehouse": ("opening", "add", "sale", "sale_cancelled",
+                  "warehouse_add", "warehouse_deduct",
+                  "correction", "palm_purchase", "palm_purchase_reversed",
+                  "arrival", "transit_arrival"),
+    "production": ("production", "production_add", "production_deduct"),
+    "transit":    ("dispatch", "transit_dispatch",
+                   "dispatch_add", "dispatch_deduct"),
+}
+
+
+@bp.route("/products/<int:product_id>/stock-history")
+@require_auth
+def api_product_stock_history(product_id):
+    """Return chronological stock movements for a product (and optionally a sub-product).
+    Query params:
+      sub_product_id (int, optional) — if set, only movements for that sub-product
+      bucket (warehouse|production|transit, optional) — filter by stock bucket
+      limit (int, default 100, max 500)
+    """
+    db = get_db()
+    sub_product_id = request.args.get("sub_product_id", type=int)
+    bucket = (request.args.get("bucket") or "").strip().lower() or None
+    try:
+        limit = int(request.args.get("limit", 100))
+    except (TypeError, ValueError):
+        limit = 100
+    limit = max(1, min(limit, 500))
+
+    # Existence check
+    prod = db.execute("SELECT name FROM products WHERE id=?", (product_id,)).fetchone()
+    if not prod:
+        return jsonify({"error": f"Product {product_id} not found"}), 404
+    sub_name = None
+    if sub_product_id:
+        srow = db.execute("SELECT name FROM sub_products WHERE id=? AND product_id=?",
+                          (sub_product_id, product_id)).fetchone()
+        if not srow:
+            return jsonify({"error": f"Sub-product {sub_product_id} not found under product {product_id}"}), 404
+        sub_name = srow["name"]
+
+    where = ["product_id = ?"]
+    params = [product_id]
+    if sub_product_id is not None:
+        where.append("sub_product_id = ?")
+        params.append(sub_product_id)
+    else:
+        # default: include all movements for the product (with or without sub_product)
+        pass
+
+    if bucket:
+        if bucket not in _BUCKET_MOVEMENT_TYPES:
+            return jsonify({"error": "bucket must be one of: warehouse, production, transit"}), 400
+        types = _BUCKET_MOVEMENT_TYPES[bucket]
+        placeholders = ",".join("?" * len(types))
+        where.append(f"movement_type IN ({placeholders})")
+        params.extend(types)
+
+    sql = (
+        f"SELECT id, product_id, sub_product_id, movement_type, quantity, "
+        f"       notes, invoice_id, dispatch_id, palm_purchase_id, "
+        f"       expected_arrival, linked_movement_id, created_at "
+        f"FROM stock_movements WHERE {' AND '.join(where)} "
+        f"ORDER BY created_at DESC, id DESC LIMIT ?"
+    )
+    params.append(limit)
+    rows = db.execute(sql, params).fetchall()
+
+    history = []
+    for r in rows:
+        history.append({
+            "id":             r["id"],
+            "type":           r["movement_type"],
+            "quantity":       r["quantity"],
+            "notes":          r["notes"],
+            "invoice_id":     r["invoice_id"],
+            "dispatch_id":    r["dispatch_id"],
+            "palm_purchase_id": r["palm_purchase_id"],
+            "linked_id":      r["linked_movement_id"],
+            "expected_arrival": r["expected_arrival"],
+            "sub_product_id": r["sub_product_id"],
+            "created_at":     r["created_at"],
+        })
+
+    # Current bucket levels for context
+    if sub_product_id:
+        cur_row = db.execute(
+            "SELECT stock_qty, production_qty, in_transit_qty FROM sub_products WHERE id=?",
+            (sub_product_id,)).fetchone()
+    else:
+        cur_row = db.execute(
+            "SELECT stock_qty, production_qty, in_transit_qty FROM products WHERE id=?",
+            (product_id,)).fetchone()
+
+    return jsonify({"result": {
+        "product_id":     product_id,
+        "product_name":   prod["name"],
+        "sub_product_id": sub_product_id,
+        "sub_product_name": sub_name,
+        "bucket_filter":  bucket,
+        "current": {
+            "warehouse":  (cur_row["stock_qty"] if cur_row else 0) or 0,
+            "production": (cur_row["production_qty"] if cur_row else 0) or 0,
+            "transit":    (cur_row["in_transit_qty"] if cur_row else 0) or 0,
+        },
+        "history": history,
+        "count":   len(history),
+        "limit":   limit,
+    }})

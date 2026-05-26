@@ -291,6 +291,33 @@ def _create_schema(db):
         PRAGMA foreign_keys = ON;
     """)
 
+    # ── Palm purchases (instant warehouse stock-in) ───────────
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS palm_purchases (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            name          TEXT,
+            supplier_id   INTEGER,
+            purchase_date DATE NOT NULL,
+            notes         TEXT,
+            total_cost    REAL DEFAULT 0,
+            created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (supplier_id) REFERENCES suppliers(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS palm_purchase_items (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            palm_purchase_id INTEGER NOT NULL,
+            product_id       INTEGER,
+            sub_product_id   INTEGER,
+            quantity         REAL NOT NULL,
+            unit_cost        REAL DEFAULT 0,
+            notes            TEXT,
+            FOREIGN KEY (palm_purchase_id) REFERENCES palm_purchases(id) ON DELETE CASCADE,
+            FOREIGN KEY (product_id)       REFERENCES products(id),
+            FOREIGN KEY (sub_product_id)   REFERENCES sub_products(id)
+        );
+    """)
+
     # ── Manual ledger entries ─────────────────────────────────
     db.executescript("""
         CREATE TABLE IF NOT EXISTS ledger_entries (
@@ -423,5 +450,13 @@ def _create_schema(db):
     _add_column(db, "sub_products",          "eco_parent_sub_id", "INTEGER")
     _add_column(db, "purchase_order_items",  "product_name",      "TEXT")
     _add_column(db, "dispatch_items",        "product_name",      "TEXT")
+    # Discount type/value: invoice-level (default 'value' so existing flat-Rs data is preserved)
+    _add_column(db, "invoices",              "discount_type",     "TEXT DEFAULT 'value'")
+    _add_column(db, "invoices",              "discount_value",    "REAL DEFAULT 0")
+    # Per-line-item discount (default 'percent' with value 0 → 0% discount)
+    _add_column(db, "invoice_items",         "discount_type",     "TEXT DEFAULT 'percent'")
+    _add_column(db, "invoice_items",         "discount_value",    "REAL DEFAULT 0")
+    _add_column(db, "sub_products",          "pcs_per_carton",    "INTEGER DEFAULT 0")
+    _add_column(db, "stock_movements",        "palm_purchase_id", "INTEGER")
 
     db.commit()

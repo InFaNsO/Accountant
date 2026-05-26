@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Palm Purchase{% endblock %}
+{% block page_title %}Palm Purchase{% endblock %}
+{% block topbar_actions %}
+  <a href="{{ url_for('palm_purchase.new_purchase') }}" class="btn btn-primary">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    New Palm Purchase
+  </a>
+{% endblock %}
+{% block content %}
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">All Palm Purchases ({{ purchases|length }})</span>
+    <input type="search" placeholder="Search…" style="width:200px" oninput="filterTable(this.value,'ppTable')">
+  </div>
+  {% if purchases %}
+  <div class="table-wrap">
+    <table id="ppTable">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Name / Reference</th>
+          <th>Supplier</th>
+          <th style="text-align:center">Items</th>
+          <th style="text-align:right">Total Qty</th>
+          <th style="text-align:right">Total Cost</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for pp in purchases %}
+        <tr>
+          <td class="muted">{{ pp.purchase_date }}</td>
+          <td class="fw-700">
+            <a href="{{ url_for('palm_purchase.detail', pp_id=pp.id) }}" style="color:var(--accent);text-decoration:none">
+              {{ pp.name or ('Palm Purchase #' ~ pp.id) }}
+            </a>
+          </td>
+          <td class="muted">{{ pp.supplier_name or '—' }}</td>
+          <td style="text-align:center" class="muted">{{ pp.item_count }}</td>
+          <td style="text-align:right">{{ pp.total_qty | indian }}</td>
+          <td style="text-align:right" class="fw-700">{{ pp.total_cost|inr }}</td>
+          <td style="text-align:right;white-space:nowrap">
+            <a href="{{ url_for('palm_purchase.detail', pp_id=pp.id) }}" class="btn btn-secondary btn-sm">View</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <h3>No palm purchases yet</h3>
+    <p>Record a palm purchase whenever goods are bought directly and added to warehouse stock immediately.</p>
+    <a href="{{ url_for('palm_purchase.new_purchase') }}" class="btn btn-primary">Record First Purchase</a>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -803,6 +803,99 @@ def apply_stock_tally(tally_id: int) -> str:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# PALM PURCHASES — direct cash/spot purchases that land straight in warehouse
+# ═════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def list_palm_purchases() -> str:
+    """List all palm purchases (instant warehouse stock-in records), most recent first.
+    Each entry shows date, supplier, total qty added, and total cost."""
+    return _call("GET", "palm-purchases")
+
+
+@mcp.tool()
+def get_palm_purchase(pp_id: int) -> str:
+    """Get full details of a palm purchase including its line items (products, qty, unit cost)."""
+    return _call("GET", f"palm-purchases/{pp_id}")
+
+
+@mcp.tool()
+def create_palm_purchase(
+    items: list,
+    supplier_id: int = None,
+    purchase_date: str = None,
+    name: str = "",
+    notes: str = "",
+) -> str:
+    """
+    Record a palm purchase — instant cash/spot buy. Warehouse stock_qty is immediately
+    increased for each product/sub-product by the quantity provided, and a
+    'palm_purchase' stock_movement is logged for the audit trail.
+
+    items: list of dicts, each with:
+       product_id (int, required),
+       sub_product_id (int, optional — required when buying a variant),
+       quantity (number, required, must be > 0),
+       unit_cost (number, optional),
+       notes (str, optional)
+    supplier_id: optional supplier; omit for walk-in / unknown.
+    purchase_date: YYYY-MM-DD; defaults to today.
+
+    ONLY call after explicit user confirmation — this physically updates warehouse stock.
+    """
+    body = {"items": items}
+    if supplier_id is not None:   body["supplier_id"]   = supplier_id
+    if purchase_date is not None: body["purchase_date"] = purchase_date
+    if name:                      body["name"]          = name
+    if notes:                     body["notes"]         = notes
+    return _call("POST", "palm-purchases", body=body)
+
+
+@mcp.tool()
+def delete_palm_purchase(pp_id: int) -> str:
+    """
+    Delete a palm purchase — REVERSES the warehouse stock added by it.
+    Permanent and cannot be undone. ONLY call after explicit user confirmation.
+    """
+    return _call("DELETE", f"palm-purchases/{pp_id}")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# STOCK HISTORY — audit trail for any product / sub-product across buckets
+# ═════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def get_product_stock_history(
+    product_id: int,
+    sub_product_id: int = None,
+    bucket: str = None,
+    limit: int = 100,
+) -> str:
+    """
+    Chronological stock movement history for a product (or sub-product).
+    Returns current warehouse/production/transit levels + the most recent N movements.
+
+    Each movement has a `type` such as:
+      - opening, add, warehouse_add, warehouse_deduct, correction  (warehouse bucket)
+      - production, production_add, production_deduct             (production bucket)
+      - dispatch, transit_dispatch, dispatch_add, dispatch_deduct  (transit bucket)
+      - transit_arrival, arrival                                   (transit → warehouse)
+      - sale, sale_cancelled                                       (warehouse, via invoices)
+      - palm_purchase, palm_purchase_reversed                      (warehouse, instant buys)
+
+    Args:
+      product_id:     required.
+      sub_product_id: optional — restricts to that variant.
+      bucket:         optional — one of "warehouse" | "production" | "transit".
+      limit:          number of most recent movements (default 100, max 500).
+    """
+    params = {"limit": limit}
+    if sub_product_id is not None: params["sub_product_id"] = sub_product_id
+    if bucket:                     params["bucket"]         = bucket
+    return _call("GET", f"products/{product_id}/stock-history", params=params)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # ENTRY POINT
 # ═════════════════════════════════════════════════════════════════════════════
 

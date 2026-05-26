@@ -110,7 +110,8 @@ def product_detail(product_id):
         warehouse_history  = product_service.get_stock_history(
             product_id=product_id,
             movement_types=["opening", "add", "arrival", "transit_arrival", "correction",
-                            "warehouse_add", "warehouse_deduct", "sale", "sale_cancelled"])
+                            "warehouse_add", "warehouse_deduct", "sale", "sale_cancelled",
+                            "palm_purchase", "palm_purchase_reversed"])
         production_history = product_service.get_stock_history(
             product_id=product_id,
             movement_types=["production", "production_add", "production_deduct"])
@@ -361,7 +362,8 @@ def sub_detail(product_id, sub_id):
     warehouse_history  = product_service.get_stock_history(
         sub_id=sub_id,
         movement_types=["opening", "add", "arrival", "transit_arrival", "correction",
-                        "warehouse_add", "warehouse_deduct", "sale", "sale_cancelled"])
+                        "warehouse_add", "warehouse_deduct", "sale", "sale_cancelled",
+                        "palm_purchase", "palm_purchase_reversed"])
     production_history = product_service.get_stock_history(
         sub_id=sub_id,
         movement_types=["production", "production_add", "production_deduct"])

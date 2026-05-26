@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}{{ pp.name or ('Palm Purchase #' ~ pp.id) }}{% endblock %}
+{% block page_title %}{{ pp.name or ('Palm Purchase #' ~ pp.id) }}{% endblock %}
+{% block topbar_actions %}
+  <form method="post" action="{{ url_for('palm_purchase.delete', pp_id=pp.id) }}"
+        onsubmit="return confirm('Delete this palm purchase? The stock added to warehouse will be reversed.')"
+        style="display:inline">
+    <button class="btn btn-danger">Delete</button>
+  </form>
+  <a href="{{ url_for('palm_purchase.list_purchases') }}" class="btn btn-secondary">Back</a>
+{% endblock %}
+{% block content %}
+
+<div class="invoice-header-box">
+  <div class="card">
+    <div class="card-header"><span class="card-title">Purchase Info</span></div>
+    <div class="card-body">
+      <div class="info-list">
+        <div class="info-row"><span class="info-label">Reference</span><span class="info-value fw-700">{{ pp.name or '—' }}</span></div>
+        <div class="info-row"><span class="info-label">Supplier</span><span class="info-value">{{ pp.supplier_name or 'Walk-in / Other' }}</span></div>
+        <div class="info-row"><span class="info-label">Date</span><span class="info-value">{{ pp.purchase_date }}</span></div>
+        <div class="info-row"><span class="info-label">Created</span><span class="info-value muted">{{ pp.created_at[:16] }}</span></div>
+        {% if pp.notes %}<div class="info-row"><span class="info-label">Notes</span><span class="info-value muted">{{ pp.notes }}</span></div>{% endif %}
+      </div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-header"><span class="card-title">Stock Impact</span></div>
+    <div class="card-body">
+      <div class="info-list">
+        <div class="info-row"><span class="info-label">Items</span><span class="info-value fw-700">{{ items|length }}</span></div>
+        <div class="info-row"><span class="info-label">Total Qty Added</span>
+          <span class="info-value fw-700" style="color:var(--success)">+{{ items|sum(attribute='quantity') | indian }}</span></div>
+        <div class="info-row"><span class="info-label">Total Cost</span><span class="info-value fw-700">{{ pp.total_cost|inr }}</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card" style="margin-top:18px">
+  <div class="card-header"><span class="card-title">Items Added to Warehouse</span></div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:45%">Product</th>
+          <th style="text-align:right">Quantity</th>
+          <th style="text-align:right">Unit Cost</th>
+          <th style="text-align:right">Line Cost</th>
+          <th>Notes</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for it in items %}
+        <tr>
+          <td>
+            <div class="fw-700">{{ it.display_name }}</div>
+            {% if it.sub_sku or it.product_sku %}<div style="font-size:11px;color:var(--text-muted);font-family:'SF Mono','Fira Code',monospace;margin-top:2px">{{ it.sub_sku or it.product_sku }}</div>{% endif %}
+          </td>
+          <td style="text-align:right;color:var(--success);font-weight:600">+{{ it.quantity | indian }}</td>
+          <td style="text-align:right">{{ it.unit_cost|inr }}</td>
+          <td style="text-align:right" class="fw-700">{{ (it.quantity * it.unit_cost)|inr }}</td>
+          <td class="muted">{{ it.notes or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

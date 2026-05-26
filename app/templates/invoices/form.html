@@ -59,8 +59,18 @@
         </div>
 
         <div class="form-group">
-          <label for="discount_amount">Discount (₹)</label>
-          <input type="number" id="discount_amount" name="discount_amount" value="{{ invoice.get('discount_amount', 0) }}" step="0.01" min="0" oninput="recalcTotals()">
+          <label for="discount_amount">Discount</label>
+          <div style="display:flex;align-items:stretch;gap:0">
+            <input type="number" id="discount_amount" name="discount_amount"
+                   value="{{ invoice.get('discount_value', invoice.get('discount_amount', 0)) }}"
+                   step="0.01" min="0" oninput="recalcTotals()"
+                   style="flex:1;border-top-right-radius:0;border-bottom-right-radius:0;border-right:none">
+            <select id="discount_type" name="discount_type" onchange="recalcTotals()"
+                    style="width:62px;border-top-left-radius:0;border-bottom-left-radius:0">
+              <option value="value"   {{ 'selected' if (invoice.get('discount_type') or 'value') == 'value' }}>₹</option>
+              <option value="percent" {{ 'selected' if invoice.get('discount_type') == 'percent' }}>%</option>
+            </select>
+          </div>
         </div>
 
         <div class="form-group" id="companyWrap" style="display:none">
@@ -83,18 +93,25 @@
   <div class="card" style="margin-bottom:18px">
     <div class="card-header">
       <span class="card-title">Line Items</span>
-      <button type="button" class="btn btn-secondary" onclick="addLineItem()">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        Add Item
-      </button>
+      <div style="display:flex;gap:8px;margin-left:auto">
+        <button type="button" class="btn btn-secondary" onclick="refreshStock(this)" title="Refresh warehouse stock quantities">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+          Refresh Stock
+        </button>
+        <button type="button" class="btn btn-secondary" onclick="addLineItem()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          Add Item
+        </button>
+      </div>
     </div>
     <div class="table-wrap">
-      <table class="line-items" style="min-width:700px">
+      <table class="line-items" style="min-width:820px">
         <thead>
           <tr>
             <th>Product / Description</th>
             <th style="width:80px;text-align:right">Qty</th>
             <th style="width:130px;text-align:right">Unit Price (₹)</th>
+            <th style="width:130px;text-align:right">Discount</th>
             <th style="width:70px;text-align:center">Tax %</th>
             <th style="width:120px;text-align:right">Total</th>
             <th style="width:36px"></th>
@@ -130,6 +147,15 @@
             </td>
             <td class="col-price" style="vertical-align:top;padding-top:10px">
               <input type="number" name="items[{{ loop.index0 }}][unit_price]" value="{{ item.get('unit_price',0) }}" min="0"    step="0.01" oninput="recalcTotals()" style="text-align:right">
+            </td>
+            <td class="col-disc" style="vertical-align:top;padding-top:10px">
+              <div style="display:flex;align-items:stretch;gap:0">
+                <input type="number" name="items[{{ loop.index0 }}][discount_value]" value="{{ item.get('discount_value',0) }}" min="0" step="0.01" oninput="recalcTotals()" style="text-align:right;flex:1;border-top-right-radius:0;border-bottom-right-radius:0;border-right:none;min-width:0">
+                <select name="items[{{ loop.index0 }}][discount_type]" onchange="recalcTotals()" style="width:54px;border-top-left-radius:0;border-bottom-left-radius:0">
+                  <option value="percent" {{ 'selected' if (item.get('discount_type') or 'percent') == 'percent' }}>%</option>
+                  <option value="value"   {{ 'selected' if item.get('discount_type') == 'value' }}>₹</option>
+                </select>
+              </div>
             </td>
             <td class="col-tax" style="vertical-align:top;padding-top:10px">
               <input type="number" name="items[{{ loop.index0 }}][tax_rate]"   value="{{ item.get('tax_rate',0) }}"   min="0"    max="100"   step="0.01" oninput="recalcTotals()" style="text-align:center">
@@ -601,6 +627,15 @@ function addLineItem(desc='', sku='', qty=1, price=0, tax=0, pid='', spid='') {
     <td class="col-price" style="vertical-align:top;padding-top:10px">
       <input type="number" name="items[${idx}][unit_price]" value="${price}" min="0"    step="0.01" oninput="recalcTotals()" style="text-align:right">
     </td>
+    <td class="col-disc"  style="vertical-align:top;padding-top:10px">
+      <div style="display:flex;align-items:stretch;gap:0">
+        <input type="number" name="items[${idx}][discount_value]" value="0" min="0" step="0.01" oninput="recalcTotals()" style="text-align:right;flex:1;border-top-right-radius:0;border-bottom-right-radius:0;border-right:none;min-width:0">
+        <select name="items[${idx}][discount_type]" onchange="recalcTotals()" style="width:54px;border-top-left-radius:0;border-bottom-left-radius:0">
+          <option value="percent" selected>%</option>
+          <option value="value">₹</option>
+        </select>
+      </div>
+    </td>
     <td class="col-tax"   style="vertical-align:top;padding-top:10px">
       <input type="number" name="items[${idx}][tax_rate]"   value="${tax}"   min="0"    max="100"   step="0.01" oninput="recalcTotals()" style="text-align:center">
     </td>
@@ -635,16 +670,57 @@ function recalcTotals() {
     const qty   = parseFloat(tr.querySelector('[name$="[quantity]"]')?.value)   || 0;
     const price = parseFloat(tr.querySelector('[name$="[unit_price]"]')?.value) || 0;
     const tax   = parseFloat(tr.querySelector('[name$="[tax_rate]"]')?.value)   || 0;
-    const lineTotal = qty * price;
+    const dval  = parseFloat(tr.querySelector('[name$="[discount_value]"]')?.value) || 0;
+    const dtype = tr.querySelector('[name$="[discount_type]"]')?.value || 'percent';
+    let effPrice = dtype === 'percent' ? price * (1 - dval / 100) : price - dval;
+    if (effPrice < 0) effPrice = 0;
+    const lineTotal = effPrice * qty;
     subtotal += lineTotal; taxTotal += lineTotal * tax / 100;
     const disp = tr.querySelector('.line-total-disp');
     if (disp) disp.textContent = formatINR(lineTotal);
   });
-  const discount = parseFloat(document.getElementById('discount_amount')?.value) || 0;
+  const invDval  = parseFloat(document.getElementById('discount_amount')?.value) || 0;
+  const invDtype = document.getElementById('discount_type')?.value || 'value';
+  const discount = invDtype === 'percent' ? (subtotal + taxTotal) * invDval / 100 : invDval;
   document.getElementById('subtotal').textContent        = formatINR(subtotal);
   document.getElementById('taxTotal').textContent        = formatINR(taxTotal);
-  document.getElementById('discountDisplay').textContent = formatINR(discount);
+  document.getElementById('discountDisplay').textContent = formatINR(discount) + (invDtype === 'percent' && invDval ? ` (${invDval}%)` : '');
   document.getElementById('grandTotal').textContent      = formatINR(subtotal + taxTotal - discount);
+}
+
+// ── Refresh warehouse stock for products already in line items ────────────────
+async function refreshStock(btn) {
+  const orig = btn.innerHTML;
+  btn.disabled = true; btn.style.opacity = '0.6';
+  btn.innerHTML = 'Refreshing…';
+  try {
+    const res = await fetch('/invoices/api/stock-refresh');
+    if (!res.ok) throw new Error('refresh failed');
+    const data = await res.json();
+    const pMap = new Map(data.products.map(p => [String(p.id), p.stock_qty]));
+    const sMap = new Map(data.sub_products.map(s => [String(s.id), s.stock_qty]));
+    // Update CATALOG entries so subsequent product selections see new stock too
+    CATALOG.forEach(p => {
+      if (p.sub_product_id && sMap.has(String(p.sub_product_id))) p.stock_qty = sMap.get(String(p.sub_product_id));
+      else if (p.product_id && pMap.has(String(p.product_id)))    p.stock_qty = pMap.get(String(p.product_id));
+    });
+    // Update each row's qty input dataset.stockQty + re-validate
+    document.querySelectorAll('#lineItems tr').forEach(tr => {
+      const pid  = tr.querySelector('.cb-pid')?.value;
+      const spid = tr.querySelector('.cb-spid')?.value;
+      const qty  = tr.querySelector('[name$="[quantity]"]');
+      if (!qty) return;
+      let val;
+      if (spid && sMap.has(String(spid)))       val = sMap.get(String(spid));
+      else if (pid && pMap.has(String(pid)))    val = pMap.get(String(pid));
+      if (val !== undefined) { qty.dataset.stockQty = val; validateInvQty(qty); }
+    });
+    btn.innerHTML = '✓ Updated';
+    setTimeout(() => { btn.innerHTML = orig; btn.disabled = false; btn.style.opacity = ''; }, 1200);
+  } catch (e) {
+    btn.innerHTML = '✗ Failed';
+    setTimeout(() => { btn.innerHTML = orig; btn.disabled = false; btn.style.opacity = ''; }, 1500);
+  }
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────────
@@ -699,6 +775,9 @@ document.addEventListener('DOMContentLoaded', () => {
   recalcTotals();
 
   document.getElementById('invoiceForm').addEventListener('submit', function(e) {
+    // Drafts may be saved even when qty exceeds stock — they can't be issued until stock catches up.
+    const isDraft = (document.getElementById('status')?.value || '') === 'draft';
+    if (isDraft) return;
     const bad = [];
     document.querySelectorAll('#lineItems tr').forEach(tr => {
       const qtyInp  = tr.querySelector('[name$="[quantity]"]');
@@ -710,7 +789,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     if (bad.length) {
       e.stopImmediatePropagation(); e.preventDefault();
-      alert('Quantity exceeds available warehouse stock for:\n\n' + bad.map(s => '• ' + s).join('\n'));
+      alert('Quantity exceeds available warehouse stock for:\n\n' + bad.map(s => '• ' + s).join('\n') + '\n\nTip: use "Save as Draft" to save anyway; you can issue once stock arrives.');
     }
   });
 

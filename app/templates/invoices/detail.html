@@ -3,9 +3,12 @@
 {% block page_title %}{{ invoice.invoice_number }}{% endblock %}
 {% block topbar_actions %}
   {% if invoice.status == 'draft' %}
+  {% set _all_ok = (stock_status | selectattr('sufficient') | list | length) == (stock_status | length) %}
   <form method="post" action="{{ url_for('invoices.update_status', invoice_id=invoice.id) }}" id="issueForm">
     <input type="hidden" name="status" value="issued">
-    <button class="btn btn-primary" {% if stock_status and not stock_status|selectattr('sufficient')|list|length == stock_status|length %}id="issueBtn"{% endif %}>
+    <button class="btn btn-primary" id="issueBtn"
+            {% if not _all_ok %}disabled title="Cannot issue: some items are short on stock. Resolve before issuing."
+                              style="opacity:.55;cursor:not-allowed"{% endif %}>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
       Issue Invoice
     </button>
@@ -82,7 +85,17 @@
       <tbody>
         {% for s in stock_status %}
         <tr>
-          <td style="font-weight:500">{{ s.name }}</td>
+          <td style="font-weight:500">
+            {% if s.sub_product_id %}
+              <a href="{{ url_for('products.sub_detail', product_id=s.product_id, sub_id=s.sub_product_id) }}"
+                 style="color:var(--accent);text-decoration:none">{{ s.name }}</a>
+            {% elif s.product_id %}
+              <a href="{{ url_for('products.product_detail', product_id=s.product_id) }}"
+                 style="color:var(--accent);text-decoration:none">{{ s.name }}</a>
+            {% else %}
+              {{ s.name }}
+            {% endif %}
+          </td>
           <td style="text-align:right">{{ s.required | indian }}</td>
           <td style="text-align:right{% if not s.sufficient %};color:var(--danger);font-weight:600{% endif %}">{{ s.available | indian }}</td>
           <td style="text-align:right">
@@ -138,27 +151,48 @@
 
 <!-- Line items -->
 <div class="card" style="margin-bottom:18px">
-  <div class="card-header"><span class="card-title">Line Items</span></div>
+  <div class="card-header">
+    <span class="card-title">Line Items</span>
+    <div style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text-muted)">
+      <span>Display:</span>
+      <div class="unit-toggle" role="tablist" style="display:inline-flex;border:1px solid var(--border);border-radius:6px;overflow:hidden">
+        <button type="button" id="unitPcsBtn" onclick="setUnitMode('pcs')"
+                style="padding:4px 10px;font-size:12px;background:var(--accent);color:#fff;border:none;cursor:pointer">Pieces</button>
+        <button type="button" id="unitBoxBtn" onclick="setUnitMode('box')"
+                style="padding:4px 10px;font-size:12px;background:transparent;color:var(--text-primary);border:none;border-left:1px solid var(--border);cursor:pointer">Boxes</button>
+      </div>
+    </div>
+  </div>
   <div class="table-wrap">
-    <table>
+    <table id="lineItemsTable">
       <thead>
         <tr>
-          <th style="width:45%">Description</th>
+          <th style="width:40%">Description</th>
           <th>Qty</th>
           <th>Unit Price</th>
+          <th>Discount</th>
           <th>Tax %</th>
           <th style="text-align:right">Total</th>
         </tr>
       </thead>
       <tbody>
         {% for item in items %}
-        <tr>
+        {% set ppc = item_ppc.get(item.id, 0) %}
+        <tr data-ppc="{{ ppc }}"
+            data-qty="{{ item.quantity }}"
+            data-price="{{ item.unit_price }}">
           <td>
             <div class="fw-700">{{ item.description }}</div>
             {% if item.sku %}<div style="font-size:11px;color:var(--text-muted);font-family:'SF Mono','Fira Code',monospace;margin-top:2px">{{ item.sku }}</div>{% endif %}
+            {% if ppc %}<div style="font-size:11px;color:var(--text-muted);margin-top:2px">{{ ppc }} pcs / box</div>{% endif %}
           </td>
-          <td class="muted">{{ item.quantity | indian }}</td>
-          <td>{{ item.unit_price|inr }}</td>
+          <td class="muted col-qty-disp">{{ item.quantity | indian }}</td>
+          <td class="col-price-disp">{{ item.unit_price|inr }}</td>
+          <td class="muted">
+            {% if item.discount_value and item.discount_value > 0 %}
+              {% if (item.discount_type or 'percent') == 'percent' %}{{ item.discount_value }}%{% else %}{{ item.discount_value|inr }}{% endif %}
+            {% else %}—{% endif %}
+          </td>
           <td class="muted">{{ item.tax_rate }}%</td>
           <td class="text-right fw-700">{{ item.line_total|inr }}</td>
         </tr>
@@ -170,11 +204,50 @@
     <div class="invoice-totals">
       <div class="total-row"><span>Subtotal</span><span>{{ invoice.subtotal|inr }}</span></div>
       <div class="total-row"><span>Tax</span><span>{{ invoice.tax_total|inr }}</span></div>
-      {% if invoice.discount_amount %}<div class="total-row"><span>Discount</span><span>–{{ invoice.discount_amount|inr }}</span></div>{% endif %}
+      {% if invoice.discount_amount %}
+      <div class="total-row">
+        <span>Discount{% if (invoice.discount_type or 'value') == 'percent' and invoice.discount_value %} ({{ invoice.discount_value }}%){% endif %}</span>
+        <span>–{{ invoice.discount_amount|inr }}</span>
+      </div>
+      {% endif %}
       <div class="total-grand"><span>Total</span><span>{{ invoice.total|inr }}</span></div>
     </div>
   </div>
 </div>
+
+<script>
+function formatNum(n) {
+  if (n == null || isNaN(n)) return '—';
+  return Number(n).toLocaleString('en-IN', { maximumFractionDigits: 4 });
+}
+function formatINR(n) {
+  if (n == null || isNaN(n)) return '—';
+  return '₹' + Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function setUnitMode(mode) {
+  const pcsBtn = document.getElementById('unitPcsBtn');
+  const boxBtn = document.getElementById('unitBoxBtn');
+  const active   = 'background:var(--accent);color:#fff;border:none;padding:4px 10px;font-size:12px;cursor:pointer';
+  const inactive = 'background:transparent;color:var(--text-primary);border:none;padding:4px 10px;font-size:12px;cursor:pointer';
+  pcsBtn.style.cssText = mode === 'pcs' ? active : inactive;
+  boxBtn.style.cssText = mode === 'box' ? active : inactive + ';border-left:1px solid var(--border)';
+
+  document.querySelectorAll('#lineItemsTable tbody tr').forEach(tr => {
+    const ppc   = parseFloat(tr.dataset.ppc)   || 0;
+    const qty   = parseFloat(tr.dataset.qty)   || 0;
+    const price = parseFloat(tr.dataset.price) || 0;
+    const qCell = tr.querySelector('.col-qty-disp');
+    const pCell = tr.querySelector('.col-price-disp');
+    if (mode === 'box' && ppc > 0) {
+      qCell.textContent = formatNum(qty / ppc) + ' boxes';
+      pCell.textContent = formatINR(price * ppc) + ' /box';
+    } else {
+      qCell.textContent = formatNum(qty);
+      pCell.textContent = formatINR(price);
+    }
+  });
+}
+</script>
 
 <!-- Payments (hidden for drafts) -->
 {% if invoice.status != 'draft' %}
