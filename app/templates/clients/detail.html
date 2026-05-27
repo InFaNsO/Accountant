@@ -178,7 +178,7 @@
               {% if can_financials %}
               {% set bal = co.balance %}
               <td style="text-align:right">
-                <span onclick="showCompanyLedger({{ client.id }}, {{ co.id }}, {{ co.name|tojson }})"
+                <span onclick="showCompanyLedger({{ client.id }}, {{ co.id }}, {{ co.name|tojson|forceescape }})"
                       style="cursor:pointer;text-decoration:underline dotted"
                       title="Click to view company ledger">
                   {% if bal < 0 %}

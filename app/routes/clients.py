@@ -134,8 +134,11 @@ def ledger(client_id):
             (client_id, company_id),
         ).fetchall()
         payments = db.execute(
-            "SELECT p.id, p.amount, p.payment_date, p.method, p.reference, p.notes, p.invoice_id, "
-            "cc.name AS company_name "
+            "SELECT p.id, p.amount, p.payment_date, p.method, p.reference, p.notes, "
+            "cc.name AS company_name, "
+            "(SELECT GROUP_CONCAT(i.invoice_number, ', ') "
+            "   FROM payment_allocations pa JOIN invoices i ON i.id=pa.invoice_id "
+            "  WHERE pa.payment_id=p.id) AS invoice_numbers "
             "FROM payments p LEFT JOIN client_companies cc ON p.company_id = cc.id "
             "WHERE p.client_id=? AND p.company_id=? ORDER BY p.payment_date, p.id",
             (client_id, company_id),
@@ -151,8 +154,11 @@ def ledger(client_id):
             (client_id,),
         ).fetchall()
         payments = db.execute(
-            "SELECT p.id, p.amount, p.payment_date, p.method, p.reference, p.notes, p.invoice_id, "
-            "cc.name AS company_name "
+            "SELECT p.id, p.amount, p.payment_date, p.method, p.reference, p.notes, "
+            "cc.name AS company_name, "
+            "(SELECT GROUP_CONCAT(i.invoice_number, ', ') "
+            "   FROM payment_allocations pa JOIN invoices i ON i.id=pa.invoice_id "
+            "  WHERE pa.payment_id=p.id) AS invoice_numbers "
             "FROM payments p LEFT JOIN client_companies cc ON p.company_id = cc.id "
             "WHERE p.client_id=? ORDER BY p.payment_date, p.id",
             (client_id,),
@@ -202,12 +208,14 @@ def ledger(client_id):
                 parts = [r["method"]] if r["method"] else []
                 if r["reference"]: parts.append(r["reference"])
                 if r["notes"]:     parts.append(r["notes"])
+                if r.get("invoice_numbers"):
+                    parts.append(f"applied to {r['invoice_numbers']}")
                 label = " — ".join(parts) if parts else "Payment"
                 if r.get("company_name"):
                     label += f" ({r['company_name']})"
                 entries.append({"date": r["payment_date"] or "", "type": "payment",
                                 "label": label, "company": r.get("company_name") or "",
-                                "invoice_id": r["invoice_id"],
+                                "invoice_numbers": r.get("invoice_numbers"),
                                 "debit": 0, "credit": r["amount"], "running": running})
             else:  # manual
                 debit  = float(r["debit"]  or 0)

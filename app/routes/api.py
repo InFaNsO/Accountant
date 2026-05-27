@@ -79,7 +79,7 @@ def _next_invoice_number(db):
 
 def _refresh_invoice_paid(db, invoice_id):
     paid = db.execute(
-        "SELECT COALESCE(SUM(amount),0) AS paid FROM payments WHERE invoice_id=?",
+        "SELECT COALESCE(SUM(amount),0) AS paid FROM payment_allocations WHERE invoice_id=?",
         (invoice_id,),
     ).fetchone()["paid"]
     inv = db.execute("SELECT total FROM invoices WHERE id=?", (invoice_id,)).fetchone()
@@ -92,6 +92,20 @@ def _refresh_invoice_paid(db, invoice_id):
     )
 
 
+def _client_unallocated(db, client_id):
+    row = db.execute(
+        """SELECT COALESCE(SUM(p.amount),0) - COALESCE(SUM(pa.amount),0) AS unallocated
+           FROM payments p
+           LEFT JOIN (
+               SELECT payment_id, SUM(amount) AS amount
+               FROM payment_allocations GROUP BY payment_id
+           ) pa ON pa.payment_id = p.id
+           WHERE p.client_id = ?""",
+        (client_id,),
+    ).fetchone()
+    return _f(row["unallocated"])
+
+
 def _ob_remaining(db, client_id):
     client = db.execute("SELECT opening_balance FROM clients WHERE id=?", (client_id,)).fetchone()
     if not client:
@@ -99,50 +113,49 @@ def _ob_remaining(db, client_id):
     debt = abs(_f(client["opening_balance"]))
     if debt == 0:
         return 0.0
-    paid = _f(db.execute(
-        "SELECT COALESCE(SUM(amount),0) AS s FROM payments WHERE client_id=? AND invoice_id IS NULL",
-        (client_id,),
-    ).fetchone()["s"])
-    return max(0.0, debt - paid)
+    return max(0.0, debt - _client_unallocated(db, client_id))
 
 
 def _apply_client_credit(db, client_id, invoice_id):
+    """If the client has surplus (unallocated payment money beyond OB), allocate it
+    to this freshly-issued invoice via payment_allocations rows."""
     client = db.execute("SELECT opening_balance FROM clients WHERE id=?", (client_id,)).fetchone()
     opening_debt = max(0.0, _f(client["opening_balance"])) if client else 0.0
-    total_null = _f(db.execute(
-        "SELECT COALESCE(SUM(amount),0) AS s FROM payments WHERE client_id=? AND invoice_id IS NULL",
-        (client_id,),
-    ).fetchone()["s"])
-    credit = max(0.0, total_null - opening_debt)
+    unallocated = _client_unallocated(db, client_id)
+    credit = max(0.0, unallocated - opening_debt)
     if credit < 0.01:
         return
-    inv = db.execute("SELECT total FROM invoices WHERE id=?", (invoice_id,)).fetchone()
+    inv = db.execute("SELECT total, amount_paid FROM invoices WHERE id=?", (invoice_id,)).fetchone()
     if not inv:
         return
-    to_cover = min(credit, _f(inv["total"]))
+    gap = _f(inv["total"]) - _f(inv["amount_paid"])
+    to_cover = min(credit, gap)
     if to_cover < 0.01:
         return
-    null_pmts = db.execute(
-        "SELECT id, amount, payment_date, method, reference, notes FROM payments "
-        "WHERE client_id=? AND invoice_id IS NULL ORDER BY created_at ASC",
+
+    # Walk payments oldest-first, allocating their unallocated portion.
+    pmts = db.execute(
+        """SELECT p.id, p.amount, COALESCE(SUM(pa.amount),0) AS allocated
+           FROM payments p
+           LEFT JOIN payment_allocations pa ON pa.payment_id = p.id
+           WHERE p.client_id = ?
+           GROUP BY p.id
+           HAVING p.amount - COALESCE(SUM(pa.amount),0) > 0.001
+           ORDER BY p.created_at ASC, p.id ASC""",
         (client_id,),
     ).fetchall()
     covered = 0.0
-    for pmt in null_pmts:
+    for pmt in pmts:
         if covered >= to_cover - 0.001:
             break
-        take = min(_f(pmt["amount"]), to_cover - covered)
-        leftover = _f(pmt["amount"]) - take
-        if leftover < 0.01:
-            db.execute("UPDATE payments SET invoice_id=? WHERE id=?", (invoice_id, pmt["id"]))
-        else:
-            db.execute("UPDATE payments SET amount=? WHERE id=?", (leftover, pmt["id"]))
-            db.execute(
-                "INSERT INTO payments (client_id, invoice_id, amount, payment_date, method, reference, notes) "
-                "VALUES (?,?,?,?,?,?,?)",
-                (client_id, invoice_id, take,
-                 pmt["payment_date"], pmt["method"], pmt["reference"], pmt["notes"]),
-            )
+        avail = _f(pmt["amount"]) - _f(pmt["allocated"])
+        take  = min(avail, to_cover - covered)
+        if take < 0.001:
+            continue
+        db.execute(
+            "INSERT INTO payment_allocations (payment_id, invoice_id, amount) VALUES (?,?,?)",
+            (pmt["id"], invoice_id, take),
+        )
         covered += take
     if covered > 0.001:
         _refresh_invoice_paid(db, invoice_id)
@@ -742,8 +755,9 @@ def get_invoice_details(invoice_number):
         (inv["id"],),
     ).fetchall()
     pmts = db.execute(
-        "SELECT amount, payment_date, method, reference FROM payments "
-        "WHERE invoice_id=? ORDER BY payment_date",
+        "SELECT pa.amount, p.payment_date, p.method, p.reference "
+        "FROM payment_allocations pa JOIN payments p ON p.id=pa.payment_id "
+        "WHERE pa.invoice_id=? ORDER BY p.payment_date",
         (inv["id"],),
     ).fetchall()
     remaining = _f(inv["total"]) - _f(inv["amount_paid"])
@@ -970,7 +984,7 @@ def delete_invoice(invoice_id):
     if not inv:
         return jsonify({"error": f"Invoice ID {invoice_id} not found."}), 404
     db.execute("DELETE FROM invoice_items WHERE invoice_id=?", (invoice_id,))
-    db.execute("UPDATE payments SET invoice_id=NULL WHERE invoice_id=?", (invoice_id,))
+    db.execute("DELETE FROM payment_allocations WHERE invoice_id=?", (invoice_id,))
     db.execute("DELETE FROM invoices WHERE id=?", (invoice_id,))
     db.commit()
     return jsonify({"result": f"✓ Invoice {inv['invoice_number']} (for {inv['client_name']}) permanently deleted."})
@@ -990,10 +1004,12 @@ def get_recent_payments():
     db = get_db()
     rows = db.execute(
         """SELECT p.id, p.amount, p.payment_date, p.method, p.reference,
-                  c.name AS client_name, i.invoice_number
+                  c.name AS client_name,
+                  (SELECT GROUP_CONCAT(i.invoice_number, ', ')
+                     FROM payment_allocations pa JOIN invoices i ON i.id=pa.invoice_id
+                    WHERE pa.payment_id=p.id) AS invoice_number
            FROM payments p
            JOIN clients c ON c.id=p.client_id
-           LEFT JOIN invoices i ON i.id=p.invoice_id
            ORDER BY p.payment_date DESC, p.id DESC LIMIT ?""",
         (limit,),
     ).fetchall()
@@ -1036,72 +1052,39 @@ def record_payment():
     if not client:
         return jsonify({"error": f"Client ID {client_id} not found."}), 404
 
-    if invoice_id:
-        inv = db.execute("SELECT total, amount_paid FROM invoices WHERE id=?", (invoice_id,)).fetchone()
-        if not inv:
-            return jsonify({"error": f"Invoice ID {invoice_id} not found."}), 404
-        db.execute(
-            "INSERT INTO payments (client_id, company_id, invoice_id, amount, payment_date, method, reference, notes) "
-            "VALUES (?,?,?,?,?,?,?,?)",
-            (client_id, company_id, invoice_id, amount, payment_date, method,
-             reference or None, notes or "Recorded via Claude"),
-        )
-        _refresh_invoice_paid(db, invoice_id)
-        db.commit()
-        return jsonify({"result": (
-            f"✓ {_inr(amount)} recorded for {client['name']} against invoice ID {invoice_id}.\n"
-            f"  Date: {payment_date} | Method: {method}"
-        )})
+    from ..services import payment_service
+    payment_service.create_payment({
+        "client_id":    client_id,
+        "company_id":   company_id,
+        "invoice_id":   invoice_id,
+        "amount":       amount,
+        "payment_date": payment_date,
+        "method":       method,
+        "reference":    reference or None,
+        "notes":        notes or "Recorded via Claude",
+    })
 
-    # Smart allocation: OB → oldest invoices → surplus
-    remaining = amount
-    allocations = []
+    # Build a human-readable allocation summary from what was just stored.
+    last_payment_id = db.execute(
+        "SELECT id FROM payments WHERE client_id=? ORDER BY id DESC LIMIT 1",
+        (client_id,),
+    ).fetchone()["id"]
+    alloc_rows = db.execute(
+        """SELECT pa.amount, i.invoice_number
+           FROM payment_allocations pa JOIN invoices i ON i.id=pa.invoice_id
+           WHERE pa.payment_id=?""",
+        (last_payment_id,),
+    ).fetchall()
+    allocated_sum = sum(_f(r["amount"]) for r in alloc_rows)
+    leftover = amount - allocated_sum
 
-    ob_rem = _ob_remaining(db, client_id)
-    if ob_rem > 0 and remaining > 0:
-        apply = min(ob_rem, remaining)
-        db.execute(
-            "INSERT INTO payments (client_id, company_id, invoice_id, amount, payment_date, method, reference, notes) "
-            "VALUES (?,?,NULL,?,?,?,?,?)",
-            (client_id, company_id, apply, payment_date, method, reference or None, notes or "Recorded via Claude"),
-        )
-        allocations.append(f"  {_inr(apply)} → opening balance")
-        remaining -= apply
-
-    if remaining > 0:
-        old_invs = db.execute(
-            """SELECT id, total, amount_paid, (total - amount_paid) AS remaining, invoice_number
-               FROM invoices WHERE client_id=? AND status NOT IN ('paid','cancelled')
-                 AND (total - amount_paid) > 0
-               ORDER BY issue_date ASC, id ASC""",
-            (client_id,),
-        ).fetchall()
-        for inv in old_invs:
-            if remaining <= 0:
-                break
-            apply = min(_f(inv["remaining"]), remaining)
-            db.execute(
-                "INSERT INTO payments (client_id, company_id, invoice_id, amount, payment_date, method, reference, notes) "
-                "VALUES (?,?,?,?,?,?,?,?)",
-                (client_id, company_id, inv["id"], apply, payment_date, method,
-                 reference or None, notes or "Recorded via Claude"),
-            )
-            _refresh_invoice_paid(db, inv["id"])
-            allocations.append(f"  {_inr(apply)} → {inv['invoice_number']}")
-            remaining -= apply
-
-    if remaining > 0.001:
-        db.execute(
-            "INSERT INTO payments (client_id, company_id, invoice_id, amount, payment_date, method, reference, notes) "
-            "VALUES (?,?,NULL,?,?,?,?,?)",
-            (client_id, company_id, remaining, payment_date, method, reference or None, notes or "Recorded via Claude"),
-        )
-        allocations.append(f"  {_inr(remaining)} → unallocated surplus (credit)")
-
-    db.commit()
-    result = f"✓ {_inr(amount)} payment recorded for {client['name']} on {payment_date}.\nAllocation:\n"
-    result += "\n".join(allocations)
-    return jsonify({"result": result})
+    lines = [f"✓ {_inr(amount)} payment recorded for {client['name']} on {payment_date}.",
+             "Allocation:"]
+    for r in alloc_rows:
+        lines.append(f"  {_inr(_f(r['amount']))} → {r['invoice_number']}")
+    if leftover > 0.001:
+        lines.append(f"  {_inr(leftover)} → opening balance / credit")
+    return jsonify({"result": "\n".join(lines)})
 
 
 @bp.route("/payments/<int:payment_id>", methods=["DELETE"])
@@ -1109,18 +1092,14 @@ def record_payment():
 def delete_payment(payment_id):
     db = get_db()
     p = db.execute(
-        "SELECT p.amount, p.payment_date, p.invoice_id, c.name AS client_name "
+        "SELECT p.amount, p.payment_date, c.name AS client_name "
         "FROM payments p JOIN clients c ON c.id=p.client_id WHERE p.id=?",
         (payment_id,),
     ).fetchone()
     if not p:
         return jsonify({"error": f"Payment ID {payment_id} not found."}), 404
-    invoice_id = p["invoice_id"]
-    db.execute("DELETE FROM payments WHERE id=?", (payment_id,))
-    db.commit()
-    if invoice_id:
-        _refresh_invoice_paid(db, invoice_id)
-        db.commit()
+    from ..services import payment_service
+    payment_service.delete_payment(payment_id)
     return jsonify({"result": (
         f"✓ Payment ID {payment_id} ({_inr(p['amount'])} from {p['client_name']} "
         f"on {p['payment_date']}) permanently deleted."

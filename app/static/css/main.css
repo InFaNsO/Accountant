@@ -414,9 +414,12 @@ select { cursor: pointer; }
 /* ── Dashboard Grid ───────────────────────────────────────── */
 .dashboard-grid {
   display: grid;
-  grid-template-columns: 2fr 1fr;
-  gap: 22px;
+  /* Match the 3-column stats grid above so internal dividers line up.
+     Chart card spans 2 columns, side panel spans 1. */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
 }
+.dashboard-grid > :first-child { grid-column: span 2; }
 
 /* ── Misc helpers ─────────────────────────────────────────── */
 .text-right { text-align: right; }

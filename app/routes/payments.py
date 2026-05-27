@@ -64,12 +64,12 @@ def new_payment():
 @login_required
 @permission_required("payments", "delete")
 def delete_payment(payment_id):
-    pmt = payment_service.get_payment(payment_id)
-    invoice_id = pmt["invoice_id"] if pmt else None
+    allocs = payment_service.get_payment_allocations(payment_id)
+    first_invoice = allocs[0]["invoice_id"] if allocs else None
     payment_service.delete_payment(payment_id)
     flash("Payment deleted.", "success")
-    if invoice_id:
-        return redirect(url_for("invoices.detail", invoice_id=invoice_id))
+    if first_invoice:
+        return redirect(url_for("invoices.detail", invoice_id=first_invoice))
     return redirect(url_for("payments.list_payments"))
 
 

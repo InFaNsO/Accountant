@@ -267,9 +267,14 @@ function setUnitMode(mode) {
           <td><span class="badge badge-sent" style="text-transform:capitalize">{{ p.method.replace('_',' ') }}</span></td>
           <td class="muted font-mono">{{ p.reference or '—' }}</td>
           <td class="muted">{{ p.notes or '—' }}</td>
-          <td class="text-right fw-700" style="color:var(--success)">{{ p.amount|inr }}</td>
+          <td class="text-right fw-700" style="color:var(--success)">
+            {{ p.allocated_amount|inr }}
+            {% if p.allocated_amount and p.amount and (p.amount - p.allocated_amount) > 0.5 %}
+              <div class="muted" style="font-size:11px;font-weight:400">of {{ p.amount|inr }} total</div>
+            {% endif %}
+          </td>
           <td>
-            <form class="confirm-inline" method="post" action="{{ url_for('payments.delete_payment', payment_id=p.id) }}" onsubmit="return confirm('Delete this payment?')">
+            <form class="confirm-inline" method="post" action="{{ url_for('payments.delete_payment', payment_id=p.id) }}" onsubmit="return confirm('Delete this payment? This removes the entire payment, including portions applied to other invoices.')">
               <button class="btn btn-danger btn-sm">Delete</button>
             </form>
           </td>

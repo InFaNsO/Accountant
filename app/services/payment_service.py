@@ -3,9 +3,25 @@ from ..database import get_db
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+def _client_unallocated_total(db, client_id):
+    """Total payment money for the client that isn't tied to any invoice."""
+    row = db.execute(
+        """SELECT COALESCE(SUM(p.amount),0) - COALESCE(SUM(pa.amount),0) AS unallocated
+           FROM payments p
+           LEFT JOIN (
+               SELECT payment_id, SUM(amount) AS amount
+               FROM payment_allocations
+               GROUP BY payment_id
+           ) pa ON pa.payment_id = p.id
+           WHERE p.client_id = ?""",
+        (client_id,),
+    ).fetchone()
+    return float(row["unallocated"] or 0)
+
+
 def _get_opening_balance_remaining(db, client_id):
     """How much of the client's opening balance debt is still unpaid.
-    Both positive and negative opening_balance represent a debt to us."""
+    OB is covered by the unallocated portion of payments, capped at the OB amount."""
     client = db.execute(
         "SELECT opening_balance FROM clients WHERE id = ?", (client_id,)
     ).fetchone()
@@ -14,11 +30,8 @@ def _get_opening_balance_remaining(db, client_id):
     opening_debt = abs(client["opening_balance"] or 0)
     if opening_debt == 0:
         return 0.0
-    ob_paid = db.execute(
-        "SELECT COALESCE(SUM(amount), 0) AS s FROM payments WHERE client_id=? AND invoice_id IS NULL",
-        (client_id,),
-    ).fetchone()["s"]
-    return max(0.0, opening_debt - ob_paid)
+    unallocated = _client_unallocated_total(db, client_id)
+    return max(0.0, opening_debt - unallocated)
 
 
 def _oldest_unpaid_invoices(db, client_id):
@@ -34,17 +47,18 @@ def _oldest_unpaid_invoices(db, client_id):
 
 
 def _refresh_invoice_paid(db, invoice_id):
+    """Recompute amount_paid + status for an invoice from payment_allocations."""
     row = db.execute(
-        "SELECT COALESCE(SUM(amount),0) AS paid FROM payments WHERE invoice_id=?",
+        "SELECT COALESCE(SUM(amount),0) AS paid FROM payment_allocations WHERE invoice_id=?",
         (invoice_id,),
     ).fetchone()
-    paid = row["paid"]
-    inv  = db.execute("SELECT total, status FROM invoices WHERE id=?", (invoice_id,)).fetchone()
+    paid = float(row["paid"] or 0)
+    inv = db.execute("SELECT total, status FROM invoices WHERE id=?", (invoice_id,)).fetchone()
     if not inv:
         return
     if paid <= 0:
         status = inv["status"] if inv["status"] == "draft" else "issued"
-    elif paid >= inv["total"]:
+    elif paid >= float(inv["total"]):
         status = "paid"
     else:
         status = "partial"
@@ -57,15 +71,13 @@ def _refresh_invoice_paid(db, invoice_id):
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def recalculate_client_balance(client_id):
-    """
-    Re-run payment allocation from scratch for a client.
+    """Re-run payment allocation from scratch for a client.
 
-    Steps:
-      1. Reset every payment's invoice_id to NULL.
-      2. Reset every non-cancelled invoice's amount_paid to 0 / status to 'issued'.
-      3. Re-allocate: opening-balance coverage (NULL) first, then oldest invoices.
-      4. Apply credit opening balance (ob < 0) directly to oldest invoices.
-      5. Commit.
+    1. Clear payment_allocations for this client.
+    2. Reset every non-cancelled invoice's amount_paid to 0 / status to 'issued'.
+    3. Walk payments oldest-first; skip the OB-coverage portion; allocate the rest to
+       the oldest unpaid invoices.
+    4. Apply credit opening balance (ob < 0) directly to oldest invoices' amount_paid.
     """
     db = get_db()
 
@@ -74,157 +86,100 @@ def recalculate_client_balance(client_id):
         return
 
     ob = float(client["opening_balance"] or 0)
-    # Positive OB = client owes us; needs NULL-payment coverage
     ob_coverage = max(0.0, ob)
-    # Negative OB = client pre-paid credit; applies directly to oldest invoices
     ob_credit   = abs(min(0.0, ob))
 
-    # 1 & 2 — reset all allocations
-    db.execute("UPDATE payments SET invoice_id=NULL WHERE client_id=?", (client_id,))
+    # 1 — clear allocations belonging to this client's payments
+    db.execute(
+        "DELETE FROM payment_allocations "
+        "WHERE payment_id IN (SELECT id FROM payments WHERE client_id=?)",
+        (client_id,),
+    )
+    # 2 — reset invoice paid amounts
     db.execute(
         """UPDATE invoices
-           SET amount_paid = 0,
-               status = CASE WHEN status = 'draft' THEN 'draft' ELSE 'issued' END
-           WHERE client_id = ? AND status != 'cancelled'""",
+              SET amount_paid = 0,
+                  status = CASE WHEN status = 'draft' THEN 'draft' ELSE 'issued' END
+            WHERE client_id = ? AND status != 'cancelled'""",
         (client_id,),
     )
 
-    total_payments = float(db.execute(
-        "SELECT COALESCE(SUM(amount), 0) FROM payments WHERE client_id=?",
-        (client_id,),
-    ).fetchone()[0])
-
-    # 3 — re-allocate surplus beyond OB coverage to invoices
-    keep_for_ob = min(total_payments, ob_coverage)
-    to_release  = total_payments - keep_for_ob
-
-    if to_release > 0.001:
-        _release_null_to_invoices(db, client_id, keep_for_ob, to_release)
-
-    # 4 — apply credit OB directly to oldest invoices (no payment record needed)
-    if ob_credit > 0.001:
-        _apply_credit_ob_to_invoices(db, client_id, ob_credit)
-
-    db.commit()
-
-
-def _release_null_to_invoices(db, client_id, keep_for_ob, to_release):
-    """Walk NULL payments oldest-first; skip the OB-coverage portion; send the rest to invoices."""
-    null_pmts = db.execute(
-        "SELECT id, amount, payment_date, method, reference, notes "
-        "FROM payments WHERE client_id=? AND invoice_id IS NULL "
-        "ORDER BY payment_date ASC, id ASC",
+    # 3 — allocate payment surplus (beyond OB) to invoices
+    payments = db.execute(
+        "SELECT id, amount, payment_date FROM payments "
+        "WHERE client_id=? ORDER BY payment_date ASC, id ASC",
         (client_id,),
     ).fetchall()
 
     open_invoices = db.execute(
-        "SELECT id, total, amount_paid FROM invoices "
-        "WHERE client_id=? AND status NOT IN ('cancelled') AND total > amount_paid "
+        "SELECT id, total FROM invoices "
+        "WHERE client_id=? AND status NOT IN ('cancelled') "
         "ORDER BY issue_date ASC, id ASC",
         (client_id,),
     ).fetchall()
-
-    if not null_pmts or not open_invoices:
-        return
-
-    affected  = set()
-    ob_budget = keep_for_ob
-    inv_gaps  = {inv["id"]: float(inv["total"]) - float(inv["amount_paid"]) for inv in open_invoices}
+    inv_gaps  = {inv["id"]: float(inv["total"]) for inv in open_invoices}
     inv_order = [inv["id"] for inv in open_invoices]
+    affected  = set()
 
-    for pmt in null_pmts:
-        pmt_amount     = float(pmt["amount"])
-        ob_take        = min(pmt_amount, max(0.0, ob_budget))
-        ob_budget     -= ob_take
-        release_amount = pmt_amount - ob_take
-
-        if release_amount < 0.001:
+    ob_budget = ob_coverage
+    for pmt in payments:
+        pmt_amount = float(pmt["amount"])
+        ob_take    = min(pmt_amount, ob_budget)
+        ob_budget -= ob_take
+        release    = pmt_amount - ob_take
+        if release < 0.001:
             continue
+        remaining = release
+        for inv_id in inv_order:
+            if remaining < 0.001:
+                break
+            gap = inv_gaps.get(inv_id, 0)
+            if gap < 0.001:
+                continue
+            alloc = min(remaining, gap)
+            inv_gaps[inv_id] = gap - alloc
+            remaining -= alloc
+            db.execute(
+                "INSERT INTO payment_allocations (payment_id, invoice_id, amount) VALUES (?,?,?)",
+                (pmt["id"], inv_id, alloc),
+            )
+            affected.add(inv_id)
 
-        if ob_take < 0.001:
-            # Entire payment is released — reuse the record for the first invoice
-            remaining  = release_amount
-            first_used = False
-            for inv_id in inv_order:
-                if remaining < 0.001:
-                    break
-                if inv_gaps.get(inv_id, 0) < 0.001:
-                    continue
-                alloc = min(remaining, inv_gaps[inv_id])
-                inv_gaps[inv_id] -= alloc
-                remaining -= alloc
-                affected.add(inv_id)
-                if not first_used:
-                    db.execute(
-                        "UPDATE payments SET invoice_id=?, amount=? WHERE id=?",
-                        (inv_id, alloc, pmt["id"]),
-                    )
-                    first_used = True
-                else:
-                    db.execute(
-                        "INSERT INTO payments (client_id, invoice_id, amount, payment_date, method, reference, notes) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        (client_id, inv_id, alloc, pmt["payment_date"],
-                         pmt["method"] or "cash", pmt["reference"], pmt["notes"]),
-                    )
-        else:
-            # Split: ob_take stays NULL (reduce original), release_amount goes to invoices
-            db.execute("UPDATE payments SET amount=? WHERE id=?", (ob_take, pmt["id"]))
-            remaining = release_amount
-            for inv_id in inv_order:
-                if remaining < 0.001:
-                    break
-                if inv_gaps.get(inv_id, 0) < 0.001:
-                    continue
-                alloc = min(remaining, inv_gaps[inv_id])
-                inv_gaps[inv_id] -= alloc
-                remaining -= alloc
-                affected.add(inv_id)
-                db.execute(
-                    "INSERT INTO payments (client_id, invoice_id, amount, payment_date, method, reference, notes) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (client_id, inv_id, alloc, pmt["payment_date"],
-                     pmt["method"] or "cash", pmt["reference"], pmt["notes"]),
-                )
+    # 4 — apply credit OB directly to oldest invoices (no payment record needed)
+    if ob_credit > 0.001:
+        remaining = ob_credit
+        for inv_id in inv_order:
+            if remaining < 0.001:
+                break
+            gap = inv_gaps.get(inv_id, 0)
+            if gap < 0.001:
+                continue
+            alloc = min(gap, remaining)
+            inv_gaps[inv_id] = gap - alloc
+            remaining -= alloc
+            inv_row = db.execute(
+                "SELECT total, amount_paid FROM invoices WHERE id=?", (inv_id,)
+            ).fetchone()
+            new_paid = float(inv_row["amount_paid"]) + alloc
+            new_status = "paid" if new_paid >= float(inv_row["total"]) else "partial"
+            db.execute(
+                "UPDATE invoices SET amount_paid=?, status=? WHERE id=?",
+                (new_paid, new_status, inv_id),
+            )
 
     for inv_id in affected:
         _refresh_invoice_paid(db, inv_id)
 
-
-def _apply_credit_ob_to_invoices(db, client_id, credit_amount):
-    """Apply a credit opening balance directly to oldest invoices by updating amount_paid.
-    No payment record is created — the OB itself is the source of credit."""
-    invoices = db.execute(
-        "SELECT id, total, amount_paid FROM invoices "
-        "WHERE client_id=? AND status NOT IN ('cancelled') AND total > amount_paid "
-        "ORDER BY issue_date ASC, id ASC",
-        (client_id,),
-    ).fetchall()
-
-    remaining = credit_amount
-    for inv in invoices:
-        if remaining < 0.001:
-            break
-        gap   = float(inv["total"]) - float(inv["amount_paid"])
-        alloc = min(gap, remaining)
-        remaining -= alloc
-        new_paid = float(inv["amount_paid"]) + alloc
-        new_status = "paid" if new_paid >= float(inv["total"]) else "partial"
-        db.execute(
-            "UPDATE invoices SET amount_paid=?, status=? WHERE id=?",
-            (new_paid, new_status, inv["id"]),
-        )
+    db.commit()
 
 
 def create_payment(data):
-    """
-    Record a payment against a client ledger.
+    """Record a payment against a client ledger as a single row.
 
-    Rules (when invoice_id not explicitly set):
-      1. Apply to unpaid opening balance first.
-      2. Apply remainder to oldest unpaid invoices in order.
-
-    If invoice_id IS supplied, apply directly to that invoice only.
+    Allocations are inserted into payment_allocations:
+      - If invoice_id is supplied → one allocation to that invoice.
+      - Otherwise → opening-balance coverage stays unallocated; surplus is allocated
+        to the oldest unpaid invoices in order; any leftover stays unallocated (credit).
     """
     db = get_db()
     client_id  = int(data["client_id"])
@@ -232,81 +187,81 @@ def create_payment(data):
     explicit   = data.get("invoice_id")
     company_id = int(data["company_id"]) if data.get("company_id") else None
 
-    inserted_ids = []
+    cur = db.execute(
+        """INSERT INTO payments (client_id, invoice_id, company_id, amount, payment_date, method, reference, notes)
+           VALUES (?, NULL, ?, ?, ?, ?, ?, ?)""",
+        (client_id, company_id, amount, data["payment_date"],
+         data.get("method", "cash"), data.get("reference"), data.get("notes")),
+    )
+    payment_id = cur.lastrowid
+
+    affected = set()
 
     if explicit:
-        # Direct allocation to a specific invoice
-        cur = db.execute(
-            """INSERT INTO payments (client_id, invoice_id, company_id, amount, payment_date, method, reference, notes)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (client_id, int(explicit), company_id, amount,
-             data["payment_date"], data.get("method","cash"),
-             data.get("reference"), data.get("notes")),
+        db.execute(
+            "INSERT INTO payment_allocations (payment_id, invoice_id, amount) VALUES (?,?,?)",
+            (payment_id, int(explicit), amount),
         )
-        inserted_ids.append(cur.lastrowid)
-        _refresh_invoice_paid(db, int(explicit))
+        affected.add(int(explicit))
     else:
         remaining = amount
 
-        # Step 1 — clear opening balance
+        # Skip the portion that goes toward opening balance — leave it unallocated.
         ob_remaining = _get_opening_balance_remaining(db, client_id)
-        if ob_remaining > 0 and remaining > 0:
-            apply = min(ob_remaining, remaining)
-            cur = db.execute(
-                """INSERT INTO payments (client_id, invoice_id, company_id, amount, payment_date, method, reference, notes)
-                   VALUES (?, NULL, ?, ?, ?, ?, ?, ?)""",
-                (client_id, company_id, apply, data["payment_date"],
-                 data.get("method","cash"), data.get("reference"), data.get("notes")),
-            )
-            inserted_ids.append(cur.lastrowid)
-            remaining -= apply
+        # _get_opening_balance_remaining already accounts for the row we just inserted
+        # (which is fully unallocated). Subtract the share that came from THIS payment.
+        # Simpler: recompute ignoring this payment.
+        prior_unallocated = _client_unallocated_total(db, client_id) - amount
+        client = db.execute("SELECT opening_balance FROM clients WHERE id=?", (client_id,)).fetchone()
+        opening_debt = abs(float(client["opening_balance"] or 0)) if client else 0.0
+        ob_already_covered = min(prior_unallocated, opening_debt)
+        ob_gap = max(0.0, opening_debt - ob_already_covered)
+        ob_take = min(remaining, ob_gap)
+        remaining -= ob_take
 
-        # Step 2 — apply to oldest unpaid invoices
-        if remaining > 0:
+        if remaining > 0.001:
             for inv in _oldest_unpaid_invoices(db, client_id):
-                if remaining <= 0:
+                if remaining < 0.001:
                     break
-                apply = min(inv["remaining"], remaining)
-                cur = db.execute(
-                    """INSERT INTO payments (client_id, invoice_id, company_id, amount, payment_date, method, reference, notes)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (client_id, inv["id"], company_id, apply, data["payment_date"],
-                     data.get("method","cash"), data.get("reference"), data.get("notes")),
+                apply = min(float(inv["remaining"]), remaining)
+                db.execute(
+                    "INSERT INTO payment_allocations (payment_id, invoice_id, amount) VALUES (?,?,?)",
+                    (payment_id, inv["id"], apply),
                 )
-                inserted_ids.append(cur.lastrowid)
-                _refresh_invoice_paid(db, inv["id"])
+                affected.add(inv["id"])
                 remaining -= apply
+        # Any further leftover stays unallocated on the payment row → credit.
 
-            # Step 3 — any leftover goes as unallocated (invoice_id NULL)
-            if remaining > 0.001:
-                cur = db.execute(
-                    """INSERT INTO payments (client_id, invoice_id, company_id, amount, payment_date, method, reference, notes)
-                       VALUES (?, NULL, ?, ?, ?, ?, ?, ?)""",
-                    (client_id, company_id, remaining, data["payment_date"],
-                     data.get("method","cash"), data.get("reference"), data.get("notes")),
-                )
-                inserted_ids.append(cur.lastrowid)
+    for inv_id in affected:
+        _refresh_invoice_paid(db, inv_id)
 
     db.commit()
-    return inserted_ids[0] if inserted_ids else None
+    return payment_id
 
 
 def delete_payment(payment_id):
     db = get_db()
-    row = db.execute("SELECT invoice_id FROM payments WHERE id=?", (payment_id,)).fetchone()
+    affected = [r["invoice_id"] for r in db.execute(
+        "SELECT invoice_id FROM payment_allocations WHERE payment_id=?", (payment_id,)
+    ).fetchall()]
+    db.execute("DELETE FROM payment_allocations WHERE payment_id=?", (payment_id,))
     db.execute("DELETE FROM payments WHERE id=?", (payment_id,))
     db.commit()
-    if row and row["invoice_id"]:
-        _refresh_invoice_paid(db, row["invoice_id"])
+    for inv_id in affected:
+        _refresh_invoice_paid(db, inv_id)
+    db.commit()
 
 
 def get_all_payments():
     return get_db().execute(
         """SELECT p.*, c.name AS client_name,
-                  COALESCE(i.invoice_number, '— opening balance —') AS invoice_number
+                  (SELECT GROUP_CONCAT(i.invoice_number, ', ')
+                     FROM payment_allocations pa
+                     JOIN invoices i ON i.id = pa.invoice_id
+                    WHERE pa.payment_id = p.id) AS invoice_number,
+                  (SELECT COALESCE(SUM(amount),0) FROM payment_allocations WHERE payment_id=p.id) AS allocated
            FROM payments p
            JOIN clients c ON p.client_id = c.id
-           LEFT JOIN invoices i ON p.invoice_id = i.id
            ORDER BY p.payment_date DESC, p.created_at DESC"""
     ).fetchall()
 
@@ -314,10 +269,13 @@ def get_all_payments():
 def get_payment(payment_id):
     return get_db().execute(
         """SELECT p.*, c.name AS client_name,
-                  COALESCE(i.invoice_number, '— opening balance —') AS invoice_number
+                  (SELECT GROUP_CONCAT(i.invoice_number, ', ')
+                     FROM payment_allocations pa
+                     JOIN invoices i ON i.id = pa.invoice_id
+                    WHERE pa.payment_id = p.id) AS invoice_number,
+                  (SELECT COALESCE(SUM(amount),0) FROM payment_allocations WHERE payment_id=p.id) AS allocated
            FROM payments p
            JOIN clients c ON p.client_id = c.id
-           LEFT JOIN invoices i ON p.invoice_id = i.id
            WHERE p.id=?""",
         (payment_id,),
     ).fetchone()
@@ -326,12 +284,27 @@ def get_payment(payment_id):
 def get_client_payments(client_id):
     return get_db().execute(
         """SELECT p.*,
-                  COALESCE(i.invoice_number, '— opening balance —') AS invoice_number
+                  (SELECT GROUP_CONCAT(i.invoice_number, ', ')
+                     FROM payment_allocations pa
+                     JOIN invoices i ON i.id = pa.invoice_id
+                    WHERE pa.payment_id = p.id) AS invoice_number,
+                  (SELECT COALESCE(SUM(amount),0) FROM payment_allocations WHERE payment_id=p.id) AS allocated
            FROM payments p
-           LEFT JOIN invoices i ON p.invoice_id = i.id
            WHERE p.client_id = ?
            ORDER BY p.payment_date DESC, p.created_at DESC""",
         (client_id,),
+    ).fetchall()
+
+
+def get_payment_allocations(payment_id):
+    """Detail rows showing which invoices a payment was applied against."""
+    return get_db().execute(
+        """SELECT pa.invoice_id, pa.amount, i.invoice_number, i.issue_date, i.total
+           FROM payment_allocations pa
+           JOIN invoices i ON i.id = pa.invoice_id
+           WHERE pa.payment_id = ?
+           ORDER BY i.issue_date, i.id""",
+        (payment_id,),
     ).fetchall()
 
 

@@ -69,13 +69,12 @@
     </div>
     <div class="stat-label">Revenue Collected</div>
     <div class="stat-value">{{ stats.total_revenue|inr_compact }}</div>
-    <div class="stat-sub">
-      {% if stats.payment_count is not none %}
-        {{ stats.payment_count }} payment(s) · {{ stats.unique_payers }} client(s)
-      {% else %}
-        {{ window_label }}
-      {% endif %}
+    <div class="stat-sub">{{ window_label }}</div>
+    {% if stats.payment_count is not none %}
+    <div style="font-size:11px;color:var(--text-muted);margin-top:4px">
+      {{ stats.payment_count }} payment(s) · {{ stats.unique_payers }} client(s)
     </div>
+    {% endif %}
   </div>
   {% endif %}
 

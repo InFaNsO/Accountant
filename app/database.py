@@ -21,9 +21,59 @@ def close_db(e=None):
 def init_db(app):
     with app.app_context():
         db = sqlite3.connect(app.config["DATABASE"])
+        db.row_factory = sqlite3.Row
         _create_schema(db)
         db.close()
     app.teardown_appcontext(close_db)
+
+
+def _migrate_payment_allocations(db):
+    """One-time migration from split-row payments to a single payment row + allocations.
+
+    Idempotent: skips if payment_allocations already has any rows.
+    """
+    existing = db.execute("SELECT COUNT(*) FROM payment_allocations").fetchone()[0]
+    if existing > 0:
+        return
+
+    # Step 1 — seed allocations from any payment that already targets an invoice.
+    db.execute(
+        "INSERT INTO payment_allocations (payment_id, invoice_id, amount) "
+        "SELECT id, invoice_id, amount FROM payments WHERE invoice_id IS NOT NULL"
+    )
+
+    # Step 2 — collapse system-split rows. A "split" is multiple payments rows that share
+    # client_id, payment_date, method, reference, notes, company_id — these were created
+    # by a single create_payment() call in the old codebase.
+    groups = db.execute("""
+        SELECT GROUP_CONCAT(id) AS ids, SUM(amount) AS total
+        FROM payments
+        GROUP BY client_id, payment_date,
+                 COALESCE(method,''), COALESCE(reference,''),
+                 COALESCE(notes,''),  COALESCE(company_id,0)
+        HAVING COUNT(*) > 1
+    """).fetchall()
+
+    for g in groups:
+        ids  = sorted(int(x) for x in g["ids"].split(","))
+        keep = ids[0]
+        drop = ids[1:]
+        # Re-point allocations from soon-to-be-deleted rows to the keeper.
+        for d in drop:
+            db.execute(
+                "UPDATE payment_allocations SET payment_id=? WHERE payment_id=?",
+                (keep, d),
+            )
+        db.execute(
+            "UPDATE payments SET amount=?, invoice_id=NULL WHERE id=?",
+            (g["total"], keep),
+        )
+        db.executemany("DELETE FROM payments WHERE id=?", [(d,) for d in drop])
+
+    # Step 3 — for any surviving payment row that still carries invoice_id, NULL it.
+    # The allocation row created in step 1 is now the source of truth.
+    db.execute("UPDATE payments SET invoice_id=NULL WHERE invoice_id IS NOT NULL")
+    db.commit()
 
 
 def _add_column(db, table, column, definition):
@@ -317,6 +367,22 @@ def _create_schema(db):
             FOREIGN KEY (sub_product_id)   REFERENCES sub_products(id)
         );
     """)
+
+    # ── Payment allocations (links one payment to N invoices) ─
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS payment_allocations (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            payment_id INTEGER NOT NULL,
+            invoice_id INTEGER NOT NULL,
+            amount     REAL NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (payment_id) REFERENCES payments(id) ON DELETE CASCADE,
+            FOREIGN KEY (invoice_id) REFERENCES invoices(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_pa_payment ON payment_allocations(payment_id);
+        CREATE INDEX IF NOT EXISTS idx_pa_invoice ON payment_allocations(invoice_id);
+    """)
+    _migrate_payment_allocations(db)
 
     # ── Manual ledger entries ─────────────────────────────────
     db.executescript("""

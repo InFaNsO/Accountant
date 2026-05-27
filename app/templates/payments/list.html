@@ -41,10 +41,10 @@
                style="color:var(--accent);text-decoration:none;font-weight:700">{{ p.client_name }}</a>
           </td>
           <td>
-            {% if p.invoice_id %}
-              <a href="{{ url_for('invoices.detail', invoice_id=p.invoice_id) }}" style="font-weight:600;color:var(--accent);text-decoration:none;font-family:'SF Mono','Fira Code',monospace">{{ p.invoice_number }}</a>
+            {% if p.invoice_number %}
+              <span style="font-weight:600;color:var(--accent);font-family:'SF Mono','Fira Code',monospace">{{ p.invoice_number }}</span>
             {% else %}
-              <span class="muted" style="font-size:12px;font-style:italic">{{ p.invoice_number }}</span>
+              <span class="muted" style="font-size:12px;font-style:italic">— credit / opening —</span>
             {% endif %}
           </td>
           <td class="col-mobile-hide"><span class="badge badge-sent" style="text-transform:capitalize">{{ p.method.replace('_',' ') }}</span></td>

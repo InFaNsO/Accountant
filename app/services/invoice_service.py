@@ -52,7 +52,11 @@ def get_invoice_items(invoice_id):
 
 def get_invoice_payments(invoice_id):
     return get_db().execute(
-        "SELECT * FROM payments WHERE invoice_id = ? ORDER BY payment_date DESC",
+        """SELECT p.*, pa.amount AS allocated_amount
+           FROM payment_allocations pa
+           JOIN payments p ON p.id = pa.payment_id
+           WHERE pa.invoice_id = ?
+           ORDER BY p.payment_date DESC, p.id DESC""",
         (invoice_id,),
     ).fetchall()
 
@@ -81,12 +85,16 @@ def _apply_company_ob_credit(db, client_id, company_id, invoice_id, issue_date):
     if apply < 0.01:
         return
 
-    # Create a 'balance' payment for the applied amount
-    db.execute(
+    # Create a 'balance' payment row + allocation for the applied amount
+    cur = db.execute(
         """INSERT INTO payments
                (client_id, invoice_id, company_id, amount, payment_date, method, notes)
-           VALUES (?, ?, ?, ?, ?, 'balance', 'Auto-applied from credit balance')""",
-        (client_id, invoice_id, company_id, apply, issue_date),
+           VALUES (?, NULL, ?, ?, ?, 'balance', 'Auto-applied from credit balance')""",
+        (client_id, company_id, apply, issue_date),
+    )
+    db.execute(
+        "INSERT INTO payment_allocations (payment_id, invoice_id, amount) VALUES (?,?,?)",
+        (cur.lastrowid, invoice_id, apply),
     )
     # Reduce company OB so the credit isn't double-counted
     new_ob = ob + apply  # ob is negative, so this moves toward 0
@@ -365,6 +373,7 @@ def update_invoice(invoice_id, data, items):
 
 def delete_invoice(invoice_id):
     db = get_db()
+    db.execute("DELETE FROM payment_allocations WHERE invoice_id = ?", (invoice_id,))
     db.execute("DELETE FROM invoices WHERE id = ?", (invoice_id,))
     db.commit()
 
@@ -372,7 +381,7 @@ def delete_invoice(invoice_id):
 def refresh_invoice_paid(invoice_id):
     db = get_db()
     row = db.execute(
-        "SELECT COALESCE(SUM(amount), 0) as paid FROM payments WHERE invoice_id = ?",
+        "SELECT COALESCE(SUM(amount), 0) as paid FROM payment_allocations WHERE invoice_id = ?",
         (invoice_id,),
     ).fetchone()
     paid = row["paid"]
