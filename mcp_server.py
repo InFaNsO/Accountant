@@ -896,6 +896,342 @@ def get_product_stock_history(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# BULK ENDPOINTS — single-call fan-outs (structured JSON, not text)
+# ─────────────────────────────────────────────────────────────────────────────
+# Use these BEFORE looping over single-id tools. Every one returns
+#     {"items": [...], "truncated": bool, "count": int, ...}
+# Filters (category_id, product_ids CSV, status CSV, date_from / date_to YYYY-MM-DD,
+# include CSV) cut payload size; `truncated=true` means raise the limit or narrow filters.
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def _csv(value):
+    """Pass through a Python list or CSV string; return CSV string for query params."""
+    if value is None: return None
+    if isinstance(value, (list, tuple, set)):
+        return ",".join(str(v) for v in value)
+    return str(value)
+
+
+@mcp.tool()
+def products_snapshot(
+    category_id: int = None,
+    product_ids: str = None,
+    sub_product_ids: str = None,
+    include: str = None,
+    include_inactive: bool = False,
+    limit: int = 200,
+) -> dict:
+    """One row per SKU with current stock (warehouse/production/transit) + optional 30/60/90-day
+    sales velocity and last purchase cost. **Use this BEFORE looping `get_product_stock_history`
+    for purchase-order planning** — replaces N per-product calls with one.
+
+    Args:
+      category_id:      filter to a category.
+      product_ids:      CSV of parent product ids (also pulls their sub-products).
+      sub_product_ids:  CSV of specific sub-product ids.
+      include:          CSV of expansions — "velocity", "last_purchase".
+      include_inactive: include retired SKUs (default false).
+      limit:            default 200, max 500.
+    """
+    return _call("GET", "products/snapshot", params={
+        "category_id":      category_id,
+        "product_ids":      _csv(product_ids),
+        "sub_product_ids":  _csv(sub_product_ids),
+        "include":          _csv(include),
+        "include_inactive": 1 if include_inactive else None,
+        "limit":            limit,
+    })
+
+
+@mcp.tool()
+def products_stock_history_bulk(
+    product_ids: str = None,
+    sub_product_ids: str = None,
+    category_id: int = None,
+    bucket: str = None,
+    date_from: str = None,
+    date_to: str = None,
+    limit: int = 500,
+) -> dict:
+    """Stock movements for MANY products in one call. **Replaces N× get_product_stock_history.**
+    At least one filter is required.
+
+    Args:
+      product_ids / sub_product_ids: CSV ids.
+      category_id: filter via parent products.
+      bucket: "warehouse" | "production" | "transit".
+      date_from / date_to: YYYY-MM-DD.
+      limit: default 500, max 2000.
+    """
+    return _call("GET", "products/stock-history-bulk", params={
+        "product_ids":     _csv(product_ids),
+        "sub_product_ids": _csv(sub_product_ids),
+        "category_id":     category_id,
+        "bucket":          bucket,
+        "date_from":       date_from,
+        "date_to":         date_to,
+        "limit":           limit,
+    })
+
+
+@mcp.tool()
+def products_sales_velocity(
+    category_id: int = None,
+    product_ids: str = None,
+    sub_product_ids: str = None,
+    date_from: str = None,
+    date_to: str = None,
+    group_by: str = "sub_product",
+    limit: int = 500,
+) -> dict:
+    """Qty sold + revenue per product/sub-product over a date range (default last 90 days).
+    Aggregated from invoice_items joined to invoices. Sorted by revenue DESC.
+
+    Args:
+      group_by: "product" or "sub_product".
+      limit: default 500, max 1000.
+    """
+    return _call("GET", "products/sales-velocity", params={
+        "category_id":     category_id,
+        "product_ids":     _csv(product_ids),
+        "sub_product_ids": _csv(sub_product_ids),
+        "date_from":       date_from,
+        "date_to":         date_to,
+        "group_by":        group_by,
+        "limit":           limit,
+    })
+
+
+@mcp.tool()
+def invoices_bulk(
+    client_id: int = None,
+    company_id: int = None,
+    status: str = None,
+    date_from: str = None,
+    date_to: str = None,
+    include: str = None,
+    limit: int = 100,
+) -> dict:
+    """Many invoices in one call. **Replaces `get_invoice_details` looped per id.**
+
+    Args:
+      status: CSV — any of paid,issued,partial,draft,cancelled.
+      include: CSV — "items" (line items), "payments" (allocations + payment details).
+      limit: default 100, max 500.
+    """
+    return _call("GET", "invoices/bulk", params={
+        "client_id":  client_id,
+        "company_id": company_id,
+        "status":     _csv(status),
+        "date_from":  date_from,
+        "date_to":    date_to,
+        "include":    _csv(include),
+        "limit":      limit,
+    })
+
+
+@mcp.tool()
+def payments_bulk(
+    client_id: int = None,
+    company_id: int = None,
+    method: str = None,
+    date_from: str = None,
+    date_to: str = None,
+    include: str = None,
+    limit: int = 200,
+) -> dict:
+    """Many payments with allocation breakdown. **Replaces `get_recent_payments` + per-id allocation lookups.**
+
+    Args:
+      method: cash, bank_transfer, cheque, upi, balance, other.
+      include: CSV — "allocations" (which invoices each payment hit).
+      limit: default 200, max 1000.
+    """
+    return _call("GET", "payments/bulk", params={
+        "client_id":  client_id,
+        "company_id": company_id,
+        "method":     method,
+        "date_from":  date_from,
+        "date_to":    date_to,
+        "include":    _csv(include),
+        "limit":      limit,
+    })
+
+
+@mcp.tool()
+def clients_outstanding(
+    min_amount: float = 0,
+    min_age_days: int = 0,
+    company_id: int = None,
+    limit: int = 200,
+) -> dict:
+    """Per-client outstanding with aged buckets (0-30, 31-60, 61-90, 90+ days).
+    Sorted by total_outstanding DESC. One call covers the entire collections review.
+
+    Args:
+      min_amount:  hide clients owing less than this.
+      min_age_days: only include clients with at least one unpaid invoice older than N days.
+      limit: default 200, max 500.
+    """
+    return _call("GET", "clients/outstanding", params={
+        "min_amount":   min_amount,
+        "min_age_days": min_age_days,
+        "company_id":   company_id,
+        "limit":        limit,
+    })
+
+
+@mcp.tool()
+def clients_bulk(
+    q: str = None,
+    include: str = None,
+    limit: int = 200,
+) -> dict:
+    """Structured client list. **Replaces `get_all_clients_summary` + per-id `get_client_details`.**
+
+    Args:
+      q: substring search on client / company name.
+      include: CSV — "balance" (invoiced / paid / outstanding / unallocated),
+                       "companies" (per-company OB), "recent_invoices" (5 latest).
+      limit: default 200, max 500.
+    """
+    return _call("GET", "clients/bulk", params={
+        "q":       q,
+        "include": _csv(include),
+        "limit":   limit,
+    })
+
+
+@mcp.tool()
+def sales_by_client(
+    date_from: str = None,
+    date_to: str = None,
+    min_invoiced: float = 0,
+    limit: int = 200,
+) -> dict:
+    """Total invoiced + total paid per client over a date range (default last 90 days).
+    Sorted by total_invoiced DESC.
+    """
+    return _call("GET", "sales/by-client", params={
+        "date_from":    date_from,
+        "date_to":      date_to,
+        "min_invoiced": min_invoiced,
+        "limit":        limit,
+    })
+
+
+@mcp.tool()
+def purchase_orders_bulk(
+    supplier_id: int = None,
+    status: str = None,
+    include: str = None,
+    limit: int = 100,
+) -> dict:
+    """POs with optional line items. **Replaces `get_purchase_order_details` looped per PO.**
+
+    Args:
+      status: CSV — open, closed.
+      include: CSV — "items" (po_items with pending qty).
+      limit: default 100, max 300.
+    """
+    return _call("GET", "purchase-orders/bulk", params={
+        "supplier_id": supplier_id,
+        "status":      _csv(status),
+        "include":     _csv(include),
+        "limit":       limit,
+    })
+
+
+@mcp.tool()
+def dispatches_bulk(
+    supplier_id: int = None,
+    status: str = None,
+    date_from: str = None,
+    date_to: str = None,
+    include: str = None,
+    limit: int = 100,
+) -> dict:
+    """Dispatches with optional line items + PO allocations. **Replaces `get_dispatch_details` per id.**
+
+    Args:
+      status: CSV — in_transit, partially_received, received.
+      include: CSV — "items", "allocations".
+      limit: default 100, max 300.
+    """
+    return _call("GET", "dispatches/bulk", params={
+        "supplier_id": supplier_id,
+        "status":      _csv(status),
+        "date_from":   date_from,
+        "date_to":     date_to,
+        "include":     _csv(include),
+        "limit":       limit,
+    })
+
+
+@mcp.tool()
+def palm_purchases_bulk(
+    supplier_id: int = None,
+    date_from: str = None,
+    date_to: str = None,
+    include: str = None,
+    limit: int = 100,
+) -> dict:
+    """Palm purchases (instant warehouse stock-ins) with optional items.
+
+    Args:
+      include: CSV — "items" (each line's product, qty, unit_cost).
+      limit: default 100, max 300.
+    """
+    return _call("GET", "palm-purchases/bulk", params={
+        "supplier_id": supplier_id,
+        "date_from":   date_from,
+        "date_to":     date_to,
+        "include":     _csv(include),
+        "limit":       limit,
+    })
+
+
+@mcp.tool()
+def supply_pipeline(
+    product_ids: str = None,
+    sub_product_ids: str = None,
+    category_id: int = None,
+    limit: int = 300,
+) -> dict:
+    """Per product/sub-product: open PO pending qty, in-transit qty, next expected arrival,
+    and last palm-purchase date. **Use BEFORE planning a purchase order to avoid double-ordering
+    what's already in the supply pipeline.** At least one filter is required.
+    """
+    return _call("GET", "supply-pipeline", params={
+        "product_ids":     _csv(product_ids),
+        "sub_product_ids": _csv(sub_product_ids),
+        "category_id":     category_id,
+        "limit":           limit,
+    })
+
+
+@mcp.tool()
+def get_client_ledger_json(
+    client_id: int,
+    company_id: int = None,
+    date_from: str = None,
+    date_to: str = None,
+) -> dict:
+    """Structured JSON variant of `get_client_ledger`. Returns entries (each with
+    debit/credit/running) + final_balance. Supports date_from/date_to slicing
+    (opening balance is omitted when date_from is set, so running balance starts from 0).
+    Payment entries include their `allocations` (which invoices the payment hit).
+    """
+    return _call("GET", f"clients/{client_id}/ledger", params={
+        "company_id": company_id,
+        "date_from":  date_from,
+        "date_to":    date_to,
+        "format":     "json",
+    })
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # ENTRY POINT
 # ═════════════════════════════════════════════════════════════════════════════
 

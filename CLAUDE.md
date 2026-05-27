@@ -73,6 +73,34 @@ Recently added tools:
 
 To add a new MCP tool: write the matching Flask `/api/...` endpoint with `@require_auth`, then add the `@mcp.tool()` wrapper in `mcp_server.py` that calls `_call(...)`.
 
+## Bulk MCP endpoints (for multi-entity analysis)
+A family of structured-JSON endpoints lets the LLM answer cross-entity questions in 1–3 calls instead of looping single-id tools. **Reach for these first** when planning purchase orders, reviewing collections, or analyzing sales across many products / clients.
+
+Shape: every endpoint returns `{"result": {"items": [...], "count": N, "truncated": bool, "limit": L}}`. When `truncated=true`, raise the limit or tighten filters.
+
+Conventions:
+- **Filter via query params.** Most accept `category_id`, `product_ids` / `sub_product_ids` (CSV), `client_id`, `supplier_id`, `status` (CSV), `date_from` / `date_to` (`YYYY-MM-DD`).
+- **`include=` CSV** expands optional fields. Default omits expensive joins to keep payloads small.
+- **Hard caps.** Each endpoint has a default + max `limit`. Page by narrowing filters; cursor pagination is not implemented (see plan file in `~/.claude/plans/` for follow-up).
+
+| MCP tool | Endpoint | Use for |
+|---|---|---|
+| `products_snapshot` | `/api/products/snapshot` | Per-SKU stock + optional `velocity`, `last_purchase`. **Marquee tool for purchase planning.** |
+| `products_stock_history_bulk` | `/api/products/stock-history-bulk` | Stock movements across many SKUs in one call. |
+| `products_sales_velocity` | `/api/products/sales-velocity` | Qty sold + revenue per product over a date range. |
+| `invoices_bulk` | `/api/invoices/bulk` | Many invoices + optional `items`, `payments`. |
+| `payments_bulk` | `/api/payments/bulk` | Many payments + optional `allocations`. |
+| `clients_outstanding` | `/api/clients/outstanding` | Aged-bucket outstanding per client. **Marquee tool for collections.** |
+| `clients_bulk` | `/api/clients/bulk` | Structured client list + optional `balance`, `companies`, `recent_invoices`. |
+| `sales_by_client` | `/api/sales/by-client` | Invoiced/paid per client over a date range. |
+| `purchase_orders_bulk` | `/api/purchase-orders/bulk` | POs + optional `items`. |
+| `dispatches_bulk` | `/api/dispatches/bulk` | Dispatches + optional `items`, `allocations`. |
+| `palm_purchases_bulk` | `/api/palm-purchases/bulk` | Palm purchases + optional `items`. |
+| `supply_pipeline` | `/api/supply-pipeline` | Per-SKU open PO qty + in-transit qty + next arrival. **Pair with `products_snapshot` before placing new POs.** |
+| `get_client_ledger_json` | `/api/clients/<id>/ledger?format=json` | Structured ledger with date range. |
+
+Adding a new bulk endpoint: keep the response shape `{"result": {"items": [...], "truncated": bool, ...}}`, reuse helpers (`_f`, `_inr`, `_csv_ints`, `_csv_set`, `_arg_date`, `_arg_int`, `_BUCKET_MOVEMENT_TYPES`), and write an MCP wrapper that returns `dict` (FastMCP serializes it).
+
 ## Invoice domain — recent changes
 - **Discounts:** both invoice-level and per-line-item carry `discount_type` (`'value'` or `'percent'`) + `discount_value`. The resolved ₹ figure is stored in `invoices.discount_amount` for backward compatibility. See `_compute_totals()` and `_item_net()` in `app/services/invoice_service.py`.
 - **Drafts** never deduct stock and may be saved with qty > stock. The "Issue Invoice" button on the detail page is server-gated AND disabled in the UI when `stock_status` reports shortages.

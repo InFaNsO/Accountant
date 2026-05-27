@@ -352,11 +352,22 @@ def get_client_details(client_id):
 @bp.route("/clients/<int:client_id>/ledger")
 @require_auth
 def get_client_ledger(client_id):
+    """Client ledger. Default returns a text table (backward-compatible).
+    Pass ?format=json for structured rows; supports date_from/date_to filtering."""
     db = get_db()
     c = db.execute("SELECT name, opening_balance FROM clients WHERE id=?", (client_id,)).fetchone()
     if not c:
         return jsonify({"error": f"Client ID {client_id} not found."}), 404
     company_id = request.args.get("company_id", type=int)
+    fmt        = (request.args.get("format") or "text").lower()
+    date_from  = request.args.get("date_from")
+    date_to    = request.args.get("date_to")
+    try:
+        if date_from: datetime.strptime(date_from, "%Y-%m-%d")
+        if date_to:   datetime.strptime(date_to, "%Y-%m-%d")
+    except ValueError:
+        return jsonify({"error": "date_from / date_to must be YYYY-MM-DD."}), 400
+
     if company_id:
         co_row = db.execute("SELECT name, opening_balance FROM client_companies WHERE id=? AND client_id=?",
                             (company_id, client_id)).fetchone()
@@ -364,64 +375,118 @@ def get_client_ledger(client_id):
             return jsonify({"error": f"Company ID {company_id} not found for this client."}), 404
         ledger_name = f"{c['name']} / {co_row['name']}"
         ob = _f(co_row["opening_balance"])
-        invoices = db.execute(
-            "SELECT invoice_number, issue_date, total, status FROM invoices "
-            "WHERE client_id=? AND company_id=? AND status != 'cancelled' ORDER BY issue_date, id",
-            (client_id, company_id),
-        ).fetchall()
-        payments = db.execute(
-            "SELECT amount, payment_date, method, reference, invoice_id FROM payments "
-            "WHERE client_id=? AND company_id=? ORDER BY payment_date, id",
-            (client_id, company_id),
-        ).fetchall()
+        inv_where  = "WHERE client_id=? AND company_id=? AND status != 'cancelled'"
+        inv_params = [client_id, company_id]
+        pay_where  = "WHERE client_id=? AND company_id=?"
+        pay_params = [client_id, company_id]
     else:
         ledger_name = c["name"]
         ob = _f(c["opening_balance"])
-        invoices = db.execute(
-            "SELECT invoice_number, issue_date, total, status FROM invoices "
-            "WHERE client_id=? AND status != 'cancelled' ORDER BY issue_date, id",
-            (client_id,),
-        ).fetchall()
-        payments = db.execute(
-            "SELECT amount, payment_date, method, reference, invoice_id FROM payments "
-            "WHERE client_id=? ORDER BY payment_date, id",
-            (client_id,),
-        ).fetchall()
+        inv_where  = "WHERE client_id=? AND status != 'cancelled'"
+        inv_params = [client_id]
+        pay_where  = "WHERE client_id=?"
+        pay_params = [client_id]
+
+    if date_from:
+        inv_where += " AND issue_date >= ?";    inv_params.append(date_from)
+        pay_where += " AND payment_date >= ?";  pay_params.append(date_from)
+    if date_to:
+        inv_where += " AND issue_date <= ?";    inv_params.append(date_to)
+        pay_where += " AND payment_date <= ?";  pay_params.append(date_to)
+
+    invoices = db.execute(
+        f"SELECT invoice_number, issue_date, total, status FROM invoices "
+        f"{inv_where} ORDER BY issue_date, id",
+        inv_params,
+    ).fetchall()
+    payments = db.execute(
+        f"SELECT id, amount, payment_date, method, reference, notes FROM payments "
+        f"{pay_where} ORDER BY payment_date, id",
+        pay_params,
+    ).fetchall()
+
     entries = []
-    if ob != 0:
-        entries.append(("", "opening", f"Opening Balance ({'debt' if ob > 0 else 'credit'})",
-                        ob if ob > 0 else 0, abs(ob) if ob < 0 else 0))
-    items = sorted(
-        [{"sort": r["issue_date"] or "", "kind": "invoice", "row": dict(r)} for r in invoices] +
+    # Opening balance only appears when not date-windowed (matches existing UI behavior)
+    if ob != 0 and not date_from:
+        entries.append({
+            "date": "", "type": "opening",
+            "label": f"Opening Balance ({'debt' if ob > 0 else 'credit'})",
+            "debit":  ob if ob > 0 else 0,
+            "credit": abs(ob) if ob < 0 else 0,
+        })
+
+    merged = sorted(
+        [{"sort": r["issue_date"] or "",  "kind": "invoice", "row": dict(r)} for r in invoices] +
         [{"sort": r["payment_date"] or "", "kind": "payment", "row": dict(r)} for r in payments],
         key=lambda x: x["sort"],
     )
-    for item in items:
+    pmt_ids = [m["row"]["id"] for m in merged if m["kind"] == "payment"]
+    allocs_by_pmt = {}
+    if pmt_ids:
+        ph = ",".join("?" * len(pmt_ids))
+        for r in db.execute(
+            f"""SELECT pa.payment_id, pa.amount, i.invoice_number
+                FROM payment_allocations pa JOIN invoices i ON i.id = pa.invoice_id
+                WHERE pa.payment_id IN ({ph})""",
+            pmt_ids,
+        ).fetchall():
+            allocs_by_pmt.setdefault(r["payment_id"], []).append(dict(r))
+
+    for item in merged:
         r = item["row"]
         if item["kind"] == "invoice":
-            entries.append((r["issue_date"], "invoice", r["invoice_number"], _f(r["total"]), 0))
+            entries.append({
+                "date": r["issue_date"], "type": "invoice",
+                "label": r["invoice_number"], "debit": _f(r["total"]), "credit": 0,
+            })
         else:
             label = r["method"] or "payment"
             if r["reference"]:
                 label += f" / {r['reference']}"
-            entries.append((r["payment_date"], "payment", label, 0, _f(r["amount"])))
+            allocs = allocs_by_pmt.get(r["id"], [])
+            entries.append({
+                "date": r["payment_date"], "type": "payment",
+                "label": label, "debit": 0, "credit": _f(r["amount"]),
+                "payment_id": r["id"], "allocations": allocs,
+            })
+
+    # Compute running balance
+    running = 0.0
+    for e in entries:
+        running += e["credit"] - e["debit"]
+        e["running"] = running
+    final_balance = running
+
+    if fmt == "json":
+        return jsonify({"result": {
+            "client_id":     client_id,
+            "ledger_name":   ledger_name,
+            "company_id":    company_id,
+            "date_from":     date_from,
+            "date_to":       date_to,
+            "entries":       entries,
+            "final_balance": final_balance,
+        }})
+
+    # Text format (legacy)
     lines = [
         f"Ledger for {ledger_name}", "─" * 64,
         f"{'Date':<12} {'Description':<30} {'Debit':>10} {'Credit':>10} {'Balance':>12}",
         "─" * 64,
     ]
-    running = 0.0
-    for dt, kind, label, debit, credit in entries:
-        running += credit - debit
+    for e in entries:
+        dt = e["date"] or "—"
+        lbl = e["label"][:30]
+        debit, credit, run = e["debit"], e["credit"], e["running"]
         lines.append(
-            f"{dt or '—':<12} {label[:30]:<30} "
+            f"{dt:<12} {lbl:<30} "
             f"{('₹'+f'{debit:,.0f}') if debit else '—':>10} "
             f"{('₹'+f'{credit:,.0f}') if credit else '—':>10} "
-            f"{'₹'+f'{abs(running):,.0f}' + (' CR' if running > 0 else ' DR'):>12}"
+            f"{'₹'+f'{abs(run):,.0f}' + (' CR' if run > 0 else ' DR'):>12}"
         )
     lines.append("─" * 64)
-    lines.append(f"Final balance: {_inr(abs(running))} "
-                 f"{'CREDIT' if running > 0 else ('DEBIT – owes us' if running < 0 else 'SETTLED')}")
+    lines.append(f"Final balance: {_inr(abs(final_balance))} "
+                 f"{'CREDIT' if final_balance > 0 else ('DEBIT – owes us' if final_balance < 0 else 'SETTLED')}")
     return jsonify({"result": "\n".join(lines)})
 
 
@@ -2683,3 +2748,1106 @@ def api_product_stock_history(product_id):
         "count":   len(history),
         "limit":   limit,
     }})
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# BULK ENDPOINTS — fan-out questions in one call (structured JSON, not text)
+# ─────────────────────────────────────────────────────────────────────────────
+# Convention: every endpoint here returns
+#     {"result": {"items": [...], "truncated": bool, "count": int, ...}}
+# Filters are query-string. `include=` is a CSV of optional expansions.
+# Hard caps are enforced so a missing filter never returns the entire DB.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _csv_ints(raw):
+    """Parse 'a,b,c' into [int(a), int(b), int(c)]; empties / non-ints dropped."""
+    if not raw:
+        return []
+    out = []
+    for tok in str(raw).split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        try:
+            out.append(int(tok))
+        except ValueError:
+            pass
+    return out
+
+
+def _csv_set(raw):
+    if not raw:
+        return set()
+    return {tok.strip() for tok in str(raw).split(",") if tok.strip()}
+
+
+def _arg_int(name, default, lo=1, hi=500):
+    try:
+        v = int(request.args.get(name, default))
+    except (TypeError, ValueError):
+        v = default
+    return max(lo, min(v, hi))
+
+
+def _arg_date(name):
+    """Return YYYY-MM-DD string if present and valid, else None."""
+    v = request.args.get(name)
+    if not v:
+        return None
+    try:
+        datetime.strptime(v, "%Y-%m-%d")
+        return v
+    except ValueError:
+        return None
+
+
+# ── 1. /api/products/snapshot ─────────────────────────────────────────────────
+@bp.route("/products/snapshot")
+@require_auth
+def products_snapshot():
+    """Per-SKU row (product or sub-product) with current stock + optional 30/60/90-day sales velocity
+    and last purchase cost. Replaces N× get_product_stock_history + N× search_products loops.
+
+    Query params:
+      category_id           — filter to a category
+      product_ids           — CSV of parent product ids (matches that product + all its subs)
+      sub_product_ids       — CSV of specific sub-product ids
+      include               — CSV: 'velocity' (sold_30/60/90 from stock_movements),
+                                   'last_purchase' (most recent palm_purchase_items unit_cost)
+      include_inactive=0/1  — default 0 (only active SKUs)
+      limit                 — default 200, max 500
+    """
+    db = get_db()
+    category_id    = request.args.get("category_id", type=int)
+    product_ids    = _csv_ints(request.args.get("product_ids"))
+    sub_ids        = _csv_ints(request.args.get("sub_product_ids"))
+    include        = _csv_set(request.args.get("include"))
+    include_inact  = request.args.get("include_inactive", "0") in ("1", "true", "yes")
+    limit          = _arg_int("limit", 200)
+
+    # Build product WHERE
+    p_where, p_params = [], []
+    if not include_inact:
+        p_where.append("p.is_active = 1")
+    if category_id is not None:
+        p_where.append("p.category_id = ?"); p_params.append(category_id)
+    if product_ids:
+        ph = ",".join("?" * len(product_ids))
+        p_where.append(f"p.id IN ({ph})"); p_params.extend(product_ids)
+    p_clause = (" WHERE " + " AND ".join(p_where)) if p_where else ""
+
+    # Fetch parent products
+    products = db.execute(
+        f"""SELECT p.id, p.name, p.sku, p.category_id, c.name AS category_name,
+                   p.unit_price, p.tax_rate, p.stock_qty, p.production_qty, p.in_transit_qty,
+                   p.pcs_per_carton, p.min_quantity, p.has_eco_range, p.eco_parent_id,
+                   p.is_active
+            FROM products p LEFT JOIN categories c ON c.id = p.category_id
+            {p_clause}
+            ORDER BY p.name""",
+        p_params,
+    ).fetchall()
+    product_ids_in_scope = [p["id"] for p in products]
+
+    # Fetch sub-products under those parents (or by explicit sub_ids)
+    s_where, s_params = [], []
+    if not include_inact:
+        s_where.append("s.is_active = 1")
+    if sub_ids:
+        ph = ",".join("?" * len(sub_ids))
+        s_where.append(f"s.id IN ({ph})"); s_params.extend(sub_ids)
+    elif product_ids_in_scope:
+        ph = ",".join("?" * len(product_ids_in_scope))
+        s_where.append(f"s.product_id IN ({ph})"); s_params.extend(product_ids_in_scope)
+    else:
+        # No matching products and no explicit subs — nothing to fetch
+        s_where.append("1=0")
+    s_clause = " WHERE " + " AND ".join(s_where)
+
+    subs = db.execute(
+        f"""SELECT s.id, s.product_id, s.name, s.sku, s.unit_price, s.use_parent_price,
+                   s.tax_rate, s.stock_qty, s.production_qty, s.in_transit_qty,
+                   s.pcs_per_carton, s.min_quantity, s.eco_parent_sub_id, s.is_active,
+                   p.name AS parent_name, p.category_id, c.name AS category_name,
+                   p.pcs_per_carton AS parent_pcs_per_carton, p.unit_price AS parent_unit_price
+            FROM sub_products s
+            JOIN products p ON p.id = s.product_id
+            LEFT JOIN categories c ON c.id = p.category_id
+            {s_clause}
+            ORDER BY p.name, s.name""",
+        s_params,
+    ).fetchall()
+    parents_with_subs = {s["product_id"] for s in subs}
+
+    # Build the row list: sub_products represent their own SKUs; products only if no subs.
+    rows = []
+    for p in products:
+        if p["id"] in parents_with_subs:
+            continue  # sub-products will represent this product's SKUs
+        rows.append({
+            "entity_type":   "product",
+            "product_id":    p["id"],
+            "sub_product_id": None,
+            "name":          p["name"],
+            "sku":           p["sku"],
+            "category_id":   p["category_id"],
+            "category_name": p["category_name"],
+            "unit_price":    _f(p["unit_price"]),
+            "tax_rate":      _f(p["tax_rate"]),
+            "stock":         _f(p["stock_qty"]),
+            "production":    _f(p["production_qty"]),
+            "transit":       _f(p["in_transit_qty"]),
+            "pcs_per_carton": p["pcs_per_carton"] or 0,
+            "min_quantity":  _f(p["min_quantity"]),
+            "has_eco_range": bool(p["has_eco_range"]),
+            "eco_parent_id": p["eco_parent_id"],
+            "is_active":     bool(p["is_active"]),
+        })
+
+    for s in subs:
+        eff_price = _f(s["unit_price"]) if not s["use_parent_price"] else _f(s["parent_unit_price"])
+        rows.append({
+            "entity_type":   "sub_product",
+            "product_id":    s["product_id"],
+            "sub_product_id": s["id"],
+            "name":          f"{s['parent_name']} — {s['name']}",
+            "sku":           s["sku"],
+            "category_id":   s["category_id"],
+            "category_name": s["category_name"],
+            "unit_price":    eff_price,
+            "tax_rate":      _f(s["tax_rate"]),
+            "stock":         _f(s["stock_qty"]),
+            "production":    _f(s["production_qty"]),
+            "transit":       _f(s["in_transit_qty"]),
+            "pcs_per_carton": s["pcs_per_carton"] or s["parent_pcs_per_carton"] or 0,
+            "min_quantity":  _f(s["min_quantity"]),
+            "has_eco_range": False,
+            "eco_parent_sub_id": s["eco_parent_sub_id"],
+            "is_active":     bool(s["is_active"]),
+        })
+
+    # Optional: 30/60/90-day sales velocity per row (movement_type='sale')
+    if "velocity" in include:
+        # Build a (product_id, sub_product_id) → totals map
+        vel = db.execute(
+            """SELECT product_id, sub_product_id,
+                      SUM(CASE WHEN created_at >= date('now','-30 days') THEN quantity ELSE 0 END) AS d30,
+                      SUM(CASE WHEN created_at >= date('now','-60 days') THEN quantity ELSE 0 END) AS d60,
+                      SUM(CASE WHEN created_at >= date('now','-90 days') THEN quantity ELSE 0 END) AS d90
+               FROM stock_movements
+               WHERE movement_type = 'sale'
+               GROUP BY product_id, sub_product_id"""
+        ).fetchall()
+        velmap = {(v["product_id"], v["sub_product_id"]): v for v in vel}
+        for r in rows:
+            key = (r["product_id"], r["sub_product_id"])
+            v = velmap.get(key)
+            r["velocity"] = {
+                "sold_30d": _f(v["d30"]) if v else 0.0,
+                "sold_60d": _f(v["d60"]) if v else 0.0,
+                "sold_90d": _f(v["d90"]) if v else 0.0,
+            }
+
+    # Optional: last purchase cost per row from palm_purchase_items
+    if "last_purchase" in include:
+        lp = db.execute(
+            """SELECT ppi.product_id, ppi.sub_product_id, ppi.unit_cost,
+                      pp.purchase_date, pp.supplier_id, pp.id AS palm_purchase_id
+               FROM palm_purchase_items ppi
+               JOIN palm_purchases pp ON pp.id = ppi.palm_purchase_id
+               ORDER BY pp.purchase_date DESC, pp.id DESC"""
+        ).fetchall()
+        seen = {}
+        for r in lp:
+            key = (r["product_id"], r["sub_product_id"])
+            if key not in seen:
+                seen[key] = r
+        for row in rows:
+            key = (row["product_id"], row["sub_product_id"])
+            lpr = seen.get(key)
+            row["last_purchase"] = {
+                "date":             lpr["purchase_date"] if lpr else None,
+                "unit_cost":        _f(lpr["unit_cost"]) if lpr else None,
+                "supplier_id":      lpr["supplier_id"] if lpr else None,
+                "palm_purchase_id": lpr["palm_purchase_id"] if lpr else None,
+            } if lpr else None
+
+    truncated = len(rows) > limit
+    rows = rows[:limit]
+    return jsonify({"result": {"items": rows, "count": len(rows), "truncated": truncated, "limit": limit}})
+
+
+# ── 2. /api/products/stock-history-bulk ───────────────────────────────────────
+@bp.route("/products/stock-history-bulk")
+@require_auth
+def products_stock_history_bulk():
+    """Stock movements for many products/sub-products in one call.
+
+    Query params:
+      product_ids, sub_product_ids — CSV
+      category_id                  — restrict to a category
+      bucket                       — warehouse|production|transit
+      date_from, date_to           — YYYY-MM-DD
+      limit                        — default 500, max 2000
+    """
+    db = get_db()
+    product_ids   = _csv_ints(request.args.get("product_ids"))
+    sub_ids       = _csv_ints(request.args.get("sub_product_ids"))
+    category_id   = request.args.get("category_id", type=int)
+    bucket        = (request.args.get("bucket") or "").strip().lower() or None
+    date_from     = _arg_date("date_from")
+    date_to       = _arg_date("date_to")
+    limit         = _arg_int("limit", 500, hi=2000)
+
+    # Resolve product scope via category if given
+    if category_id is not None and not product_ids:
+        product_ids = [r["id"] for r in db.execute(
+            "SELECT id FROM products WHERE category_id=?", (category_id,)
+        ).fetchall()]
+
+    where, params = [], []
+    if product_ids:
+        ph = ",".join("?" * len(product_ids))
+        where.append(f"sm.product_id IN ({ph})"); params.extend(product_ids)
+    if sub_ids:
+        ph = ",".join("?" * len(sub_ids))
+        where.append(f"sm.sub_product_id IN ({ph})"); params.extend(sub_ids)
+    if bucket:
+        if bucket not in _BUCKET_MOVEMENT_TYPES:
+            return jsonify({"error": "bucket must be one of: warehouse, production, transit"}), 400
+        types = _BUCKET_MOVEMENT_TYPES[bucket]
+        ph = ",".join("?" * len(types))
+        where.append(f"sm.movement_type IN ({ph})"); params.extend(types)
+    if date_from:
+        where.append("date(sm.created_at) >= date(?)"); params.append(date_from)
+    if date_to:
+        where.append("date(sm.created_at) <= date(?)"); params.append(date_to)
+
+    if not where:
+        return jsonify({"error": "Specify at least one filter: product_ids, sub_product_ids, category_id, bucket, or date range."}), 400
+
+    sql = (
+        "SELECT sm.id, sm.product_id, sm.sub_product_id, sm.movement_type, sm.quantity, "
+        "       sm.notes, sm.invoice_id, sm.dispatch_id, sm.palm_purchase_id, "
+        "       sm.expected_arrival, sm.linked_movement_id, sm.created_at, "
+        "       p.name AS product_name, s.name AS sub_product_name "
+        "FROM stock_movements sm "
+        "LEFT JOIN products p ON p.id = sm.product_id "
+        "LEFT JOIN sub_products s ON s.id = sm.sub_product_id "
+        f"WHERE {' AND '.join(where)} "
+        "ORDER BY sm.created_at DESC, sm.id DESC LIMIT ?"
+    )
+    params.append(limit + 1)  # fetch +1 to detect truncation
+    rows = db.execute(sql, params).fetchall()
+    truncated = len(rows) > limit
+    rows = rows[:limit]
+
+    items = [{
+        "id":             r["id"],
+        "product_id":     r["product_id"],
+        "product_name":   r["product_name"],
+        "sub_product_id": r["sub_product_id"],
+        "sub_product_name": r["sub_product_name"],
+        "type":           r["movement_type"],
+        "quantity":       _f(r["quantity"]),
+        "notes":          r["notes"],
+        "invoice_id":     r["invoice_id"],
+        "dispatch_id":    r["dispatch_id"],
+        "palm_purchase_id": r["palm_purchase_id"],
+        "expected_arrival": r["expected_arrival"],
+        "linked_id":      r["linked_movement_id"],
+        "created_at":     r["created_at"],
+    } for r in rows]
+    return jsonify({"result": {"items": items, "count": len(items), "truncated": truncated, "limit": limit}})
+
+
+# ── 3. /api/products/sales-velocity ───────────────────────────────────────────
+@bp.route("/products/sales-velocity")
+@require_auth
+def products_sales_velocity():
+    """Sold quantity + revenue per product/sub-product over a date range.
+
+    Query params: category_id, product_ids, sub_product_ids,
+                  date_from, date_to (default: last 90 days),
+                  group_by = product|sub_product (default sub_product),
+                  limit (default 500, max 1000)
+    """
+    db = get_db()
+    category_id = request.args.get("category_id", type=int)
+    product_ids = _csv_ints(request.args.get("product_ids"))
+    sub_ids     = _csv_ints(request.args.get("sub_product_ids"))
+    date_from   = _arg_date("date_from")
+    date_to     = _arg_date("date_to")
+    group_by    = (request.args.get("group_by") or "sub_product").lower()
+    if group_by not in ("product", "sub_product"):
+        group_by = "sub_product"
+    limit       = _arg_int("limit", 500, hi=1000)
+
+    where = ["i.status NOT IN ('cancelled','draft')"]
+    params = []
+    if date_from:
+        where.append("i.issue_date >= ?"); params.append(date_from)
+    if date_to:
+        where.append("i.issue_date <= ?"); params.append(date_to)
+    if not date_from and not date_to:
+        where.append("i.issue_date >= date('now','-90 days')")
+    if category_id is not None:
+        where.append("p.category_id = ?"); params.append(category_id)
+    if product_ids:
+        ph = ",".join("?" * len(product_ids))
+        where.append(f"ii.product_id IN ({ph})"); params.extend(product_ids)
+    if sub_ids:
+        ph = ",".join("?" * len(sub_ids))
+        where.append(f"ii.sub_product_id IN ({ph})"); params.extend(sub_ids)
+
+    group_cols = "ii.product_id, ii.sub_product_id" if group_by == "sub_product" else "ii.product_id"
+    sql = (
+        "SELECT ii.product_id, "
+        + ("ii.sub_product_id, " if group_by == "sub_product" else "")
+        + "p.name AS product_name, "
+        + ("s.name AS sub_product_name, " if group_by == "sub_product" else "")
+        + "p.category_id, c.name AS category_name, "
+        "SUM(ii.quantity) AS qty_sold, "
+        "SUM(ii.line_total) AS revenue, "
+        "COUNT(DISTINCT i.id) AS invoice_count, "
+        "MIN(i.issue_date) AS first_sale, MAX(i.issue_date) AS last_sale "
+        "FROM invoice_items ii "
+        "JOIN invoices i ON i.id = ii.invoice_id "
+        "LEFT JOIN products p ON p.id = ii.product_id "
+        + ("LEFT JOIN sub_products s ON s.id = ii.sub_product_id " if group_by == "sub_product" else "")
+        + "LEFT JOIN categories c ON c.id = p.category_id "
+        f"WHERE {' AND '.join(where)} "
+        f"GROUP BY {group_cols} "
+        "ORDER BY revenue DESC LIMIT ?"
+    )
+    params.append(limit + 1)
+    rows = db.execute(sql, params).fetchall()
+    truncated = len(rows) > limit
+    rows = rows[:limit]
+
+    items = []
+    for r in rows:
+        d = dict(r)
+        d["qty_sold"] = _f(d.get("qty_sold"))
+        d["revenue"]  = _f(d.get("revenue"))
+        items.append(d)
+    return jsonify({"result": {
+        "items": items, "count": len(items), "truncated": truncated, "limit": limit,
+        "group_by": group_by, "date_from": date_from, "date_to": date_to,
+    }})
+
+
+# ── 4. /api/invoices/bulk ─────────────────────────────────────────────────────
+@bp.route("/invoices/bulk")
+@require_auth
+def invoices_bulk():
+    """Many invoices in one call, optionally with line items and payment allocations.
+
+    Query params: client_id, company_id, status (CSV: 'paid,issued,partial,draft,cancelled'),
+                  date_from, date_to, include (CSV: 'items,payments'), limit (default 100, max 500)
+    """
+    db = get_db()
+    client_id   = request.args.get("client_id", type=int)
+    company_id  = request.args.get("company_id", type=int)
+    statuses    = _csv_set(request.args.get("status"))
+    date_from   = _arg_date("date_from")
+    date_to     = _arg_date("date_to")
+    include     = _csv_set(request.args.get("include"))
+    limit       = _arg_int("limit", 100, hi=500)
+
+    where, params = [], []
+    if client_id is not None:
+        where.append("i.client_id = ?"); params.append(client_id)
+    if company_id is not None:
+        where.append("i.company_id = ?"); params.append(company_id)
+    if statuses:
+        ph = ",".join("?" * len(statuses))
+        where.append(f"i.status IN ({ph})"); params.extend(sorted(statuses))
+    if date_from:
+        where.append("i.issue_date >= ?"); params.append(date_from)
+    if date_to:
+        where.append("i.issue_date <= ?"); params.append(date_to)
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+
+    rows = db.execute(
+        f"""SELECT i.id, i.invoice_number, i.client_id, i.company_id, i.status,
+                   i.issue_date, i.due_date, i.subtotal, i.tax_total, i.discount_amount,
+                   i.total, i.amount_paid, i.notes, i.created_at,
+                   c.name AS client_name, cc.name AS company_name
+            FROM invoices i
+            JOIN clients c ON c.id = i.client_id
+            LEFT JOIN client_companies cc ON cc.id = i.company_id
+            {clause}
+            ORDER BY i.issue_date DESC, i.id DESC LIMIT ?""",
+        params + [limit + 1],
+    ).fetchall()
+    truncated = len(rows) > limit
+    rows = rows[:limit]
+    inv_ids = [r["id"] for r in rows]
+
+    items_by_inv = {}
+    if "items" in include and inv_ids:
+        ph = ",".join("?" * len(inv_ids))
+        for r in db.execute(
+            f"""SELECT id, invoice_id, product_id, sub_product_id, description, sku,
+                       quantity, unit_price, tax_rate, line_total,
+                       discount_type, discount_value
+                FROM invoice_items WHERE invoice_id IN ({ph})""",
+            inv_ids,
+        ).fetchall():
+            items_by_inv.setdefault(r["invoice_id"], []).append(dict(r))
+
+    payments_by_inv = {}
+    if "payments" in include and inv_ids:
+        ph = ",".join("?" * len(inv_ids))
+        for r in db.execute(
+            f"""SELECT pa.invoice_id, pa.payment_id, pa.amount AS allocated,
+                       p.payment_date, p.method, p.reference, p.notes, p.amount AS payment_total
+                FROM payment_allocations pa
+                JOIN payments p ON p.id = pa.payment_id
+                WHERE pa.invoice_id IN ({ph})
+                ORDER BY p.payment_date DESC""",
+            inv_ids,
+        ).fetchall():
+            payments_by_inv.setdefault(r["invoice_id"], []).append(dict(r))
+
+    items = []
+    for r in rows:
+        d = dict(r)
+        d["remaining"] = _f(d["total"]) - _f(d["amount_paid"])
+        if "items" in include:
+            d["line_items"] = items_by_inv.get(r["id"], [])
+        if "payments" in include:
+            d["payments"] = payments_by_inv.get(r["id"], [])
+        items.append(d)
+    return jsonify({"result": {"items": items, "count": len(items), "truncated": truncated, "limit": limit}})
+
+
+# ── 5. /api/payments/bulk ─────────────────────────────────────────────────────
+@bp.route("/payments/bulk")
+@require_auth
+def payments_bulk():
+    """Many payments with optional allocation breakdown.
+
+    Query params: client_id, company_id, method, date_from, date_to,
+                  include (CSV: 'allocations'), limit (default 200, max 1000)
+    """
+    db = get_db()
+    client_id   = request.args.get("client_id", type=int)
+    company_id  = request.args.get("company_id", type=int)
+    method      = request.args.get("method")
+    date_from   = _arg_date("date_from")
+    date_to     = _arg_date("date_to")
+    include     = _csv_set(request.args.get("include"))
+    limit       = _arg_int("limit", 200, hi=1000)
+
+    where, params = [], []
+    if client_id is not None:
+        where.append("p.client_id = ?"); params.append(client_id)
+    if company_id is not None:
+        where.append("p.company_id = ?"); params.append(company_id)
+    if method:
+        where.append("p.method = ?"); params.append(method)
+    if date_from:
+        where.append("p.payment_date >= ?"); params.append(date_from)
+    if date_to:
+        where.append("p.payment_date <= ?"); params.append(date_to)
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+
+    rows = db.execute(
+        f"""SELECT p.id, p.client_id, p.company_id, p.amount, p.payment_date,
+                   p.method, p.reference, p.notes, p.created_at,
+                   c.name AS client_name, cc.name AS company_name,
+                   (SELECT COALESCE(SUM(amount),0) FROM payment_allocations
+                      WHERE payment_id = p.id) AS allocated
+            FROM payments p
+            JOIN clients c ON c.id = p.client_id
+            LEFT JOIN client_companies cc ON cc.id = p.company_id
+            {clause}
+            ORDER BY p.payment_date DESC, p.id DESC LIMIT ?""",
+        params + [limit + 1],
+    ).fetchall()
+    truncated = len(rows) > limit
+    rows = rows[:limit]
+    pmt_ids = [r["id"] for r in rows]
+
+    allocs_by_pmt = {}
+    if "allocations" in include and pmt_ids:
+        ph = ",".join("?" * len(pmt_ids))
+        for r in db.execute(
+            f"""SELECT pa.payment_id, pa.invoice_id, pa.amount, i.invoice_number
+                FROM payment_allocations pa
+                JOIN invoices i ON i.id = pa.invoice_id
+                WHERE pa.payment_id IN ({ph})""",
+            pmt_ids,
+        ).fetchall():
+            allocs_by_pmt.setdefault(r["payment_id"], []).append(dict(r))
+
+    items = []
+    for r in rows:
+        d = dict(r)
+        d["amount"]    = _f(d["amount"])
+        d["allocated"] = _f(d["allocated"])
+        d["unallocated"] = d["amount"] - d["allocated"]
+        if "allocations" in include:
+            d["allocations"] = allocs_by_pmt.get(r["id"], [])
+        items.append(d)
+    return jsonify({"result": {"items": items, "count": len(items), "truncated": truncated, "limit": limit}})
+
+
+# ── 6. /api/clients/outstanding ───────────────────────────────────────────────
+@bp.route("/clients/outstanding")
+@require_auth
+def clients_outstanding():
+    """Per-client outstanding ledger with aged-bucket breakdown of unpaid invoices.
+
+    Query params: min_amount, min_age_days, company_id, limit (default 200, max 500)
+    Aged buckets are based on issue_date relative to today.
+    """
+    db = get_db()
+    min_amount   = _f(request.args.get("min_amount") or 0)
+    min_age_days = request.args.get("min_age_days", type=int) or 0
+    company_id   = request.args.get("company_id", type=int)
+    limit        = _arg_int("limit", 200, hi=500)
+
+    co_filter = "AND i.company_id = ?" if company_id is not None else ""
+    co_params = [company_id] if company_id is not None else []
+
+    rows = db.execute(
+        f"""SELECT c.id AS client_id, c.name AS client_name, c.opening_balance,
+                   SUM(CASE WHEN julianday('now') - julianday(i.issue_date) <= 30 THEN i.total - i.amount_paid ELSE 0 END) AS bucket_0_30,
+                   SUM(CASE WHEN julianday('now') - julianday(i.issue_date) BETWEEN 31 AND 60 THEN i.total - i.amount_paid ELSE 0 END) AS bucket_31_60,
+                   SUM(CASE WHEN julianday('now') - julianday(i.issue_date) BETWEEN 61 AND 90 THEN i.total - i.amount_paid ELSE 0 END) AS bucket_61_90,
+                   SUM(CASE WHEN julianday('now') - julianday(i.issue_date) > 90 THEN i.total - i.amount_paid ELSE 0 END) AS bucket_90_plus,
+                   SUM(i.total - i.amount_paid) AS total_outstanding,
+                   COUNT(*) AS unpaid_invoices,
+                   MIN(i.issue_date) AS oldest_unpaid,
+                   MAX(CAST(julianday('now') - julianday(i.issue_date) AS INTEGER)) AS oldest_age_days
+            FROM invoices i
+            JOIN clients c ON c.id = i.client_id
+            WHERE i.status NOT IN ('paid','cancelled','draft')
+              AND (i.total - i.amount_paid) > 0
+              {co_filter}
+            GROUP BY c.id
+            HAVING SUM(i.total - i.amount_paid) >= ?
+               AND MAX(CAST(julianday('now') - julianday(i.issue_date) AS INTEGER)) >= ?
+            ORDER BY total_outstanding DESC
+            LIMIT ?""",
+        co_params + [min_amount, min_age_days, limit + 1],
+    ).fetchall()
+    truncated = len(rows) > limit
+    rows = rows[:limit]
+
+    items = []
+    for r in rows:
+        d = dict(r)
+        for k in ("bucket_0_30", "bucket_31_60", "bucket_61_90", "bucket_90_plus",
+                  "total_outstanding", "opening_balance"):
+            d[k] = _f(d.get(k))
+        items.append(d)
+    return jsonify({"result": {"items": items, "count": len(items), "truncated": truncated, "limit": limit}})
+
+
+# ── 7. /api/clients/bulk ──────────────────────────────────────────────────────
+@bp.route("/clients/bulk")
+@require_auth
+def clients_bulk():
+    """Structured list of clients with optional company-level balances and recent invoices.
+
+    Query params: include (CSV: 'companies,balance,recent_invoices'),
+                  q (substring search on name/company), limit (default 200, max 500)
+    """
+    db = get_db()
+    include = _csv_set(request.args.get("include"))
+    q       = (request.args.get("q") or "").strip().lower()
+    limit   = _arg_int("limit", 200, hi=500)
+
+    where, params = [], []
+    if q:
+        where.append(
+            "(LOWER(c.name) LIKE ? OR c.id IN "
+            "(SELECT client_id FROM client_companies WHERE LOWER(name) LIKE ?))"
+        )
+        like = f"%{q}%"
+        params.extend([like, like])
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+
+    rows = db.execute(
+        f"""SELECT c.id, c.name, c.company, c.email, c.phone, c.city, c.country,
+                   c.tax_id, c.opening_balance, c.payment_terms, c.created_at
+            FROM clients c
+            {clause}
+            ORDER BY c.name LIMIT ?""",
+        params + [limit + 1],
+    ).fetchall()
+    truncated = len(rows) > limit
+    rows = rows[:limit]
+    client_ids = [r["id"] for r in rows]
+
+    bal_map = {}
+    if "balance" in include and client_ids:
+        ph = ",".join("?" * len(client_ids))
+        inv_rows = db.execute(
+            f"""SELECT client_id,
+                       COALESCE(SUM(total),0)                                    AS total_invoiced,
+                       COALESCE(SUM(CASE WHEN status NOT IN ('paid','cancelled')
+                                         THEN total - amount_paid ELSE 0 END),0) AS outstanding
+                FROM invoices WHERE client_id IN ({ph}) AND status != 'cancelled'
+                GROUP BY client_id""",
+            client_ids,
+        ).fetchall()
+        pay_rows = db.execute(
+            f"""SELECT p.client_id,
+                       COALESCE(SUM(p.amount),0) - COALESCE((
+                          SELECT SUM(amount) FROM payment_allocations
+                          WHERE payment_id IN (SELECT id FROM payments WHERE client_id = p.client_id)
+                       ),0) AS unallocated,
+                       COALESCE(SUM(p.amount),0) AS total_paid
+                FROM payments p WHERE p.client_id IN ({ph})
+                GROUP BY p.client_id""",
+            client_ids,
+        ).fetchall()
+        inv_by  = {r["client_id"]: r for r in inv_rows}
+        pay_by  = {r["client_id"]: r for r in pay_rows}
+        for cid in client_ids:
+            invr = inv_by.get(cid)
+            payr = pay_by.get(cid)
+            bal_map[cid] = {
+                "total_invoiced": _f(invr["total_invoiced"]) if invr else 0.0,
+                "outstanding":    _f(invr["outstanding"])    if invr else 0.0,
+                "total_paid":     _f(payr["total_paid"])     if payr else 0.0,
+                "unallocated":    _f(payr["unallocated"])    if payr else 0.0,
+            }
+
+    companies_by_client = {}
+    if "companies" in include and client_ids:
+        ph = ",".join("?" * len(client_ids))
+        for r in db.execute(
+            f"""SELECT id, client_id, name, tax_id, opening_balance
+                FROM client_companies WHERE client_id IN ({ph}) ORDER BY name""",
+            client_ids,
+        ).fetchall():
+            companies_by_client.setdefault(r["client_id"], []).append(dict(r))
+
+    recents_by_client = {}
+    if "recent_invoices" in include and client_ids:
+        ph = ",".join("?" * len(client_ids))
+        for r in db.execute(
+            f"""SELECT id, client_id, invoice_number, issue_date, total, amount_paid, status
+                FROM invoices
+                WHERE client_id IN ({ph})
+                ORDER BY issue_date DESC, id DESC""",
+            client_ids,
+        ).fetchall():
+            lst = recents_by_client.setdefault(r["client_id"], [])
+            if len(lst) < 5:
+                lst.append(dict(r))
+
+    items = []
+    for r in rows:
+        d = dict(r)
+        if "balance" in include:
+            d["balance"] = bal_map.get(r["id"])
+        if "companies" in include:
+            d["companies"] = companies_by_client.get(r["id"], [])
+        if "recent_invoices" in include:
+            d["recent_invoices"] = recents_by_client.get(r["id"], [])
+        items.append(d)
+    return jsonify({"result": {"items": items, "count": len(items), "truncated": truncated, "limit": limit}})
+
+
+# ── 8. /api/sales/by-product ──────────────────────────────────────────────────
+@bp.route("/sales/by-product")
+@require_auth
+def sales_by_product():
+    """Alias for /products/sales-velocity — caller-friendly name for sales aggregation."""
+    return products_sales_velocity()
+
+
+# ── 9. /api/sales/by-client ───────────────────────────────────────────────────
+@bp.route("/sales/by-client")
+@require_auth
+def sales_by_client():
+    """Total invoiced + total paid per client over a date range.
+
+    Query params: date_from, date_to (default: last 90 days), min_invoiced, limit (default 200, max 500)
+    """
+    db = get_db()
+    date_from    = _arg_date("date_from")
+    date_to      = _arg_date("date_to")
+    min_invoiced = _f(request.args.get("min_invoiced") or 0)
+    limit        = _arg_int("limit", 200, hi=500)
+
+    where = ["i.status != 'cancelled'"]
+    params = []
+    if date_from:
+        where.append("i.issue_date >= ?"); params.append(date_from)
+    if date_to:
+        where.append("i.issue_date <= ?"); params.append(date_to)
+    if not date_from and not date_to:
+        where.append("i.issue_date >= date('now','-90 days')")
+
+    rows = db.execute(
+        f"""SELECT c.id AS client_id, c.name AS client_name,
+                   COUNT(DISTINCT i.id)            AS invoice_count,
+                   COALESCE(SUM(i.total),0)        AS total_invoiced,
+                   COALESCE(SUM(i.amount_paid),0)  AS total_paid,
+                   COALESCE(SUM(i.total - i.amount_paid),0) AS outstanding,
+                   MIN(i.issue_date) AS first_invoice,
+                   MAX(i.issue_date) AS last_invoice
+            FROM invoices i
+            JOIN clients c ON c.id = i.client_id
+            WHERE {' AND '.join(where)}
+            GROUP BY c.id
+            HAVING total_invoiced >= ?
+            ORDER BY total_invoiced DESC LIMIT ?""",
+        params + [min_invoiced, limit + 1],
+    ).fetchall()
+    truncated = len(rows) > limit
+    rows = rows[:limit]
+    items = []
+    for r in rows:
+        d = dict(r)
+        for k in ("total_invoiced", "total_paid", "outstanding"):
+            d[k] = _f(d.get(k))
+        items.append(d)
+    return jsonify({"result": {
+        "items": items, "count": len(items), "truncated": truncated, "limit": limit,
+        "date_from": date_from, "date_to": date_to,
+    }})
+
+
+# ── 10. /api/purchase-orders/bulk ─────────────────────────────────────────────
+@bp.route("/purchase-orders/bulk")
+@require_auth
+def purchase_orders_bulk():
+    """POs with optional line items in one call.
+
+    Query params: supplier_id, status (CSV: 'open,closed'), include (CSV: 'items'),
+                  limit (default 100, max 300)
+    """
+    db = get_db()
+    supplier_id = request.args.get("supplier_id", type=int)
+    statuses    = _csv_set(request.args.get("status"))
+    include     = _csv_set(request.args.get("include"))
+    limit       = _arg_int("limit", 100, hi=300)
+
+    where, params = [], []
+    if supplier_id is not None:
+        where.append("po.supplier_id = ?"); params.append(supplier_id)
+    if statuses:
+        ph = ",".join("?" * len(statuses))
+        where.append(f"po.status IN ({ph})"); params.extend(sorted(statuses))
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+
+    rows = db.execute(
+        f"""SELECT po.id, po.name, po.supplier_id, s.name AS supplier_name,
+                   po.expected_completion, po.status, po.notes, po.created_at
+            FROM purchase_orders po
+            LEFT JOIN suppliers s ON s.id = po.supplier_id
+            {clause}
+            ORDER BY po.created_at DESC LIMIT ?""",
+        params + [limit + 1],
+    ).fetchall()
+    truncated = len(rows) > limit
+    rows = rows[:limit]
+    po_ids = [r["id"] for r in rows]
+
+    items_by_po = {}
+    if "items" in include and po_ids:
+        ph = ",".join("?" * len(po_ids))
+        for r in db.execute(
+            f"""SELECT poi.id, poi.po_id, poi.product_id, poi.sub_product_id,
+                       poi.quantity, poi.price, poi.qty_dispatched, poi.product_name,
+                       p.name AS product_db_name, sp.name AS sub_db_name
+                FROM purchase_order_items poi
+                LEFT JOIN products p ON p.id = poi.product_id
+                LEFT JOIN sub_products sp ON sp.id = poi.sub_product_id
+                WHERE poi.po_id IN ({ph})""",
+            po_ids,
+        ).fetchall():
+            d = dict(r)
+            d["pending"] = _f(d["quantity"]) - _f(d["qty_dispatched"])
+            items_by_po.setdefault(r["po_id"], []).append(d)
+
+    items = []
+    for r in rows:
+        d = dict(r)
+        if "items" in include:
+            d["line_items"] = items_by_po.get(r["id"], [])
+        items.append(d)
+    return jsonify({"result": {"items": items, "count": len(items), "truncated": truncated, "limit": limit}})
+
+
+# ── 11. /api/dispatches/bulk ──────────────────────────────────────────────────
+@bp.route("/dispatches/bulk")
+@require_auth
+def dispatches_bulk():
+    """Dispatches with optional line items and PO allocations.
+
+    Query params: supplier_id, status (CSV), date_from, date_to,
+                  include (CSV: 'items,allocations'), limit (default 100, max 300)
+    """
+    db = get_db()
+    supplier_id = request.args.get("supplier_id", type=int)
+    statuses    = _csv_set(request.args.get("status"))
+    date_from   = _arg_date("date_from")
+    date_to     = _arg_date("date_to")
+    include     = _csv_set(request.args.get("include"))
+    limit       = _arg_int("limit", 100, hi=300)
+
+    where, params = [], []
+    if supplier_id is not None:
+        where.append("d.supplier_id = ?"); params.append(supplier_id)
+    if statuses:
+        ph = ",".join("?" * len(statuses))
+        where.append(f"d.status IN ({ph})"); params.extend(sorted(statuses))
+    if date_from:
+        where.append("d.dispatch_date >= ?"); params.append(date_from)
+    if date_to:
+        where.append("d.dispatch_date <= ?"); params.append(date_to)
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+
+    rows = db.execute(
+        f"""SELECT d.id, d.name, d.supplier_id, s.name AS supplier_name,
+                   d.dispatch_date, d.expected_arrival, d.status, d.notes, d.created_at
+            FROM dispatches d
+            LEFT JOIN suppliers s ON s.id = d.supplier_id
+            {clause}
+            ORDER BY d.dispatch_date DESC, d.id DESC LIMIT ?""",
+        params + [limit + 1],
+    ).fetchall()
+    truncated = len(rows) > limit
+    rows = rows[:limit]
+    d_ids = [r["id"] for r in rows]
+
+    items_by_d = {}
+    if "items" in include and d_ids:
+        ph = ",".join("?" * len(d_ids))
+        for r in db.execute(
+            f"""SELECT di.id, di.dispatch_id, di.product_id, di.sub_product_id,
+                       di.quantity, di.qty_received, di.price, di.cbm, di.gross_weight,
+                       di.product_name, p.name AS product_db_name, sp.name AS sub_db_name
+                FROM dispatch_items di
+                LEFT JOIN products p ON p.id = di.product_id
+                LEFT JOIN sub_products sp ON sp.id = di.sub_product_id
+                WHERE di.dispatch_id IN ({ph})""",
+            d_ids,
+        ).fetchall():
+            d = dict(r)
+            d["pending_arrival"] = _f(d["quantity"]) - _f(d["qty_received"])
+            items_by_d.setdefault(r["dispatch_id"], []).append(d)
+
+    allocs_by_d = {}
+    if "allocations" in include and d_ids:
+        ph = ",".join("?" * len(d_ids))
+        for r in db.execute(
+            f"""SELECT dpa.id, dpa.dispatch_item_id, dpa.po_item_id, dpa.quantity,
+                       di.dispatch_id, poi.po_id, po.name AS po_name
+                FROM dispatch_po_allocations dpa
+                JOIN dispatch_items di ON di.id = dpa.dispatch_item_id
+                JOIN purchase_order_items poi ON poi.id = dpa.po_item_id
+                JOIN purchase_orders po ON po.id = poi.po_id
+                WHERE di.dispatch_id IN ({ph})""",
+            d_ids,
+        ).fetchall():
+            allocs_by_d.setdefault(r["dispatch_id"], []).append(dict(r))
+
+    items = []
+    for r in rows:
+        d = dict(r)
+        if "items" in include:
+            d["line_items"] = items_by_d.get(r["id"], [])
+        if "allocations" in include:
+            d["po_allocations"] = allocs_by_d.get(r["id"], [])
+        items.append(d)
+    return jsonify({"result": {"items": items, "count": len(items), "truncated": truncated, "limit": limit}})
+
+
+# ── 12. /api/palm-purchases/bulk ──────────────────────────────────────────────
+@bp.route("/palm-purchases/bulk")
+@require_auth
+def palm_purchases_bulk():
+    """Palm purchases (instant warehouse stock-ins) with optional line items.
+
+    Query params: supplier_id, date_from, date_to, include (CSV: 'items'),
+                  limit (default 100, max 300)
+    """
+    db = get_db()
+    supplier_id = request.args.get("supplier_id", type=int)
+    date_from   = _arg_date("date_from")
+    date_to     = _arg_date("date_to")
+    include     = _csv_set(request.args.get("include"))
+    limit       = _arg_int("limit", 100, hi=300)
+
+    where, params = [], []
+    if supplier_id is not None:
+        where.append("pp.supplier_id = ?"); params.append(supplier_id)
+    if date_from:
+        where.append("pp.purchase_date >= ?"); params.append(date_from)
+    if date_to:
+        where.append("pp.purchase_date <= ?"); params.append(date_to)
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+
+    rows = db.execute(
+        f"""SELECT pp.id, pp.name, pp.supplier_id, s.name AS supplier_name,
+                   pp.purchase_date, pp.notes, pp.total_cost, pp.created_at
+            FROM palm_purchases pp
+            LEFT JOIN suppliers s ON s.id = pp.supplier_id
+            {clause}
+            ORDER BY pp.purchase_date DESC, pp.id DESC LIMIT ?""",
+        params + [limit + 1],
+    ).fetchall()
+    truncated = len(rows) > limit
+    rows = rows[:limit]
+    pp_ids = [r["id"] for r in rows]
+
+    items_by_pp = {}
+    if "items" in include and pp_ids:
+        ph = ",".join("?" * len(pp_ids))
+        for r in db.execute(
+            f"""SELECT ppi.id, ppi.palm_purchase_id, ppi.product_id, ppi.sub_product_id,
+                       ppi.quantity, ppi.unit_cost, ppi.notes,
+                       p.name AS product_name, sp.name AS sub_name
+                FROM palm_purchase_items ppi
+                LEFT JOIN products p ON p.id = ppi.product_id
+                LEFT JOIN sub_products sp ON sp.id = ppi.sub_product_id
+                WHERE ppi.palm_purchase_id IN ({ph})""",
+            pp_ids,
+        ).fetchall():
+            items_by_pp.setdefault(r["palm_purchase_id"], []).append(dict(r))
+
+    items = []
+    for r in rows:
+        d = dict(r)
+        if "items" in include:
+            d["line_items"] = items_by_pp.get(r["id"], [])
+        items.append(d)
+    return jsonify({"result": {"items": items, "count": len(items), "truncated": truncated, "limit": limit}})
+
+
+# ── 13. /api/supply-pipeline ──────────────────────────────────────────────────
+@bp.route("/supply-pipeline")
+@require_auth
+def supply_pipeline():
+    """For each product/sub-product, the open PO qty + in-transit qty + last received date.
+    Answers: "what's already coming so I don't double-order?" in one call.
+
+    Query params: product_ids, sub_product_ids, category_id, limit (default 300, max 1000)
+    """
+    db = get_db()
+    product_ids = _csv_ints(request.args.get("product_ids"))
+    sub_ids     = _csv_ints(request.args.get("sub_product_ids"))
+    category_id = request.args.get("category_id", type=int)
+    limit       = _arg_int("limit", 300, hi=1000)
+
+    if category_id is not None and not product_ids:
+        product_ids = [r["id"] for r in db.execute(
+            "SELECT id FROM products WHERE category_id=?", (category_id,)
+        ).fetchall()]
+
+    if not product_ids and not sub_ids:
+        return jsonify({"error": "Specify product_ids, sub_product_ids, or category_id."}), 400
+
+    def _scope(prefix):
+        parts, params = [], []
+        if product_ids:
+            ph = ",".join("?" * len(product_ids))
+            parts.append(f"{prefix}.product_id IN ({ph})"); params.extend(product_ids)
+        if sub_ids:
+            ph = ",".join("?" * len(sub_ids))
+            parts.append(f"{prefix}.sub_product_id IN ({ph})"); params.extend(sub_ids)
+        # When both lists are provided, match EITHER (OR). When only one, that's the only filter.
+        joiner = " OR " if (product_ids and sub_ids) else " AND "
+        return ("(" + joiner.join(parts) + ")"), params
+
+    # Open PO pending qty
+    poi_scope, poi_params = _scope("poi")
+    po_rows = db.execute(
+        f"""SELECT poi.product_id, poi.sub_product_id,
+                   SUM(poi.quantity - poi.qty_dispatched) AS pending_po,
+                   COUNT(DISTINCT po.id) AS open_po_count
+            FROM purchase_order_items poi
+            JOIN purchase_orders po ON po.id = poi.po_id
+            WHERE po.status = 'open' AND poi.quantity > poi.qty_dispatched
+              AND {poi_scope}
+            GROUP BY poi.product_id, poi.sub_product_id""",
+        poi_params,
+    ).fetchall()
+
+    # In-transit dispatch qty (not yet received)
+    di_scope, di_params = _scope("di")
+    di_rows = db.execute(
+        f"""SELECT di.product_id, di.sub_product_id,
+                   SUM(di.quantity - di.qty_received) AS in_transit,
+                   COUNT(DISTINCT d.id) AS in_transit_dispatch_count,
+                   MIN(d.expected_arrival) AS next_arrival
+            FROM dispatch_items di
+            JOIN dispatches d ON d.id = di.dispatch_id
+            WHERE d.status IN ('in_transit','partially_received')
+              AND di.quantity > di.qty_received
+              AND {di_scope}
+            GROUP BY di.product_id, di.sub_product_id""",
+        di_params,
+    ).fetchall()
+
+    # Last palm-purchase date
+    ppi_scope, ppi_params = _scope("ppi")
+    last_pp = db.execute(
+        f"""SELECT ppi.product_id, ppi.sub_product_id, MAX(pp.purchase_date) AS last_date
+            FROM palm_purchase_items ppi
+            JOIN palm_purchases pp ON pp.id = ppi.palm_purchase_id
+            WHERE {ppi_scope}
+            GROUP BY ppi.product_id, ppi.sub_product_id""",
+        ppi_params,
+    ).fetchall()
+
+    # Merge into one keyed map
+    pipeline = {}
+    def _key(pid, spid):
+        return (pid, spid)
+
+    for r in po_rows:
+        k = _key(r["product_id"], r["sub_product_id"])
+        pipeline.setdefault(k, {})["pending_po"]    = _f(r["pending_po"])
+        pipeline[k]["open_po_count"]               = r["open_po_count"]
+    for r in di_rows:
+        k = _key(r["product_id"], r["sub_product_id"])
+        pipeline.setdefault(k, {})["in_transit"]   = _f(r["in_transit"])
+        pipeline[k]["in_transit_dispatch_count"]   = r["in_transit_dispatch_count"]
+        pipeline[k]["next_arrival"]                = r["next_arrival"]
+    for r in last_pp:
+        k = _key(r["product_id"], r["sub_product_id"])
+        pipeline.setdefault(k, {})["last_palm_purchase_date"] = r["last_date"]
+
+    # Look up names for nicer payload
+    all_pids = {k[0] for k in pipeline if k[0]}
+    all_sids = {k[1] for k in pipeline if k[1]}
+    pname = {}
+    sname = {}
+    if all_pids:
+        ph = ",".join("?" * len(all_pids))
+        for r in db.execute(f"SELECT id, name FROM products WHERE id IN ({ph})", list(all_pids)):
+            pname[r["id"]] = r["name"]
+    if all_sids:
+        ph = ",".join("?" * len(all_sids))
+        for r in db.execute(f"SELECT id, name FROM sub_products WHERE id IN ({ph})", list(all_sids)):
+            sname[r["id"]] = r["name"]
+
+    items = []
+    for (pid, spid), data in pipeline.items():
+        items.append({
+            "product_id":              pid,
+            "product_name":            pname.get(pid),
+            "sub_product_id":          spid,
+            "sub_product_name":        sname.get(spid) if spid else None,
+            "pending_po":              data.get("pending_po", 0.0),
+            "open_po_count":           data.get("open_po_count", 0),
+            "in_transit":              data.get("in_transit", 0.0),
+            "in_transit_dispatch_count": data.get("in_transit_dispatch_count", 0),
+            "next_arrival":            data.get("next_arrival"),
+            "last_palm_purchase_date": data.get("last_palm_purchase_date"),
+        })
+    truncated = len(items) > limit
+    items = items[:limit]
+    return jsonify({"result": {"items": items, "count": len(items), "truncated": truncated, "limit": limit}})
