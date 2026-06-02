@@ -13,6 +13,7 @@ WINDOW_LABELS = {
     "this_week":     "This Week",
     "last_week":     "Last Week",
     "last_15":       "Last 15 Days",
+    "last_30":       "Last 30 Days",
     "this_month":    "This Month",
     "last_2_months": "Last 2 Months",
     "60_days":       "60 Days",
@@ -55,6 +56,7 @@ def resolve_window(window, custom_from="", custom_to=""):
         "this_week":     (today - timedelta(dow),      today),
         "last_week":     (today - timedelta(dow + 7),  today - timedelta(dow + 1)),
         "last_15":       (today - timedelta(14),       today),
+        "last_30":       (today - timedelta(29),       today),
         "this_month":    (today.replace(day=1),        today),
         "last_2_months": (today - timedelta(60),       today),
         "60_days":       (today - timedelta(59),       today),
@@ -63,13 +65,13 @@ def resolve_window(window, custom_from="", custom_to=""):
         "current_fy":    (cfy,                         today),
         "last_fy":       (lfy_s,                       lfy_e),
     }
-    return table.get(window, (today.replace(day=1), today))
+    return table.get(window, (today - timedelta(29), today))
 
 
 @bp.route("/")
 @login_required
 def index():
-    window      = request.args.get("window", "this_month")
+    window      = request.args.get("window", "last_30")
     custom_from = request.args.get("from", "")
     custom_to   = request.args.get("to", "")
 

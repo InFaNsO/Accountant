@@ -103,7 +103,8 @@
           {% for val, lbl in [
               ('today','Today'),('yesterday','Yesterday'),
               ('this_week','This Week'),('last_week','Last Week'),
-              ('last_15','Last 15 Days'),('this_month','This Month'),
+              ('last_15','Last 15 Days'),('last_30','Last 30 Days'),
+              ('this_month','This Month'),
               ('last_2_months','Last 2 Months'),('60_days','60 Days'),
               ('90_days','90 Days'),('this_year','This Year'),
               ('current_fy','Current FY'),('last_fy','Last FY'),
@@ -509,6 +510,7 @@ function _winDates(w) {
     case 'this_week':     return [fmt(add(t,-dow)),fmt(t)];
     case 'last_week':     return [fmt(add(t,-dow-7)),fmt(add(t,-dow-1))];
     case 'last_15':       return [fmt(add(t,-14)),fmt(t)];
+    case 'last_30':       return [fmt(add(t,-29)),fmt(t)];
     case 'this_month':    return [fmt(new Date(y,mo,1)),fmt(t)];
     case 'last_2_months': return [fmt(add(t,-60)),fmt(t)];
     case '60_days':       return [fmt(add(t,-59)),fmt(t)];
