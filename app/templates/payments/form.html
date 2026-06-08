@@ -95,6 +95,20 @@
           <textarea id="notes" name="notes" placeholder="Optional notes…">{{ prefill.get('notes','') }}</textarea>
         </div>
 
+        <!-- Opening-balance flag -->
+        <div class="form-group span-2">
+          <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-weight:500">
+            <input type="checkbox" id="is_opening_balance" name="is_opening_balance" value="1"
+                   style="width:auto;margin-top:2px" onchange="onOpeningBalanceToggle()"
+                   {{ 'checked' if prefill.get('is_opening_balance') }}>
+            <span>This payment is for the <strong>opening balance</strong>
+              <span style="display:block;font-weight:400;font-size:12px;color:var(--text-muted)">
+                It will be assigned to the old balance only — never allocated to invoices, and skipped by reconciliation.
+              </span>
+            </span>
+          </label>
+        </div>
+
         <!-- Allocation preview -->
         <div class="form-group span-2" id="allocationPreview" style="display:none">
           <div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px">
@@ -344,12 +358,23 @@ async function loadClientCompanies(clientId, preselectId) {
   } catch(e) { wrap.style.display = 'none'; }
 }
 
+// ── Opening-balance toggle ─────────────────────────────────────────────────────
+function onOpeningBalanceToggle() {
+  const ob  = document.getElementById('is_opening_balance').checked;
+  const sel = document.getElementById('invoice_id');
+  sel.disabled = ob;
+  if (ob) sel.value = '';
+  updatePreview();
+}
+
 // ── Allocation preview ─────────────────────────────────────────────────────────
 function updatePreview() {
   const amount    = parseFloat(document.getElementById('amount').value) || 0;
   const invoiceId = document.getElementById('invoice_id').value;
   const preview   = document.getElementById('allocationPreview');
   const list      = document.getElementById('allocationList');
+  const obEl      = document.getElementById('is_opening_balance');
+  if (obEl && obEl.checked) { preview.style.display = 'none'; return; }
   if (!amount || invoiceId) { preview.style.display = 'none'; return; }
   const invs = window._clientInvoices || [];
   if (!invs.length) { preview.style.display = 'none'; return; }

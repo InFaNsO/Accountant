@@ -326,6 +326,7 @@ def record_payment(
     company_id: int = None,
     reference: str = "",
     notes: str = "",
+    is_opening_balance: bool = False,
 ) -> str:
     """
     Record a payment from a client. ONLY call after explicit user confirmation.
@@ -336,8 +337,25 @@ def record_payment(
       If omitted, automatically allocates: opening balance → oldest invoices → unallocated surplus.
     company_id: optional — associates payment with a specific company under the client.
       Use get_client_companies(client_id) to find company IDs.
+    is_opening_balance: set True if this payment is for the client's OPENING (old) balance.
+      Such payments are assigned to the old balance only — never allocated to invoices and
+      skipped by reconciliation (invoice_id is ignored when this is True).
     """
     return _call("POST", "payments", body={k: v for k, v in locals().items() if k != "self"})
+
+
+@mcp.tool()
+def set_payment_opening_balance(payment_id: int, is_opening_balance: bool = True) -> str:
+    """
+    Mark (or unmark) an EXISTING payment as an opening-balance payment. When marked, the
+    payment is assigned to the client's old balance — excluded from invoice allocation and
+    skipped by reconciliation. The client is automatically re-reconciled afterward.
+
+    Use this to fix payments that were meant for the opening balance but got allocated to
+    invoices. ONLY call after explicit user confirmation.
+    """
+    return _call("POST", f"payments/{payment_id}/opening-balance",
+                 body={"is_opening_balance": is_opening_balance})
 
 
 @mcp.tool()

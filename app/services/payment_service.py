@@ -106,10 +106,17 @@ def recalculate_client_balance(client_id):
 
     # 3 — allocate payment surplus (beyond OB) to invoices
     payments = db.execute(
-        "SELECT id, amount, payment_date FROM payments "
+        "SELECT id, amount, payment_date, is_opening_balance FROM payments "
         "WHERE client_id=? ORDER BY payment_date ASC, id ASC",
         (client_id,),
     ).fetchall()
+
+    # Payments explicitly assigned to the opening balance are never allocated to
+    # invoices and are skipped below. They DO count toward covering the OB, so the
+    # amount that still needs reserving from ordinary payments is reduced by their sum.
+    flagged_sum = sum(
+        float(p["amount"]) for p in payments if (p["is_opening_balance"] or 0)
+    )
 
     open_invoices = db.execute(
         "SELECT id, total FROM invoices "
@@ -121,8 +128,10 @@ def recalculate_client_balance(client_id):
     inv_order = [inv["id"] for inv in open_invoices]
     affected  = set()
 
-    ob_budget = ob_coverage
+    ob_budget = max(0.0, ob_coverage - flagged_sum)
     for pmt in payments:
+        if pmt["is_opening_balance"] or 0:
+            continue  # assigned to opening balance — never allocate to invoices
         pmt_amount = float(pmt["amount"])
         ob_take    = min(pmt_amount, ob_budget)
         ob_budget -= ob_take
@@ -305,14 +314,21 @@ def create_payment(data):
     amount     = float(data["amount"])
     explicit   = data.get("invoice_id")
     company_id = int(data["company_id"]) if data.get("company_id") else None
+    _ob        = data.get("is_opening_balance")
+    is_ob      = 1 if _ob in (1, True, "1", "true", "True", "on", "yes") else 0
 
     cur = db.execute(
-        """INSERT INTO payments (client_id, invoice_id, company_id, amount, payment_date, method, reference, notes)
-           VALUES (?, NULL, ?, ?, ?, ?, ?, ?)""",
+        """INSERT INTO payments (client_id, invoice_id, company_id, amount, payment_date, method, reference, notes, is_opening_balance)
+           VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?)""",
         (client_id, company_id, amount, data["payment_date"],
-         data.get("method", "cash"), data.get("reference"), data.get("notes")),
+         data.get("method", "cash"), data.get("reference"), data.get("notes"), is_ob),
     )
     payment_id = cur.lastrowid
+
+    # Opening-balance payments are assigned to the old balance — never allocated to invoices.
+    if is_ob:
+        db.commit()
+        return payment_id
 
     affected = set()
 
@@ -356,6 +372,24 @@ def create_payment(data):
 
     db.commit()
     return payment_id
+
+
+def set_payment_opening_balance(payment_id, flag):
+    """Mark/unmark a payment as 'opening balance' (excluded from invoice allocation
+    and reconciliation), then re-reconcile that client so allocations are rebuilt.
+    Returns the client_id, or None if the payment doesn't exist.
+    """
+    db = get_db()
+    row = db.execute("SELECT client_id FROM payments WHERE id=?", (payment_id,)).fetchone()
+    if not row:
+        return None
+    db.execute(
+        "UPDATE payments SET is_opening_balance=? WHERE id=?",
+        (1 if flag else 0, payment_id),
+    )
+    db.commit()
+    recalculate_client_balance(row["client_id"])
+    return row["client_id"]
 
 
 def delete_payment(payment_id):

@@ -60,6 +60,24 @@ def new_payment():
                            clients=clients, invoices=invoices, all_companies=all_companies, prefill=prefill)
 
 
+@bp.route("/<int:payment_id>/toggle-opening-balance", methods=["POST"])
+@login_required
+@permission_required("payments", "edit")
+def toggle_opening_balance(payment_id):
+    p = payment_service.get_payment(payment_id)
+    if not p:
+        flash("Payment not found.", "error")
+        return redirect(url_for("payments.list_payments"))
+    new_flag = 0 if (p["is_opening_balance"] or 0) else 1
+    payment_service.set_payment_opening_balance(payment_id, new_flag)
+    flash(
+        "Payment marked as opening-balance (excluded from invoice allocation)."
+        if new_flag else "Payment unmarked — it will be allocated to invoices again.",
+        "success",
+    )
+    return redirect(request.referrer or url_for("payments.list_payments"))
+
+
 @bp.route("/<int:payment_id>/delete", methods=["POST"])
 @login_required
 @permission_required("payments", "delete")

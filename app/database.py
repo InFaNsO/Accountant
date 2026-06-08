@@ -524,5 +524,8 @@ def _create_schema(db):
     _add_column(db, "invoice_items",         "discount_value",    "REAL DEFAULT 0")
     _add_column(db, "sub_products",          "pcs_per_carton",    "INTEGER DEFAULT 0")
     _add_column(db, "stock_movements",        "palm_purchase_id", "INTEGER")
+    # Payments explicitly assigned to the opening balance: never allocated to invoices,
+    # and skipped entirely by reconciliation (recalculate_client_balance).
+    _add_column(db, "payments",               "is_opening_balance", "INTEGER DEFAULT 0")
 
     db.commit()

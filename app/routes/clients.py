@@ -135,6 +135,7 @@ def ledger(client_id):
         ).fetchall()
         payments = db.execute(
             "SELECT p.id, p.amount, p.payment_date, p.method, p.reference, p.notes, "
+            "p.is_opening_balance, "
             "cc.name AS company_name, "
             "(SELECT GROUP_CONCAT(i.invoice_number, ', ') "
             "   FROM payment_allocations pa JOIN invoices i ON i.id=pa.invoice_id "
@@ -155,6 +156,7 @@ def ledger(client_id):
         ).fetchall()
         payments = db.execute(
             "SELECT p.id, p.amount, p.payment_date, p.method, p.reference, p.notes, "
+            "p.is_opening_balance, "
             "cc.name AS company_name, "
             "(SELECT GROUP_CONCAT(i.invoice_number, ', ') "
             "   FROM payment_allocations pa JOIN invoices i ON i.id=pa.invoice_id "
@@ -208,7 +210,9 @@ def ledger(client_id):
                 parts = [r["method"]] if r["method"] else []
                 if r["reference"]: parts.append(r["reference"])
                 if r["notes"]:     parts.append(r["notes"])
-                if r.get("invoice_numbers"):
+                if r.get("is_opening_balance"):
+                    parts.append("opening balance")
+                elif r.get("invoice_numbers"):
                     parts.append(f"applied to {r['invoice_numbers']}")
                 label = " — ".join(parts) if parts else "Payment"
                 if r.get("company_name"):

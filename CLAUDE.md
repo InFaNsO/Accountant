@@ -78,6 +78,13 @@ Recently added tools:
 - `get_product_stock_history_by_sub(product_id, bucket='warehouse', limit=50)` — history for ALL sub-products of a product, grouped per sub-product; products with no sub-products return one product-level group. Endpoint: `GET /api/products/<id>/stock-history-grouped`.
 - `product_stock_action(product_id, action, quantity, sub_product_id?, expected_arrival?, notes?)` — semantic stock **moves** (`add_stock`, `send_to_production`, `dispatch_from_production` [needs `expected_arrival`], `mark_arrived`). Endpoint: `POST /api/products/<id>/stock-action`, dispatches to the matching `product_service` mover. (Raw single-bucket +/- stays `adjust_stock`.)
 - `get_received_transit(date_from?, date_to?, include?, limit?)` / `get_upcoming_transit(...)` — dispatches that have arrived vs still arriving. No date range → single latest / next; with a range → all in window. Filters/orders by `expected_arrival`. Endpoints: `GET /api/transit/received`, `GET /api/transit/upcoming` (`include=items`).
+- `set_payment_opening_balance(payment_id, is_opening_balance=True)` — mark/unmark a payment as **opening-balance** (see below); re-reconciles the client. Endpoint: `POST /api/payments/<id>/opening-balance`. `record_payment` also takes `is_opening_balance`.
+
+### Opening-balance payments (`payments.is_opening_balance`)
+A payment flagged `is_opening_balance=1` is **assigned to the client's old/opening balance only** — it is never allocated to invoices and is **skipped entirely by reconciliation**. This prevents a large "for the old balance" payment from leaking onto invoices and wrongly marking them paid.
+- Allocation engine (`payment_service.py`): `recalculate_client_balance` computes `flagged_sum` (sum of flagged payments), sets `ob_budget = max(0, opening_balance_debt − flagged_sum)`, and `continue`s past flagged payments in the allocation loop. `create_payment` inserts flagged payments with **no** allocations.
+- Set on existing payments via `set_payment_opening_balance(payment_id, flag)` (re-reconciles the client).
+- UI: checkbox on the payment form; **Mark OB / Unmark OB** button + badge on the payments list (`POST /payments/<id>/toggle-opening-balance`). Ledger entries show a `(opening balance)` label + `is_opening_balance` field.
 
 To add a new MCP tool: write the matching Flask `/api/...` endpoint with `@require_auth`, then add the `@mcp.tool()` wrapper in `mcp_server.py` that calls `_call(...)`.
 

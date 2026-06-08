@@ -400,7 +400,7 @@ def get_client_ledger(client_id):
         inv_params,
     ).fetchall()
     payments = db.execute(
-        f"SELECT id, amount, payment_date, method, reference, notes FROM payments "
+        f"SELECT id, amount, payment_date, method, reference, notes, is_opening_balance FROM payments "
         f"{pay_where} ORDER BY payment_date, id",
         pay_params,
     ).fetchall()
@@ -443,11 +443,14 @@ def get_client_ledger(client_id):
             label = r["method"] or "payment"
             if r["reference"]:
                 label += f" / {r['reference']}"
+            is_ob = bool(r["is_opening_balance"])
+            if is_ob:
+                label += " (opening balance)"
             allocs = allocs_by_pmt.get(r["id"], [])
             entries.append({
                 "date": r["payment_date"], "type": "payment",
                 "label": label, "debit": 0, "credit": _f(r["amount"]),
-                "payment_id": r["id"], "allocations": allocs,
+                "payment_id": r["id"], "is_opening_balance": is_ob, "allocations": allocs,
             })
 
     # Compute running balance
@@ -1101,6 +1104,7 @@ def record_payment():
     company_id = data.get("company_id") or None
     reference = data.get("reference") or ""
     notes = data.get("notes") or ""
+    is_ob = data.get("is_opening_balance") in (1, True, "1", "true", "True", "on", "yes")
 
     valid_methods = {"cash", "bank_transfer", "cheque", "upi", "other"}
     if method not in valid_methods:
@@ -1119,15 +1123,22 @@ def record_payment():
 
     from ..services import payment_service
     payment_service.create_payment({
-        "client_id":    client_id,
-        "company_id":   company_id,
-        "invoice_id":   invoice_id,
-        "amount":       amount,
-        "payment_date": payment_date,
-        "method":       method,
-        "reference":    reference or None,
-        "notes":        notes or "Recorded via Claude",
+        "client_id":          client_id,
+        "company_id":         company_id,
+        "invoice_id":         invoice_id,
+        "amount":             amount,
+        "payment_date":       payment_date,
+        "method":             method,
+        "reference":          reference or None,
+        "notes":              notes or "Recorded via Claude",
+        "is_opening_balance": is_ob,
     })
+
+    if is_ob:
+        return jsonify({"result": (
+            f"✓ {_inr(amount)} payment recorded for {client['name']} on {payment_date}, "
+            f"assigned to the OPENING BALANCE — excluded from invoice allocation and reconciliation."
+        )})
 
     # Build a human-readable allocation summary from what was just stored.
     last_payment_id = db.execute(
@@ -1247,6 +1258,33 @@ def reconcile_clients():
         f"✓ Reconciled {summary['clients_processed']} client(s). "
         f"{summary['invoices_newly_paid']} invoice(s) newly marked paid; "
         f"{summary['total_paid_invoices']} invoice(s) now fully paid in total."
+    )})
+
+
+@bp.route("/payments/<int:payment_id>/opening-balance", methods=["POST"])
+@require_auth
+def set_payment_opening_balance(payment_id):
+    """Mark/unmark a payment as 'opening balance' (excluded from invoice allocation
+    and reconciliation). Body: {"is_opening_balance": true|false} (default true).
+    The client is re-reconciled afterward so allocations rebuild.
+    """
+    data = _jb()
+    flag = data.get("is_opening_balance", True) in (1, True, "1", "true", "True", "on", "yes")
+    db = get_db()
+    p = db.execute(
+        "SELECT p.amount, p.payment_date, c.name AS client_name "
+        "FROM payments p JOIN clients c ON c.id = p.client_id WHERE p.id=?",
+        (payment_id,),
+    ).fetchone()
+    if not p:
+        return jsonify({"error": f"Payment ID {payment_id} not found."}), 404
+    from ..services import payment_service
+    payment_service.set_payment_opening_balance(payment_id, flag)
+    state = "assigned to OPENING BALANCE (excluded from allocation/reconcile)" if flag \
+        else "unmarked — will allocate to invoices on reconcile"
+    return jsonify({"result": (
+        f"✓ Payment ID {payment_id} ({_inr(p['amount'])} from {p['client_name']}, "
+        f"{p['payment_date']}) {state}. Client re-reconciled."
     )})
 
 
@@ -3945,7 +3983,7 @@ def _ledger_payload(db, client_id, company_id=None, date_from=None, date_to=None
         inv_params,
     ).fetchall()
     payments = db.execute(
-        f"SELECT id, amount, payment_date, method, reference, notes FROM payments {pay_where} ORDER BY payment_date, id",
+        f"SELECT id, amount, payment_date, method, reference, notes, is_opening_balance FROM payments {pay_where} ORDER BY payment_date, id",
         pay_params,
     ).fetchall()
 
@@ -3983,9 +4021,13 @@ def _ledger_payload(db, client_id, company_id=None, date_from=None, date_to=None
             label = r["method"] or "payment"
             if r["reference"]:
                 label += f" / {r['reference']}"
+            is_ob = bool(r["is_opening_balance"])
+            if is_ob:
+                label += " (opening balance)"
             entries.append({"date": r["payment_date"], "type": "payment", "label": label,
                             "debit": 0, "credit": _f(r["amount"]),
-                            "payment_id": r["id"], "allocations": allocs_by_pmt.get(r["id"], [])})
+                            "payment_id": r["id"], "is_opening_balance": is_ob,
+                            "allocations": allocs_by_pmt.get(r["id"], [])})
 
     running = 0.0
     for e in entries:

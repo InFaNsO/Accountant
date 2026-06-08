@@ -41,7 +41,9 @@
                style="color:var(--accent);text-decoration:none;font-weight:700">{{ p.client_name }}</a>
           </td>
           <td>
-            {% if p.invoice_number %}
+            {% if p.is_opening_balance %}
+              <span class="badge" style="background:var(--warning-bg,#fff7ed);color:var(--warning,#b45309);border:1px solid var(--warning,#f59e0b)">Opening Balance</span>
+            {% elif p.invoice_number %}
               <span style="font-weight:600;color:var(--accent);font-family:'SF Mono','Fira Code',monospace">{{ p.invoice_number }}</span>
             {% else %}
               <span class="muted" style="font-size:12px;font-style:italic">— credit / opening —</span>
@@ -50,7 +52,13 @@
           <td class="col-mobile-hide"><span class="badge badge-sent" style="text-transform:capitalize">{{ p.method.replace('_',' ') }}</span></td>
           <td class="muted font-mono col-mobile-hide">{{ p.reference or '—' }}</td>
           <td class="text-right fw-700" style="color:var(--success)">{{ p.amount|inr }}</td>
-          <td>
+          <td style="display:flex;gap:4px;justify-content:flex-end">
+            <form method="post" action="{{ url_for('payments.toggle_opening_balance', payment_id=p.id) }}"
+                  onsubmit="return confirm('Update the opening-balance flag for this payment? The client will be re-reconciled.')">
+              <button class="btn btn-secondary btn-sm" title="{{ 'Currently assigned to opening balance — click to unmark' if p.is_opening_balance else 'Assign this payment to the opening balance' }}">
+                {{ 'Unmark OB' if p.is_opening_balance else 'Mark OB' }}
+              </button>
+            </form>
             <form class="confirm-inline" method="post" action="{{ url_for('payments.delete_payment', payment_id=p.id) }}" onsubmit="return confirm('Delete this payment record?')">
               <button class="btn btn-danger btn-sm">Delete</button>
             </form>
