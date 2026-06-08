@@ -173,7 +173,86 @@ def recalculate_client_balance(client_id):
     db.commit()
 
 
-def reconcile_all_clients():
+def _reconcile_client_detailed(db, client_id):
+    """Reconcile ONE client and return a dict describing exactly what changed
+    (newly/no-longer paid invoices + per payment→invoice allocation deltas),
+    or None if nothing changed. Idempotent.
+    """
+    name_row = db.execute("SELECT name FROM clients WHERE id=?", (client_id,)).fetchone()
+    if not name_row:
+        return None
+    inv_num = {
+        r["id"]: r["invoice_number"]
+        for r in db.execute(
+            "SELECT id, invoice_number FROM invoices WHERE client_id=?", (client_id,)
+        ).fetchall()
+    }
+
+    def _snapshot_allocs():
+        out = {}
+        for r in db.execute(
+            """SELECT pa.payment_id, pa.invoice_id, pa.amount
+               FROM payment_allocations pa JOIN payments p ON p.id = pa.payment_id
+               WHERE p.client_id = ?""",
+            (client_id,),
+        ).fetchall():
+            key = (r["payment_id"], r["invoice_id"])
+            out[key] = out.get(key, 0.0) + float(r["amount"] or 0)
+        return out
+
+    def _paid_set():
+        return {
+            r["id"]
+            for r in db.execute(
+                "SELECT id FROM invoices WHERE client_id=? AND status='paid'", (client_id,)
+            ).fetchall()
+        }
+
+    before_alloc, before_paid = _snapshot_allocs(), _paid_set()
+    recalculate_client_balance(client_id)
+    after_alloc, after_paid = _snapshot_allocs(), _paid_set()
+
+    changes = []
+    for key in set(before_alloc) | set(after_alloc):
+        b = before_alloc.get(key, 0.0)
+        a = after_alloc.get(key, 0.0)
+        delta = round(a - b, 2)
+        if abs(delta) < 0.01:
+            continue
+        pid, iid = key
+        changes.append({
+            "payment_id":     pid,
+            "invoice_id":     iid,
+            "invoice_number": inv_num.get(iid),
+            "before":         round(b, 2),
+            "after":          round(a, 2),
+            "delta":          delta,
+            "direction":      "increased" if delta > 0 else "decreased",
+        })
+
+    newly_paid     = [inv_num.get(i, str(i)) for i in sorted(after_paid - before_paid)]
+    no_longer_paid = [inv_num.get(i, str(i)) for i in sorted(before_paid - after_paid)]
+
+    if not changes and not newly_paid and not no_longer_paid:
+        return None
+
+    changes.sort(key=lambda c: (c["invoice_number"] or "", c["payment_id"]))
+    return {
+        "client_id":               client_id,
+        "client_name":             name_row["name"],
+        "newly_paid_invoices":     newly_paid,
+        "no_longer_paid_invoices": no_longer_paid,
+        "allocation_changes":      changes,
+    }
+
+
+def reconcile_client_detailed(client_id):
+    """Public wrapper: reconcile one client and return the change-detail dict
+    (or None if nothing changed)."""
+    return _reconcile_client_detailed(get_db(), client_id)
+
+
+def reconcile_all_clients(detailed=False):
     """Re-run payment allocation for every client.
 
     Applies each client's unallocated payments to their oldest unpaid invoices
@@ -181,22 +260,36 @@ def reconcile_all_clients():
     its invoice existed, or never allocated). Idempotent — safe to run repeatedly.
 
     Returns a summary dict: clients_processed, invoices_newly_paid, total_paid_invoices.
+    When detailed=True, also includes affected_clients + an `affected` list, where each
+    entry describes the per-client newly/no-longer-paid invoices and allocation deltas.
     """
     db = get_db()
     client_ids = [r["id"] for r in db.execute("SELECT id FROM clients ORDER BY id").fetchall()]
     before_paid = {
         r["id"] for r in db.execute("SELECT id FROM invoices WHERE status='paid'").fetchall()
     }
+
+    affected = []
     for cid in client_ids:
-        recalculate_client_balance(cid)
+        if detailed:
+            d = _reconcile_client_detailed(db, cid)
+            if d:
+                affected.append(d)
+        else:
+            recalculate_client_balance(cid)
+
     after_paid = {
         r["id"] for r in db.execute("SELECT id FROM invoices WHERE status='paid'").fetchall()
     }
-    return {
+    summary = {
         "clients_processed":   len(client_ids),
         "invoices_newly_paid": len(after_paid - before_paid),
         "total_paid_invoices": len(after_paid),
     }
+    if detailed:
+        summary["affected_clients"] = len(affected)
+        summary["affected"] = affected
+    return summary
 
 
 def create_payment(data):

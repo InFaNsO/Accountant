@@ -1213,10 +1213,22 @@ def reconcile_clients():
     from ..services import payment_service
 
     cid = data.get("client_id")
+    detail = bool(data.get("detail"))
+
     if cid is not None:
         client = db.execute("SELECT name FROM clients WHERE id=?", (cid,)).fetchone()
         if not client:
             return jsonify({"error": f"Client ID {cid} not found."}), 404
+        if detail:
+            d = payment_service.reconcile_client_detailed(int(cid))
+            if d is None:
+                d = {
+                    "client_id": int(cid), "client_name": client["name"],
+                    "newly_paid_invoices": [], "no_longer_paid_invoices": [],
+                    "allocation_changes": [],
+                    "note": "No changes — already reconciled.",
+                }
+            return jsonify({"result": d})
         before = {r["id"] for r in db.execute(
             "SELECT id FROM invoices WHERE client_id=? AND status='paid'", (cid,)).fetchall()}
         payment_service.recalculate_client_balance(int(cid))
@@ -1226,6 +1238,9 @@ def reconcile_clients():
             f"✓ Reconciled {client['name']}. {len(after - before)} invoice(s) newly marked paid; "
             f"{len(after)} of their invoice(s) now fully paid."
         )})
+
+    if detail:
+        return jsonify({"result": payment_service.reconcile_all_clients(detailed=True)})
 
     summary = payment_service.reconcile_all_clients()
     return jsonify({"result": (

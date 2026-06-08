@@ -351,18 +351,22 @@ def delete_payment(payment_id: int) -> str:
 
 
 @mcp.tool()
-def reconcile_client_payments(client_id: int = None) -> str:
+def reconcile_client_payments(client_id: int = None, detail: bool = True) -> dict:
     """
     Reconcile payments by applying each client's UNALLOCATED payment money to their
     OLDEST unpaid invoices (oldest-first). Fixes invoices left unpaid because a payment
     was recorded before its invoice existed, or was never allocated to it.
 
     client_id: optional — reconcile just this client. Omit to reconcile ALL clients.
+    detail:    default True — return a structured breakdown of exactly what changed:
+               per affected client, the newly_paid_invoices, no_longer_paid_invoices,
+               and allocation_changes (each payment→invoice delta with before/after).
+               Set False for a short one-line text summary instead.
 
     Rewrites payment allocations and invoice paid-status only. It does NOT create, edit,
     or delete any payment or invoice. Idempotent. ONLY call after explicit user confirmation.
     """
-    return _call("POST", "clients/reconcile", body={"client_id": client_id})
+    return _call("POST", "clients/reconcile", body={"client_id": client_id, "detail": detail})
 
 
 @mcp.tool()
