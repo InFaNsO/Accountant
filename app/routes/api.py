@@ -1199,6 +1199,42 @@ def add_ledger_entry():
     return jsonify({"result": f"✓ Manual ledger entry added for {c['name']}: {direction} on {entry_date} — '{description}'"})
 
 
+@bp.route("/clients/reconcile", methods=["POST"])
+@require_auth
+def reconcile_clients():
+    """Apply unallocated payments to the oldest unpaid invoices.
+
+    Body: {"client_id": <int>} reconciles a single client; {} reconciles ALL clients.
+    Rewrites payment allocations + invoice paid-status only — never creates, edits,
+    or deletes a payment or invoice. Idempotent.
+    """
+    data = _jb()
+    db = get_db()
+    from ..services import payment_service
+
+    cid = data.get("client_id")
+    if cid is not None:
+        client = db.execute("SELECT name FROM clients WHERE id=?", (cid,)).fetchone()
+        if not client:
+            return jsonify({"error": f"Client ID {cid} not found."}), 404
+        before = {r["id"] for r in db.execute(
+            "SELECT id FROM invoices WHERE client_id=? AND status='paid'", (cid,)).fetchall()}
+        payment_service.recalculate_client_balance(int(cid))
+        after = {r["id"] for r in db.execute(
+            "SELECT id FROM invoices WHERE client_id=? AND status='paid'", (cid,)).fetchall()}
+        return jsonify({"result": (
+            f"✓ Reconciled {client['name']}. {len(after - before)} invoice(s) newly marked paid; "
+            f"{len(after)} of their invoice(s) now fully paid."
+        )})
+
+    summary = payment_service.reconcile_all_clients()
+    return jsonify({"result": (
+        f"✓ Reconciled {summary['clients_processed']} client(s). "
+        f"{summary['invoices_newly_paid']} invoice(s) newly marked paid; "
+        f"{summary['total_paid_invoices']} invoice(s) now fully paid in total."
+    )})
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # STATS
 # ═════════════════════════════════════════════════════════════════════════════
@@ -3851,3 +3887,578 @@ def supply_pipeline():
     truncated = len(items) > limit
     items = items[:limit]
     return jsonify({"result": {"items": items, "count": len(items), "truncated": truncated, "limit": limit}})
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# AGGREGATE / DETAIL ENDPOINTS (added for richer MCP coverage)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _ledger_payload(db, client_id, company_id=None, date_from=None, date_to=None):
+    """Build a structured ledger (entries + running balance) for a client or one of
+    their companies. Mirrors the JSON branch of /api/clients/<id>/ledger.
+    Returns None if the client/company doesn't exist.
+    """
+    client = db.execute("SELECT name, opening_balance FROM clients WHERE id=?", (client_id,)).fetchone()
+    if not client:
+        return None
+    if company_id:
+        co = db.execute(
+            "SELECT name, opening_balance FROM client_companies WHERE id=? AND client_id=?",
+            (company_id, client_id),
+        ).fetchone()
+        if not co:
+            return None
+        ledger_name = f"{client['name']} / {co['name']}"
+        ob = _f(co["opening_balance"])
+        inv_where, inv_params = "WHERE client_id=? AND company_id=? AND status != 'cancelled'", [client_id, company_id]
+        pay_where, pay_params = "WHERE client_id=? AND company_id=?", [client_id, company_id]
+    else:
+        ledger_name = client["name"]
+        ob = _f(client["opening_balance"])
+        inv_where, inv_params = "WHERE client_id=? AND status != 'cancelled'", [client_id]
+        pay_where, pay_params = "WHERE client_id=?", [client_id]
+
+    if date_from:
+        inv_where += " AND issue_date >= ?";   inv_params.append(date_from)
+        pay_where += " AND payment_date >= ?"; pay_params.append(date_from)
+    if date_to:
+        inv_where += " AND issue_date <= ?";   inv_params.append(date_to)
+        pay_where += " AND payment_date <= ?"; pay_params.append(date_to)
+
+    invoices = db.execute(
+        f"SELECT invoice_number, issue_date, total, status FROM invoices {inv_where} ORDER BY issue_date, id",
+        inv_params,
+    ).fetchall()
+    payments = db.execute(
+        f"SELECT id, amount, payment_date, method, reference, notes FROM payments {pay_where} ORDER BY payment_date, id",
+        pay_params,
+    ).fetchall()
+
+    entries = []
+    if ob != 0 and not date_from:
+        entries.append({
+            "date": "", "type": "opening",
+            "label": f"Opening Balance ({'debt' if ob > 0 else 'credit'})",
+            "debit": ob if ob > 0 else 0, "credit": abs(ob) if ob < 0 else 0,
+        })
+
+    merged = sorted(
+        [{"sort": r["issue_date"] or "",  "kind": "invoice", "row": dict(r)} for r in invoices] +
+        [{"sort": r["payment_date"] or "", "kind": "payment", "row": dict(r)} for r in payments],
+        key=lambda x: x["sort"],
+    )
+    pmt_ids = [m["row"]["id"] for m in merged if m["kind"] == "payment"]
+    allocs_by_pmt = {}
+    if pmt_ids:
+        ph = ",".join("?" * len(pmt_ids))
+        for r in db.execute(
+            f"""SELECT pa.payment_id, pa.amount, i.invoice_number
+                FROM payment_allocations pa JOIN invoices i ON i.id = pa.invoice_id
+                WHERE pa.payment_id IN ({ph})""",
+            pmt_ids,
+        ).fetchall():
+            allocs_by_pmt.setdefault(r["payment_id"], []).append(dict(r))
+
+    for item in merged:
+        r = item["row"]
+        if item["kind"] == "invoice":
+            entries.append({"date": r["issue_date"], "type": "invoice",
+                            "label": r["invoice_number"], "debit": _f(r["total"]), "credit": 0})
+        else:
+            label = r["method"] or "payment"
+            if r["reference"]:
+                label += f" / {r['reference']}"
+            entries.append({"date": r["payment_date"], "type": "payment", "label": label,
+                            "debit": 0, "credit": _f(r["amount"]),
+                            "payment_id": r["id"], "allocations": allocs_by_pmt.get(r["id"], [])})
+
+    running = 0.0
+    for e in entries:
+        running += e["credit"] - e["debit"]
+        e["running"] = running
+
+    return {
+        "ledger_name":   ledger_name,
+        "company_id":    company_id,
+        "date_from":     date_from,
+        "date_to":       date_to,
+        "entries":       entries,
+        "final_balance": running,
+    }
+
+
+@bp.route("/clients/<int:client_id>/full")
+@require_auth
+def client_full(client_id):
+    """Everything about one client in a single call: details, invoices (with line items
+    + payment status), companies (each with its ledger), and the complete client ledger.
+
+    Query params:
+      invoice_days  — invoices issued within the last N days (default 30; -1 = all).
+      invoice_limit — cap on invoices returned (default 500, max 2000).
+    """
+    db = get_db()
+    client = db.execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
+    if not client:
+        return jsonify({"error": f"Client ID {client_id} not found."}), 404
+
+    raw = request.args.get("invoice_days")
+    try:
+        invoice_days = int(raw) if raw is not None else 30
+    except (TypeError, ValueError):
+        invoice_days = 30
+    invoice_limit = _arg_int("invoice_limit", 500, hi=2000)
+
+    inv_where, inv_params = "WHERE i.client_id=?", [client_id]
+    if invoice_days != -1:
+        inv_where += " AND date(i.issue_date) >= date('now', ?)"
+        inv_params.append(f"-{max(0, invoice_days)} days")
+
+    invoices = db.execute(
+        f"SELECT i.* FROM invoices i {inv_where} ORDER BY i.issue_date DESC, i.id DESC LIMIT ?",
+        inv_params + [invoice_limit + 1],
+    ).fetchall()
+    inv_truncated = len(invoices) > invoice_limit
+    invoices = invoices[:invoice_limit]
+    inv_ids = [r["id"] for r in invoices]
+
+    items_by_inv = {}
+    if inv_ids:
+        ph = ",".join("?" * len(inv_ids))
+        for it in db.execute(
+            f"""SELECT ii.*, p.name AS product_name, sp.name AS sub_product_name,
+                       COALESCE(NULLIF(sp.pcs_per_carton, 0), p.pcs_per_carton, 0) AS pcs_per_carton
+                FROM invoice_items ii
+                LEFT JOIN products p ON p.id = ii.product_id
+                LEFT JOIN sub_products sp ON sp.id = ii.sub_product_id
+                WHERE ii.invoice_id IN ({ph})""",
+            inv_ids,
+        ).fetchall():
+            d = dict(it)
+            pcs = d.get("pcs_per_carton") or 0
+            qty = _f(d.get("quantity"))
+            items_by_inv.setdefault(it["invoice_id"], []).append({
+                "product_id":       d["product_id"],
+                "product_name":     d["product_name"] or d["description"],
+                "sub_product_id":   d["sub_product_id"],
+                "sub_product_name": d["sub_product_name"],
+                "description":      d["description"],
+                "box_size":         pcs,
+                "quantity":         qty,
+                "quantity_boxes":   round(qty / pcs, 3) if pcs else None,
+                "unit_price":       _f(d["unit_price"]),
+                "discount_type":    d.get("discount_type"),
+                "discount_value":   _f(d.get("discount_value")),
+                "tax_rate":         _f(d["tax_rate"]),
+                "line_total":       _f(d["line_total"]),
+            })
+
+    inv_items = []
+    for r in invoices:
+        d = dict(r)
+        total, paid = _f(d["total"]), _f(d["amount_paid"])
+        inv_items.append({
+            "id":             d["id"],
+            "invoice_number": d["invoice_number"],
+            "issue_date":     d["issue_date"],
+            "due_date":       d["due_date"],
+            "company_id":     d.get("company_id"),
+            "subtotal":       _f(d["subtotal"]),
+            "tax_total":      _f(d["tax_total"]),
+            "discount_amount": _f(d["discount_amount"]),
+            "total":          total,
+            "amount_paid":    paid,
+            "balance_due":    total - paid,
+            "payment_status": d["status"],
+            "items":          items_by_inv.get(d["id"], []),
+        })
+
+    companies = []
+    for co in db.execute(
+        "SELECT * FROM client_companies WHERE client_id=? ORDER BY name", (client_id,)
+    ).fetchall():
+        companies.append({
+            "id":              co["id"],
+            "name":            co["name"],
+            "tax_id":          co["tax_id"],
+            "opening_balance": _f(co["opening_balance"]),
+            "ledger":          _ledger_payload(db, client_id, company_id=co["id"]),
+        })
+
+    complete_ledger = _ledger_payload(db, client_id)
+
+    details = {
+        "id":              client["id"],
+        "name":            client["name"],
+        "company":         client["company"],
+        "email":           client["email"],
+        "phone":           client["phone"],
+        "address":         client["address"],
+        "city":            client["city"],
+        "country":         client["country"],
+        "tax_id":          client["tax_id"],
+        "notes":           client["notes"],
+        "opening_balance": _f(client["opening_balance"]),
+        "payment_terms":   client["payment_terms"] if "payment_terms" in client.keys() else None,
+        "created_at":      client["created_at"],
+    }
+
+    return jsonify({"result": {
+        "details":             details,
+        "balance":             complete_ledger["final_balance"] if complete_ledger else 0.0,
+        "invoice_window_days": invoice_days,
+        "invoice_count":       len(inv_items),
+        "invoices_truncated":  inv_truncated,
+        "invoices":            inv_items,
+        "companies":           companies,
+        "ledger":              complete_ledger,
+    }})
+
+
+@bp.route("/categories/<int:category_id>/products")
+@require_auth
+def category_products(category_id):
+    """All products in a category with nested sub-products, each showing bucket
+    quantities (warehouse / production / transit), min_quantity, and box size.
+
+    Query param: include_inactive=0/1 (default 0).
+    """
+    db = get_db()
+    cat = db.execute("SELECT id, name, description FROM categories WHERE id=?", (category_id,)).fetchone()
+    if not cat:
+        return jsonify({"error": f"Category ID {category_id} not found."}), 404
+    include_inactive = request.args.get("include_inactive", "0") in ("1", "true", "yes")
+
+    p_where, p_params = "WHERE category_id=?", [category_id]
+    if not include_inactive:
+        p_where += " AND is_active=1"
+    products = db.execute(
+        f"""SELECT id, name, sku, unit_price, stock_qty, production_qty, in_transit_qty,
+                   min_quantity, pcs_per_carton, is_active
+            FROM products {p_where} ORDER BY name""",
+        p_params,
+    ).fetchall()
+    pids = [p["id"] for p in products]
+
+    subs_by_p = {}
+    if pids:
+        ph = ",".join("?" * len(pids))
+        s_where, s_params = f"WHERE product_id IN ({ph})", list(pids)
+        if not include_inactive:
+            s_where += " AND is_active=1"
+        for s in db.execute(
+            f"""SELECT id, product_id, name, sku, unit_price, stock_qty, production_qty,
+                       in_transit_qty, min_quantity, pcs_per_carton, is_active
+                FROM sub_products {s_where} ORDER BY name""",
+            s_params,
+        ).fetchall():
+            subs_by_p.setdefault(s["product_id"], []).append({
+                "sub_product_id": s["id"],
+                "name":           s["name"],
+                "sku":            s["sku"],
+                "box_size":       s["pcs_per_carton"] or 0,
+                "quantities": {
+                    "warehouse":  _f(s["stock_qty"]),
+                    "production": _f(s["production_qty"]),
+                    "transit":    _f(s["in_transit_qty"]),
+                },
+                "min_quantity": _f(s["min_quantity"]),
+                "is_active":    bool(s["is_active"]),
+            })
+
+    items = []
+    for p in products:
+        subs = subs_by_p.get(p["id"], [])
+        items.append({
+            "product_id": p["id"],
+            "name":       p["name"],
+            "sku":        p["sku"],
+            "box_size":   p["pcs_per_carton"] or 0,
+            "quantities": {
+                "warehouse":  _f(p["stock_qty"]),
+                "production": _f(p["production_qty"]),
+                "transit":    _f(p["in_transit_qty"]),
+            },
+            "min_quantity":     _f(p["min_quantity"]),
+            "is_active":        bool(p["is_active"]),
+            "has_sub_products": bool(subs),
+            "sub_products":     subs,
+        })
+
+    return jsonify({"result": {
+        "category_id":   cat["id"],
+        "category_name": cat["name"],
+        "count":         len(items),
+        "products":      items,
+    }})
+
+
+@bp.route("/products/<int:product_id>/stock-history-grouped")
+@require_auth
+def product_stock_history_grouped(product_id):
+    """Stock-movement history for a product, grouped by sub-product.
+    Defaults to the WAREHOUSE bucket; pass bucket=production|transit|all.
+    Products with no sub-products return a single product-level group.
+
+    Query params: bucket (default 'warehouse'), limit (per group, default 50, max 500).
+    """
+    db = get_db()
+    prod = db.execute("SELECT name FROM products WHERE id=?", (product_id,)).fetchone()
+    if not prod:
+        return jsonify({"error": f"Product {product_id} not found"}), 404
+
+    bucket = (request.args.get("bucket") or "warehouse").strip().lower()
+    limit = _arg_int("limit", 50, hi=500)
+    types = None
+    if bucket not in ("all", ""):
+        if bucket not in _BUCKET_MOVEMENT_TYPES:
+            return jsonify({"error": "bucket must be one of: warehouse, production, transit, all"}), 400
+        types = _BUCKET_MOVEMENT_TYPES[bucket]
+
+    def _hist(extra_where, extra_params):
+        where, params = ["product_id = ?"] + extra_where, [product_id] + extra_params
+        if types:
+            ph = ",".join("?" * len(types))
+            where.append(f"movement_type IN ({ph})"); params.extend(types)
+        rows = db.execute(
+            f"""SELECT id, sub_product_id, movement_type, quantity, notes, invoice_id,
+                       dispatch_id, palm_purchase_id, expected_arrival, created_at
+                FROM stock_movements WHERE {' AND '.join(where)}
+                ORDER BY created_at DESC, id DESC LIMIT ?""",
+            params + [limit],
+        ).fetchall()
+        return [{
+            "id":               r["id"],
+            "type":             r["movement_type"],
+            "quantity":         _f(r["quantity"]),
+            "notes":            r["notes"],
+            "invoice_id":       r["invoice_id"],
+            "dispatch_id":      r["dispatch_id"],
+            "palm_purchase_id": r["palm_purchase_id"],
+            "expected_arrival": r["expected_arrival"],
+            "sub_product_id":   r["sub_product_id"],
+            "created_at":       r["created_at"],
+        } for r in rows]
+
+    subs = db.execute(
+        "SELECT id, name, stock_qty, production_qty, in_transit_qty "
+        "FROM sub_products WHERE product_id=? ORDER BY name", (product_id,)
+    ).fetchall()
+
+    groups = []
+    if subs:
+        for s in subs:
+            h = _hist(["sub_product_id = ?"], [s["id"]])
+            groups.append({
+                "sub_product_id":   s["id"],
+                "sub_product_name": s["name"],
+                "current": {"warehouse": _f(s["stock_qty"]), "production": _f(s["production_qty"]), "transit": _f(s["in_transit_qty"])},
+                "history": h,
+                "count":   len(h),
+            })
+        parent_hist = _hist(["sub_product_id IS NULL"], [])
+        if parent_hist:
+            prow = db.execute("SELECT stock_qty, production_qty, in_transit_qty FROM products WHERE id=?", (product_id,)).fetchone()
+            groups.append({
+                "sub_product_id":   None,
+                "sub_product_name": "(product-level / no variant)",
+                "current": {"warehouse": _f(prow["stock_qty"]), "production": _f(prow["production_qty"]), "transit": _f(prow["in_transit_qty"])},
+                "history": parent_hist,
+                "count":   len(parent_hist),
+            })
+    else:
+        prow = db.execute("SELECT stock_qty, production_qty, in_transit_qty FROM products WHERE id=?", (product_id,)).fetchone()
+        h = _hist([], [])
+        groups.append({
+            "sub_product_id":   None,
+            "sub_product_name": None,
+            "current": {"warehouse": _f(prow["stock_qty"]), "production": _f(prow["production_qty"]), "transit": _f(prow["in_transit_qty"])},
+            "history": h,
+            "count":   len(h),
+        })
+
+    return jsonify({"result": {
+        "product_id":       product_id,
+        "product_name":     prod["name"],
+        "bucket_filter":    bucket,
+        "has_sub_products": bool(subs),
+        "group_count":      len(groups),
+        "groups":           groups,
+        "limit":            limit,
+    }})
+
+
+@bp.route("/products/<int:product_id>/stock-action", methods=["POST"])
+@require_auth
+def product_stock_action(product_id):
+    """Perform a semantic stock MOVE (transfers between buckets / adds stock).
+
+    Body: {action, quantity, sub_product_id?, expected_arrival?, notes?}
+      action: add_stock                 → warehouse += qty
+              send_to_production         → warehouse → production
+              dispatch_from_production   → production → transit (needs expected_arrival)
+              mark_arrived               → transit → warehouse
+    """
+    data = _jb()
+    action = (data.get("action") or "").strip()
+    quantity = _f(data.get("quantity", 0))
+    sub_product_id = data.get("sub_product_id") or None
+    notes = data.get("notes") or "Stock action via Claude"
+    expected_arrival = data.get("expected_arrival") or None
+
+    valid = {"add_stock", "send_to_production", "dispatch_from_production", "mark_arrived"}
+    if action not in valid:
+        return jsonify({"error": f"action must be one of: {', '.join(sorted(valid))}"}), 400
+    if quantity <= 0:
+        return jsonify({"error": "quantity must be positive."}), 400
+
+    db = get_db()
+    if sub_product_id:
+        row = db.execute("SELECT name FROM sub_products WHERE id=?", (sub_product_id,)).fetchone()
+        if not row:
+            return jsonify({"error": f"Sub-product ID {sub_product_id} not found."}), 404
+        name = row["name"]
+    else:
+        row = db.execute("SELECT name FROM products WHERE id=?", (product_id,)).fetchone()
+        if not row:
+            return jsonify({"error": f"Product ID {product_id} not found."}), 404
+        name = row["name"]
+
+    if action == "dispatch_from_production":
+        if not expected_arrival:
+            return jsonify({"error": "expected_arrival (YYYY-MM-DD) is required for dispatch_from_production."}), 400
+        try:
+            datetime.strptime(expected_arrival, "%Y-%m-%d")
+        except ValueError:
+            return jsonify({"error": "expected_arrival must be YYYY-MM-DD."}), 400
+
+    from ..services import product_service
+    sid = int(sub_product_id) if sub_product_id else None
+    if action == "add_stock":
+        product_service.add_stock(product_id, sid, quantity, notes)
+        desc = "added to warehouse"
+    elif action == "send_to_production":
+        product_service.send_to_production(product_id, sid, quantity, notes)
+        desc = "moved warehouse → production"
+    elif action == "dispatch_from_production":
+        product_service.dispatch_from_production(product_id, sid, quantity, expected_arrival, notes)
+        desc = f"moved production → transit (ETA {expected_arrival})"
+    else:
+        product_service.mark_arrived(product_id, sid, quantity, notes)
+        desc = "moved transit → warehouse"
+
+    return jsonify({"result": f"✓ {name}: {quantity:.0f} {desc}."})
+
+
+def _dispatch_items_map(db, d_ids):
+    items_by_d = {}
+    if not d_ids:
+        return items_by_d
+    ph = ",".join("?" * len(d_ids))
+    for r in db.execute(
+        f"""SELECT di.id, di.dispatch_id, di.product_id, di.sub_product_id,
+                   di.quantity, di.qty_received, di.price, di.product_name,
+                   p.name AS product_db_name, sp.name AS sub_db_name
+            FROM dispatch_items di
+            LEFT JOIN products p ON p.id = di.product_id
+            LEFT JOIN sub_products sp ON sp.id = di.sub_product_id
+            WHERE di.dispatch_id IN ({ph})""",
+        d_ids,
+    ).fetchall():
+        d = dict(r)
+        d["display_name"] = d["sub_db_name"] or d["product_db_name"] or d["product_name"]
+        d["pending"] = _f(d["quantity"]) - _f(d["qty_received"])
+        items_by_d.setdefault(r["dispatch_id"], []).append(d)
+    return items_by_d
+
+
+@bp.route("/transit/received")
+@require_auth
+def transit_received():
+    """Dispatches that have arrived (status received / partially_received).
+    Without a date range, returns the single latest arrival; with a range,
+    returns all in that window. Ordering & date filters use expected_arrival.
+
+    Query params: date_from, date_to (YYYY-MM-DD), include=items, limit.
+    """
+    db = get_db()
+    date_from, date_to = _arg_date("date_from"), _arg_date("date_to")
+    include = _csv_set(request.args.get("include"))
+    has_range = bool(date_from or date_to)
+    limit = _arg_int("limit", 50 if has_range else 1, hi=300)
+
+    where, params = ["d.status IN ('received','partially_received')"], []
+    if date_from:
+        where.append("d.expected_arrival >= ?"); params.append(date_from)
+    if date_to:
+        where.append("d.expected_arrival <= ?"); params.append(date_to)
+
+    rows = db.execute(
+        f"""SELECT d.id, d.name, d.supplier_id, s.name AS supplier_name,
+                   d.dispatch_date, d.expected_arrival, d.status, d.notes, d.created_at
+            FROM dispatches d LEFT JOIN suppliers s ON s.id = d.supplier_id
+            WHERE {' AND '.join(where)}
+            ORDER BY d.expected_arrival DESC, d.id DESC LIMIT ?""",
+        params + [limit + 1],
+    ).fetchall()
+    truncated = len(rows) > limit
+    rows = rows[:limit]
+    items_by_d = _dispatch_items_map(db, [r["id"] for r in rows]) if "items" in include else {}
+
+    items = []
+    for r in rows:
+        d = dict(r)
+        if "items" in include:
+            d["line_items"] = items_by_d.get(r["id"], [])
+        items.append(d)
+    return jsonify({"result": {
+        "items": items, "count": len(items), "truncated": truncated, "limit": limit,
+        "note": "received = dispatches fully/partially received; date filter & ordering use expected_arrival",
+    }})
+
+
+@bp.route("/transit/upcoming")
+@require_auth
+def transit_upcoming():
+    """Dispatches still arriving (status in_transit / partially_received).
+    Without a date range, returns the single next arrival (expected_arrival >= today);
+    with a range, returns all expected in that window. Ordered by expected_arrival ASC.
+
+    Query params: date_from, date_to (YYYY-MM-DD), include=items, limit.
+    """
+    db = get_db()
+    date_from, date_to = _arg_date("date_from"), _arg_date("date_to")
+    include = _csv_set(request.args.get("include"))
+    has_range = bool(date_from or date_to)
+    limit = _arg_int("limit", 50 if has_range else 1, hi=300)
+
+    where, params = ["d.status IN ('in_transit','partially_received')"], []
+    if has_range:
+        if date_from:
+            where.append("d.expected_arrival >= ?"); params.append(date_from)
+        if date_to:
+            where.append("d.expected_arrival <= ?"); params.append(date_to)
+    else:
+        where.append("(d.expected_arrival IS NULL OR d.expected_arrival >= date('now'))")
+
+    rows = db.execute(
+        f"""SELECT d.id, d.name, d.supplier_id, s.name AS supplier_name,
+                   d.dispatch_date, d.expected_arrival, d.status, d.notes, d.created_at
+            FROM dispatches d LEFT JOIN suppliers s ON s.id = d.supplier_id
+            WHERE {' AND '.join(where)}
+            ORDER BY (d.expected_arrival IS NULL), d.expected_arrival ASC, d.id ASC LIMIT ?""",
+        params + [limit + 1],
+    ).fetchall()
+    truncated = len(rows) > limit
+    rows = rows[:limit]
+    items_by_d = _dispatch_items_map(db, [r["id"] for r in rows]) if "items" in include else {}
+
+    items = []
+    for r in rows:
+        d = dict(r)
+        if "items" in include:
+            d["line_items"] = items_by_d.get(r["id"], [])
+        items.append(d)
+    return jsonify({"result": {
+        "items": items, "count": len(items), "truncated": truncated, "limit": limit,
+    }})

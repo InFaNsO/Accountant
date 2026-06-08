@@ -1,7 +1,7 @@
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
 from flask_login import login_required, current_user
 from ..services import client_service
-from ..services.payment_service import recalculate_client_balance
+from ..services.payment_service import recalculate_client_balance, reconcile_all_clients
 from ..services.auth_service import permission_required
 from ..database import get_db
 
@@ -290,6 +290,15 @@ def add_ledger_entry(client_id):
 def recalculate(client_id):
     recalculate_client_balance(client_id)
     return jsonify({"ok": True})
+
+
+@bp.route("/reconcile-all", methods=["POST"])
+@login_required
+@permission_required("clients", "financials")
+def reconcile_all():
+    """Apply every client's unallocated payments to their oldest unpaid invoices."""
+    summary = reconcile_all_clients()
+    return jsonify({"ok": True, **summary})
 
 
 @bp.route("/<int:client_id>/delete", methods=["POST"])

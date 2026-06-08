@@ -173,6 +173,32 @@ def recalculate_client_balance(client_id):
     db.commit()
 
 
+def reconcile_all_clients():
+    """Re-run payment allocation for every client.
+
+    Applies each client's unallocated payments to their oldest unpaid invoices
+    (this is what fixes invoices left unpaid because a payment was recorded before
+    its invoice existed, or never allocated). Idempotent — safe to run repeatedly.
+
+    Returns a summary dict: clients_processed, invoices_newly_paid, total_paid_invoices.
+    """
+    db = get_db()
+    client_ids = [r["id"] for r in db.execute("SELECT id FROM clients ORDER BY id").fetchall()]
+    before_paid = {
+        r["id"] for r in db.execute("SELECT id FROM invoices WHERE status='paid'").fetchall()
+    }
+    for cid in client_ids:
+        recalculate_client_balance(cid)
+    after_paid = {
+        r["id"] for r in db.execute("SELECT id FROM invoices WHERE status='paid'").fetchall()
+    }
+    return {
+        "clients_processed":   len(client_ids),
+        "invoices_newly_paid": len(after_paid - before_paid),
+        "total_paid_invoices": len(after_paid),
+    }
+
+
 def create_payment(data):
     """Record a payment against a client ledger as a single row.
 

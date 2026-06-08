@@ -70,6 +70,14 @@ HTTP proxy to the Flask `/api/*` endpoints. Auth via `X-MCP-Key` (`MCP_API_KEY` 
 Recently added tools:
 - `list_palm_purchases`, `get_palm_purchase`, `create_palm_purchase`, `delete_palm_purchase`
 - `get_product_stock_history(product_id, sub_product_id?, bucket?, limit?)`
+- `reconcile_client_payments(client_id?)` — applies unallocated payments to oldest unpaid invoices (one client, or all if omitted). Endpoint: `POST /api/clients/reconcile`. Backed by `payment_service.reconcile_all_clients()` / `recalculate_client_balance()`. The "Reconcile Payments" button on the clients list page (`POST /clients/reconcile-all`) uses the same service.
+- `get_company_ledger(client_id, company_id, date_from?, date_to?)` — structured ledger for ONE company under a client. Thin wrapper over `GET /api/clients/<id>/ledger?company_id=&format=json` (which already supports `company_id`).
+- `get_client_full(client_id, invoice_days=30, invoice_limit=500)` — **everything about a client in one call**: details, invoices (with line items incl. box size + `quantity_boxes`, prices, discounts, and per-invoice payment status), companies (each with its own ledger), and the complete client ledger JSON. `invoice_days=-1` = all invoices. Endpoint: `GET /api/clients/<id>/full`. Helper `_ledger_payload()` in `api.py` builds the ledgers.
+- `get_category_products(category_id, include_inactive=False)` — all products in a category with nested sub-products, each showing box size, bucket quantities (warehouse/production/transit) and min_quantity. Endpoint: `GET /api/categories/<id>/products`.
+- `get_sub_product_stock_history(product_id, sub_product_id, bucket='warehouse', limit=100)` — history for ONE sub-product (defaults to warehouse; `bucket=production|transit|all`). Reuses `GET /api/products/<id>/stock-history`.
+- `get_product_stock_history_by_sub(product_id, bucket='warehouse', limit=50)` — history for ALL sub-products of a product, grouped per sub-product; products with no sub-products return one product-level group. Endpoint: `GET /api/products/<id>/stock-history-grouped`.
+- `product_stock_action(product_id, action, quantity, sub_product_id?, expected_arrival?, notes?)` — semantic stock **moves** (`add_stock`, `send_to_production`, `dispatch_from_production` [needs `expected_arrival`], `mark_arrived`). Endpoint: `POST /api/products/<id>/stock-action`, dispatches to the matching `product_service` mover. (Raw single-bucket +/- stays `adjust_stock`.)
+- `get_received_transit(date_from?, date_to?, include?, limit?)` / `get_upcoming_transit(...)` — dispatches that have arrived vs still arriving. No date range → single latest / next; with a range → all in window. Filters/orders by `expected_arrival`. Endpoints: `GET /api/transit/received`, `GET /api/transit/upcoming` (`include=items`).
 
 To add a new MCP tool: write the matching Flask `/api/...` endpoint with `@require_auth`, then add the `@mcp.tool()` wrapper in `mcp_server.py` that calls `_call(...)`.
 

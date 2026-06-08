@@ -351,6 +351,21 @@ def delete_payment(payment_id: int) -> str:
 
 
 @mcp.tool()
+def reconcile_client_payments(client_id: int = None) -> str:
+    """
+    Reconcile payments by applying each client's UNALLOCATED payment money to their
+    OLDEST unpaid invoices (oldest-first). Fixes invoices left unpaid because a payment
+    was recorded before its invoice existed, or was never allocated to it.
+
+    client_id: optional — reconcile just this client. Omit to reconcile ALL clients.
+
+    Rewrites payment allocations and invoice paid-status only. It does NOT create, edit,
+    or delete any payment or invoice. Idempotent. ONLY call after explicit user confirmation.
+    """
+    return _call("POST", "clients/reconcile", body={"client_id": client_id})
+
+
+@mcp.tool()
 def add_ledger_entry(
     client_id: int,
     entry_date: str,
@@ -1228,6 +1243,164 @@ def get_client_ledger_json(
         "date_from":  date_from,
         "date_to":    date_to,
         "format":     "json",
+    })
+
+
+@mcp.tool()
+def get_company_ledger(
+    client_id: int,
+    company_id: int,
+    date_from: str = None,
+    date_to: str = None,
+) -> dict:
+    """Structured ledger for ONE company under a client (invoices + payments + running
+    balance, with payment allocations). Use get_client_companies(client_id) to find
+    company IDs. date_from/date_to (YYYY-MM-DD) optionally window the ledger.
+    """
+    return _call("GET", f"clients/{client_id}/ledger", params={
+        "company_id": company_id,
+        "date_from":  date_from,
+        "date_to":    date_to,
+        "format":     "json",
+    })
+
+
+@mcp.tool()
+def get_client_full(client_id: int, invoice_days: int = 30, invoice_limit: int = 500) -> dict:
+    """EVERYTHING about one client in a single call. Prefer this over chaining
+    get_client_details + get_client_invoices + get_client_ledger_json.
+
+    Returns: details, balance, invoices (each with line items — product/sub-product
+    name, box size, quantity + quantity_boxes, unit price, discount, line total —
+    plus payment_status/amount_paid/balance_due), companies (each with its own ledger),
+    and the complete client ledger in JSON.
+
+    Args:
+      invoice_days:  invoices issued within the last N days (default 30; pass -1 for ALL).
+      invoice_limit: cap on invoices returned (default 500, max 2000).
+    """
+    return _call("GET", f"clients/{client_id}/full", params={
+        "invoice_days":  invoice_days,
+        "invoice_limit": invoice_limit,
+    })
+
+
+@mcp.tool()
+def get_category_products(category_id: int, include_inactive: bool = False) -> dict:
+    """All products in a category with nested sub-products. Each product/sub-product
+    reports box size and bucket quantities (warehouse / production / transit) plus
+    min_quantity. One call to review a whole category's stock.
+    """
+    return _call("GET", f"categories/{category_id}/products", params={
+        "include_inactive": "1" if include_inactive else "0",
+    })
+
+
+@mcp.tool()
+def get_sub_product_stock_history(
+    product_id: int,
+    sub_product_id: int,
+    bucket: str = "warehouse",
+    limit: int = 100,
+) -> dict:
+    """Stock-movement history for ONE sub-product. Defaults to the WAREHOUSE bucket;
+    pass bucket=production | transit | all. Returns current levels + recent movements.
+    """
+    params = {"sub_product_id": sub_product_id, "limit": limit}
+    if bucket and bucket.lower() != "all":
+        params["bucket"] = bucket.lower()
+    return _call("GET", f"products/{product_id}/stock-history", params=params)
+
+
+@mcp.tool()
+def get_product_stock_history_by_sub(
+    product_id: int,
+    bucket: str = "warehouse",
+    limit: int = 50,
+) -> dict:
+    """Stock-movement history for ALL sub-products of a product, grouped per sub-product.
+    Defaults to the WAREHOUSE bucket; pass bucket=production | transit | all. A product
+    with NO sub-products returns a single product-level group (edge case handled).
+
+    Args:
+      limit: movements per group (default 50, max 500).
+    """
+    return _call("GET", f"products/{product_id}/stock-history-grouped", params={
+        "bucket": (bucket or "warehouse").lower(),
+        "limit":  limit,
+    })
+
+
+@mcp.tool()
+def product_stock_action(
+    product_id: int,
+    action: str,
+    quantity: float,
+    sub_product_id: int = None,
+    expected_arrival: str = None,
+    notes: str = "",
+) -> str:
+    """Perform a semantic stock MOVE between buckets (transfers, not raw adjustments).
+    For raw single-bucket +/- corrections use `adjust_stock` instead.
+
+    action:
+      add_stock                → warehouse += quantity
+      send_to_production       → warehouse → production
+      dispatch_from_production → production → transit (requires expected_arrival YYYY-MM-DD)
+      mark_arrived             → transit → warehouse
+
+    Omit sub_product_id to act on the parent product. ONLY call after explicit user confirmation.
+    """
+    return _call("POST", f"products/{product_id}/stock-action", body={
+        "action":           action,
+        "quantity":         quantity,
+        "sub_product_id":   sub_product_id,
+        "expected_arrival": expected_arrival,
+        "notes":            notes,
+    })
+
+
+@mcp.tool()
+def get_received_transit(
+    date_from: str = None,
+    date_to: str = None,
+    include: str = None,
+    limit: int = None,
+) -> dict:
+    """Transit/dispatches that have ARRIVED (status received / partially_received).
+    With NO date range → the single latest arrival. With a date range → all in that
+    window. Ordering & date filters use expected_arrival.
+
+    Args:
+      date_from/date_to: YYYY-MM-DD window on expected_arrival.
+      include: "items" to embed line items (with pending qty).
+      limit: override (default 1 without a range, 50 with a range; max 300).
+    """
+    return _call("GET", "transit/received", params={
+        "date_from": date_from, "date_to": date_to,
+        "include": _csv(include), "limit": limit,
+    })
+
+
+@mcp.tool()
+def get_upcoming_transit(
+    date_from: str = None,
+    date_to: str = None,
+    include: str = None,
+    limit: int = None,
+) -> dict:
+    """Transit/dispatches still ARRIVING (status in_transit / partially_received).
+    With NO date range → the single next arrival (expected_arrival >= today).
+    With a date range → all expected in that window. Ordered by expected_arrival ASC.
+
+    Args:
+      date_from/date_to: YYYY-MM-DD window on expected_arrival.
+      include: "items" to embed line items (with pending qty).
+      limit: override (default 1 without a range, 50 with a range; max 300).
+    """
+    return _call("GET", "transit/upcoming", params={
+        "date_from": date_from, "date_to": date_to,
+        "include": _csv(include), "limit": limit,
     })
 
 

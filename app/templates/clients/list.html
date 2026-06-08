@@ -2,6 +2,13 @@
 {% block title %}Clients{% endblock %}
 {% block page_title %}Clients{% endblock %}
 {% block topbar_actions %}
+  {% if can_financials %}
+  <button type="button" class="btn btn-secondary" id="reconcileBtn" onclick="reconcilePayments(this)"
+          title="Apply every client's unallocated payments to their oldest unpaid invoices">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+    Reconcile Payments
+  </button>
+  {% endif %}
   <a href="{{ url_for('clients.new_client') }}" class="btn btn-primary">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
     New Client
@@ -142,6 +149,33 @@
 
 {% block scripts %}
 <script>
+function reconcilePayments(btn) {
+  if (!confirm("Reconcile payments for all clients?\n\nThis re-applies every unallocated payment to each client's oldest unpaid invoices and updates invoice paid-status. It does not create, edit, or delete any payment or invoice.")) return;
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.textContent = 'Reconciling…';
+  fetch('{{ url_for("clients.reconcile_all") }}', {
+    method: 'POST',
+    headers: { 'X-Requested-With': 'XMLHttpRequest' },
+  })
+    .then(r => r.json())
+    .then(d => {
+      if (d.ok) {
+        alert(`Reconciled ${d.clients_processed} client(s).\n${d.invoices_newly_paid} invoice(s) newly marked paid.\n${d.total_paid_invoices} invoice(s) now fully paid in total.`);
+        location.reload();
+      } else {
+        alert('Reconcile failed: ' + (d.error || 'unknown error'));
+        btn.disabled = false;
+        btn.innerHTML = original;
+      }
+    })
+    .catch(e => {
+      alert('Reconcile failed: ' + e);
+      btn.disabled = false;
+      btn.innerHTML = original;
+    });
+}
+
 const _expandedClients = new Set();
 
 function toggleCompanies(clientId) {
