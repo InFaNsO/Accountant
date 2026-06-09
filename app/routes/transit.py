@@ -42,6 +42,7 @@ def _parse_items(form):
 @login_required
 @permission_required("transit", "view")
 def list_transit():
+    # All dispatches (ordered by nearest arrival); status filtering is done client-side.
     dispatches = transit_service.get_all_dispatches()
     return render_template("transit/list.html", dispatches=dispatches)
 

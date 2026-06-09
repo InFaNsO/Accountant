@@ -57,15 +57,27 @@ def _deduct_production_fifo(db, product_id, sub_product_id, qty_needed, supplier
 
 # ── Dispatches ────────────────────────────────────────────────────────────────
 
-def get_all_dispatches():
+def get_all_dispatches(statuses=None):
+    """Dispatches ordered by expected arrival, nearest first (undated last).
+
+    statuses: optional iterable of status values to include. None = all statuses.
+    """
+    where, params = "", []
+    if statuses:
+        statuses = list(statuses)
+        ph = ",".join("?" * len(statuses))
+        where = f"WHERE d.status IN ({ph})"
+        params = statuses
     return get_db().execute(
-        """SELECT d.*, s.name AS supplier_name,
-                  COUNT(di.id) AS item_count
-           FROM dispatches d
-           LEFT JOIN suppliers s  ON d.supplier_id=s.id
-           LEFT JOIN dispatch_items di ON di.dispatch_id=d.id
-           GROUP BY d.id
-           ORDER BY d.expected_arrival ASC, d.created_at DESC"""
+        f"""SELECT d.*, s.name AS supplier_name,
+                   COUNT(di.id) AS item_count
+            FROM dispatches d
+            LEFT JOIN suppliers s  ON d.supplier_id=s.id
+            LEFT JOIN dispatch_items di ON di.dispatch_id=d.id
+            {where}
+            GROUP BY d.id
+            ORDER BY (d.expected_arrival IS NULL), d.expected_arrival ASC, d.created_at DESC""",
+        params,
     ).fetchall()
 
 
