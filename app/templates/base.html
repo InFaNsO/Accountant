@@ -558,8 +558,17 @@ window.showClientLedger = function(clientId, name) {
     modal.style.display   = 'flex';
   }, true);
 
+  // A genuine form submit (Save, Refresh, Correct, Apply, etc.) is an intentional
+  // navigation that persists the data — never warn about it. Reset shortly after in
+  // case the submit was cancelled (e.g. a declined confirm) and no navigation happened.
+  document.addEventListener('submit', function () {
+    window.__formSubmitting = true;
+    setTimeout(function () { window.__formSubmitting = false; }, 1500);
+  }, true);
+
   // beforeunload for browser back / address bar navigation
   window.addEventListener('beforeunload', function (e) {
+    if (window.__formSubmitting) return;
     const dirty = _getDirty();
     if (dirty.isDirty) {
       e.preventDefault();

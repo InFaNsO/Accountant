@@ -46,7 +46,7 @@ def get_tally(tally_id):
         SELECT ti.*,
                p.name AS product_name, p.sku AS product_sku, p.pcs_per_carton,
                COALESCE(c.name, 'Uncategorized') AS category_name,
-               s.name AS sub_name, s.sku AS sub_sku
+               s.name AS sub_name, s.sku AS sub_sku, s.pcs_per_carton AS sub_pcs_per_carton
         FROM stock_tally_items ti
         JOIN products p ON ti.product_id = p.id
         LEFT JOIN categories c ON p.category_id = c.id
@@ -133,6 +133,94 @@ def refresh_product_digital(tally_id, product_id):
     """, (tally_id, product_id))
     db.commit()
     return True
+
+
+def refresh_item_digital(tally_id, item_id):
+    """Refresh ONE tally item's digital_qty to its current warehouse stock."""
+    db = get_db()
+    tally = db.execute("SELECT status FROM stock_tallies WHERE id=?", (tally_id,)).fetchone()
+    if not tally or tally["status"] != "draft":
+        return False
+    item = db.execute(
+        "SELECT product_id, sub_id FROM stock_tally_items WHERE id=? AND tally_id=?",
+        (item_id, tally_id),
+    ).fetchone()
+    if not item:
+        return False
+    if item["sub_id"]:
+        db.execute(
+            "UPDATE stock_tally_items SET digital_qty=(SELECT stock_qty FROM sub_products WHERE id=?), "
+            "refreshed_at=CURRENT_TIMESTAMP WHERE id=?",
+            (item["sub_id"], item_id),
+        )
+    else:
+        db.execute(
+            "UPDATE stock_tally_items SET digital_qty=(SELECT stock_qty FROM products WHERE id=?), "
+            "refreshed_at=CURRENT_TIMESTAMP WHERE id=?",
+            (item["product_id"], item_id),
+        )
+    db.commit()
+    return True
+
+
+def _correct_one(db, item, notes):
+    """Adjust warehouse stock for one item to match its physical count, then snapshot
+    digital_qty to the corrected level (so its difference becomes zero). Returns True
+    if a stock adjustment was made."""
+    diff = (item["digital_qty"] or 0) - (item["physical_qty"] or 0)
+    changed = abs(diff) > 0.0001
+    if changed:
+        if diff > 0:
+            adjust_stock(item["product_id"], item["sub_id"], "warehouse", "decrease", diff, notes)
+        else:
+            adjust_stock(item["product_id"], item["sub_id"], "warehouse", "increase", abs(diff), notes)
+    db.execute(
+        "UPDATE stock_tally_items SET digital_qty=?, refreshed_at=CURRENT_TIMESTAMP WHERE id=?",
+        (item["physical_qty"], item["id"]),
+    )
+    return changed
+
+
+def apply_item_correction(tally_id, item_id):
+    """Apply the stock correction for a SINGLE tally item (leaf product or one
+    sub-product), without applying the whole tally."""
+    db = get_db()
+    tally = db.execute("SELECT status FROM stock_tallies WHERE id=?", (tally_id,)).fetchone()
+    if not tally or tally["status"] != "draft":
+        return False, "Tally is not a draft or does not exist."
+    item = db.execute(
+        "SELECT * FROM stock_tally_items WHERE id=? AND tally_id=?", (item_id, tally_id)
+    ).fetchone()
+    if not item:
+        return False, "Item not found."
+    if item["physical_qty"] is None:
+        return False, "Enter a physical count for this item first."
+    _correct_one(db, item, f"Stock tally #{tally_id} correction")
+    db.commit()
+    return True, None
+
+
+def apply_product_corrections(tally_id, product_id):
+    """Apply stock corrections for every COUNTED item of one product (all its
+    sub-products, or the single leaf row). Uncounted items are skipped."""
+    db = get_db()
+    tally = db.execute("SELECT status FROM stock_tallies WHERE id=?", (tally_id,)).fetchone()
+    if not tally or tally["status"] != "draft":
+        return False, "Tally is not a draft or does not exist.", 0
+    items = db.execute(
+        "SELECT * FROM stock_tally_items WHERE tally_id=? AND product_id=?",
+        (tally_id, product_id),
+    ).fetchall()
+    counted = [i for i in items if i["physical_qty"] is not None]
+    if not counted:
+        return False, "No physical counts entered for this product yet.", 0
+    notes = f"Stock tally #{tally_id} correction"
+    adjusted = 0
+    for item in counted:
+        if _correct_one(db, item, notes):
+            adjusted += 1
+    db.commit()
+    return True, None, adjusted
 
 
 def apply_tally(tally_id):

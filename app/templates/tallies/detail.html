@@ -12,15 +12,17 @@
 
 {% block content %}
 <style>
-  .tally-item-row.collapsed { display: none; }
-  .tally-refresh-row.collapsed { display: none; }
-  .tally-parent-row.collapsed { display: none; }
-  .tally-cat-row.collapsed { display: none; }
+  .cat-hidden { display: none; }   /* hidden because its category is collapsed */
+  .grp-hidden { display: none; }   /* hidden because its product group is collapsed */
   .toggle-arrow { display:inline-block; transition:transform .2s; margin-right:6px; cursor:pointer; }
   .tally-parent-row.is-collapsed .toggle-arrow { transform: rotate(-90deg); }
   .tally-cat-header.is-collapsed .cat-arrow { transform: rotate(-90deg); }
   .cat-arrow { display:inline-block; transition:transform .2s; margin-right:6px; }
   #applyBtn:disabled { opacity:.35; cursor:not-allowed; pointer-events:none; }
+  .unit-toggle { display:inline-flex; border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+  .unit-seg { border:none; background:var(--bg); color:var(--text-muted); padding:5px 14px; font-size:12px; font-weight:700; cursor:pointer; }
+  .unit-seg.active { background:var(--accent); color:#fff; }
+  .unit-suffix { font-weight:600; color:var(--text-muted); text-transform:none; letter-spacing:0; }
 </style>
 
 <form method="post" id="tallyForm">
@@ -40,8 +42,17 @@
       <div style="font-size:13px;color:var(--text-muted)">Applied <strong style="color:var(--success)">{{ tally.applied_at[:10] }}</strong></div>
       {% endif %}
       {% if tally.notes %}
-      <div style="font-size:13px;color:var(--text-muted);flex:1">{{ tally.notes }}</div>
+      <div style="font-size:13px;color:var(--text-muted)">{{ tally.notes }}</div>
       {% endif %}
+
+      {# ── Pcs / Box display toggle ───────────────────────────────── #}
+      <div style="margin-left:auto;display:flex;align-items:center;gap:10px">
+        <span style="font-size:12px;color:var(--text-muted);font-weight:600">Display</span>
+        <div class="unit-toggle" role="group" aria-label="Display unit">
+          <button type="button" class="unit-seg active" data-mode="pcs" onclick="setUnit('pcs')">Pcs</button>
+          <button type="button" class="unit-seg" data-mode="box" onclick="setUnit('box')">Box</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -53,9 +64,9 @@
           <tr style="border-bottom:2px solid var(--border)">
             <th style="padding:11px 20px;text-align:left;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">Product / Sub-Product</th>
             <th style="padding:11px 12px;text-align:left;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">SKU</th>
-            <th style="padding:11px 12px;text-align:right;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">Digital</th>
-            <th style="padding:11px 12px;text-align:right;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">Physical</th>
-            <th style="padding:11px 12px;text-align:right;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">Difference</th>
+            <th style="padding:11px 12px;text-align:right;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">Digital<span class="unit-suffix"></span></th>
+            <th style="padding:11px 12px;text-align:right;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">Physical<span class="unit-suffix"></span></th>
+            <th style="padding:11px 12px;text-align:right;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">Difference<span class="unit-suffix"></span></th>
             <th style="padding:11px 12px;text-align:center;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">Status</th>
             <th style="padding:11px 16px;text-align:right;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">Action</th>
           </tr>
@@ -79,32 +90,41 @@
             {% if is_leaf %}
               {# ── Leaf product: single row ─────────────────────── #}
               {% set item = group.rows[0] %}
-              <tr class="tally-item-row tally-cat-row cat-{{ loop.index }}"
+              <tr class="tally-item-row tally-cat-row cat-{{ cat_idx }}"
                   data-product-id="{{ pid }}"
                   data-item-id="{{ item.id }}"
                   data-digital="{{ item.digital_qty }}"
+                  data-pcs="{{ group.pcs_per_carton or 0 }}"
+                  data-physical="{{ item.physical_qty if item.physical_qty is not none else '' }}"
                   style="border-bottom:1px solid var(--border)">
                 <td style="padding:11px 20px;font-weight:600">{{ group.product_name }}</td>
                 <td style="padding:11px 12px;color:var(--text-muted);font-size:12px;font-family:monospace">{{ group.product_sku or '—' }}</td>
-                <td style="padding:11px 12px;text-align:right;font-family:monospace">{{ item.digital_qty | indian }}</td>
+                <td class="digital-cell" style="padding:11px 12px;text-align:right;font-family:monospace">{{ item.digital_qty | indian }}</td>
                 <td style="padding:8px 12px;text-align:right">
                   {% if tally.status == 'draft' %}
-                  <input type="number" name="item_{{ item.id }}"
+                  <input type="number"
                          value="{{ item.physical_qty if item.physical_qty is not none else '' }}"
                          min="0" step="0.01" placeholder="—"
                          class="physical-input" style="width:110px;text-align:right"
                          oninput="updateItemRow(this)">
+                  <input type="hidden" class="physical-pieces" name="item_{{ item.id }}"
+                         value="{{ item.physical_qty if item.physical_qty is not none else '' }}">
                   {% else %}
-                  <span style="font-family:monospace">{{ item.physical_qty | indian if item.physical_qty is not none else '—' }}</span>
+                  <span class="physical-span" style="font-family:monospace">{{ item.physical_qty | indian if item.physical_qty is not none else '—' }}</span>
                   {% endif %}
                 </td>
                 <td class="diff-cell" style="padding:11px 12px;text-align:right;font-family:monospace;font-weight:600"></td>
                 <td style="padding:11px 12px;text-align:center"><span class="status-badge" style="font-size:11px;padding:3px 9px;border-radius:20px;font-weight:600;white-space:nowrap"></span></td>
-                <td style="padding:8px 16px;text-align:right">
+                <td style="padding:8px 16px;text-align:right;white-space:nowrap">
                   {% if tally.status == 'draft' %}
-                  <button type="submit" form="tallyForm"
-                          formaction="{{ url_for('tallies.refresh_digital', tally_id=tally.id, product_id=pid) }}"
-                          class="btn btn-secondary btn-sm" title="Refresh digital stock">↻</button>
+                  <button type="button"
+                          data-url="{{ url_for('tallies.refresh_item', tally_id=tally.id, item_id=item.id) }}"
+                          onclick="refreshItem(this)"
+                          class="btn btn-secondary btn-sm" title="Refresh digital stock to current warehouse level">↻</button>
+                  <button type="button"
+                          data-url="{{ url_for('tallies.correct_item', tally_id=tally.id, item_id=item.id) }}"
+                          onclick="correctItem(this)"
+                          class="btn btn-primary btn-sm" style="margin-left:6px" title="Adjust warehouse stock to the counted quantity">Correct</button>
                   {% endif %}
                 </td>
               </tr>
@@ -135,11 +155,16 @@
                 <td style="padding:10px 12px;text-align:center">
                   <span style="font-size:11px;color:var(--text-muted)">Σ total</span>
                 </td>
-                <td style="padding:8px 16px;text-align:right" onclick="event.stopPropagation()">
+                <td style="padding:8px 16px;text-align:right;white-space:nowrap" onclick="event.stopPropagation()">
                   {% if tally.status == 'draft' %}
-                  <button type="submit" form="tallyForm"
-                          formaction="{{ url_for('tallies.refresh_digital', tally_id=tally.id, product_id=pid) }}"
-                          class="btn btn-secondary btn-sm" title="Refresh all sub-product digital stocks">↻</button>
+                  <button type="button"
+                          data-url="{{ url_for('tallies.refresh_digital', tally_id=tally.id, product_id=pid) }}"
+                          onclick="refreshProduct(this)"
+                          class="btn btn-secondary btn-sm" title="Refresh all sub-product digital stocks">↻ All</button>
+                  <button type="button"
+                          data-url="{{ url_for('tallies.correct_product', tally_id=tally.id, product_id=pid) }}"
+                          onclick="correctProduct(this)"
+                          class="btn btn-primary btn-sm" style="margin-left:6px" title="Adjust warehouse stock for all counted sub-products">Correct All</button>
                   {% endif %}
                 </td>
               </tr>
@@ -155,24 +180,39 @@
                   data-product-id="{{ pid }}"
                   data-item-id="{{ item.id }}"
                   data-digital="{{ item.digital_qty }}"
+                  data-pcs="{{ item.sub_pcs_per_carton or group.pcs_per_carton or 0 }}"
+                  data-physical="{{ item.physical_qty if item.physical_qty is not none else '' }}"
                   style="border-bottom:1px solid var(--border)">
                 <td style="padding:10px 20px;padding-left:36px">{{ item.sub_name }}</td>
                 <td style="padding:10px 12px;color:var(--text-muted);font-size:12px;font-family:monospace">{{ item.sub_sku or '—' }}</td>
-                <td style="padding:10px 12px;text-align:right;font-family:monospace">{{ item.digital_qty | indian }}</td>
+                <td class="digital-cell" style="padding:10px 12px;text-align:right;font-family:monospace">{{ item.digital_qty | indian }}</td>
                 <td style="padding:7px 12px;text-align:right">
                   {% if tally.status == 'draft' %}
-                  <input type="number" name="item_{{ item.id }}"
+                  <input type="number"
                          value="{{ item.physical_qty if item.physical_qty is not none else '' }}"
                          min="0" step="0.01" placeholder="—"
                          class="physical-input" style="width:110px;text-align:right"
                          oninput="updateItemRow(this)">
+                  <input type="hidden" class="physical-pieces" name="item_{{ item.id }}"
+                         value="{{ item.physical_qty if item.physical_qty is not none else '' }}">
                   {% else %}
-                  <span style="font-family:monospace">{{ item.physical_qty | indian if item.physical_qty is not none else '—' }}</span>
+                  <span class="physical-span" style="font-family:monospace">{{ item.physical_qty | indian if item.physical_qty is not none else '—' }}</span>
                   {% endif %}
                 </td>
                 <td class="diff-cell" style="padding:10px 12px;text-align:right;font-weight:600;font-family:monospace"></td>
                 <td style="padding:10px 12px;text-align:center"><span class="status-badge" style="font-size:11px;padding:3px 9px;border-radius:20px;font-weight:600;white-space:nowrap"></span></td>
-                <td style="padding:10px 16px"></td>
+                <td style="padding:7px 16px;text-align:right;white-space:nowrap">
+                  {% if tally.status == 'draft' %}
+                  <button type="button"
+                          data-url="{{ url_for('tallies.refresh_item', tally_id=tally.id, item_id=item.id) }}"
+                          onclick="refreshItem(this)"
+                          class="btn btn-secondary btn-sm" title="Refresh digital stock to current warehouse level">↻</button>
+                  <button type="button"
+                          data-url="{{ url_for('tallies.correct_item', tally_id=tally.id, item_id=item.id) }}"
+                          onclick="correctItem(this)"
+                          class="btn btn-primary btn-sm" style="margin-left:6px" title="Adjust warehouse stock to the counted quantity">Correct</button>
+                  {% endif %}
+                </td>
               </tr>
               {% endfor %}
             {% endif %}
@@ -207,93 +247,133 @@
 
 {% block scripts %}
 <script>
+// ── Unit (Pcs / Box) state + helpers ──────────────────────────────
+var MODE = 'pcs';  // 'pcs' | 'box'
+function toDisplay(pieces, pcs) { return (MODE === 'box' && pcs > 0) ? pieces / pcs : pieces; }
+function toPieces(val, pcs)     { return (MODE === 'box' && pcs > 0) ? val * pcs   : val; }
+function trimNum(v)             { return String(Math.round(v * 100) / 100); }
+
+// Indian-grouped number with up to 2 decimals
+function fmtQty(v) {
+  if (v == null || isNaN(v)) return '0';
+  var neg = v < 0; v = Math.abs(v);
+  var r = Math.round(v * 100) / 100;
+  var ip = Math.floor(r + 1e-9);
+  var frac = Math.round((r - ip) * 100);
+  var s = (typeof formatIndian === 'function') ? formatIndian(ip) : String(ip);
+  if (frac > 0) s += '.' + String(frac).padStart(2, '0');
+  return (neg ? '-' : '') + s;
+}
+
+// Canonical physical (pieces) for a row — hidden field (draft) or data-physical (applied)
+function getPhys(row) {
+  var hidden = row.querySelector('.physical-pieces');
+  if (hidden) {
+    if (hidden.value.trim() === '') return { filled: false, pieces: 0 };
+    return { filled: true, pieces: parseFloat(hidden.value) || 0 };
+  }
+  var dp = row.dataset.physical;
+  if (dp === '' || dp == null) return { filled: false, pieces: 0 };
+  return { filled: true, pieces: parseFloat(dp) || 0 };
+}
+
 // ── Color helper ──────────────────────────────────────────────────
 function diffColors(diff, digital) {
   var pct = digital > 0 ? Math.abs(diff) / digital * 100 : 100;
   var high = pct >= 5;
   if (diff > 0) {
-    return {
-      text:        high ? 'var(--danger)'             : '#f87171',
-      badgeBg:     high ? 'rgba(239,68,68,.12)'       : 'rgba(239,68,68,.06)',
-      badgeColor:  high ? 'var(--danger)'             : '#f87171',
-    };
+    return { text: high ? 'var(--danger)' : '#f87171', badgeBg: high ? 'rgba(239,68,68,.12)' : 'rgba(239,68,68,.06)', badgeColor: high ? 'var(--danger)' : '#f87171' };
+  }
+  return { text: high ? 'var(--success)' : '#6ee7b7', badgeBg: high ? 'rgba(16,185,129,.12)' : 'rgba(16,185,129,.06)', badgeColor: high ? 'var(--success)' : '#6ee7b7' };
+}
+
+// ── Render a single item row (digital / physical / diff / status) ──
+function renderRow(row) {
+  var digital = parseFloat(row.dataset.digital) || 0;
+  var pcs     = parseFloat(row.dataset.pcs) || 0;
+  var noBox   = (MODE === 'box' && pcs <= 0);
+  var base    = 'font-size:11px;padding:3px 9px;border-radius:20px;font-weight:600;white-space:nowrap;';
+
+  var digitalCell = row.querySelector('.digital-cell');
+  if (digitalCell) digitalCell.textContent = fmtQty(toDisplay(digital, pcs)) + (noBox ? ' (pcs)' : '');
+
+  var p = getPhys(row);
+  var span = row.querySelector('.physical-span');  // applied view only
+  if (span) span.textContent = p.filled ? (fmtQty(toDisplay(p.pieces, pcs)) + (noBox ? ' (pcs)' : '')) : '—';
+
+  var diffCell    = row.querySelector('.diff-cell');
+  var statusBadge = row.querySelector('.status-badge');
+  if (!diffCell) return;
+
+  if (!p.filled) {
+    diffCell.innerHTML = '<span style="color:var(--text-muted)">—</span>';
+    if (statusBadge) { statusBadge.textContent = 'Pending'; statusBadge.style.cssText = base + 'background:rgba(160,160,160,.12);color:var(--text-muted)'; }
+    return;
+  }
+  var diff = digital - p.pieces;
+  if (Math.abs(diff) < 0.001) {
+    diffCell.innerHTML = '<span style="color:var(--text-muted)">✓</span>';
+    if (statusBadge) { statusBadge.textContent = 'Match'; statusBadge.style.cssText = base + 'background:rgba(16,185,129,.12);color:var(--success)'; }
   } else {
-    return {
-      text:        high ? 'var(--success)'            : '#6ee7b7',
-      badgeBg:     high ? 'rgba(16,185,129,.12)'      : 'rgba(16,185,129,.06)',
-      badgeColor:  high ? 'var(--success)'            : '#6ee7b7',
-    };
+    var c = diffColors(diff, digital);
+    // No +/- sign — direction is shown by colour and the status badge.
+    diffCell.innerHTML = '<span style="color:' + c.text + '">' + fmtQty(Math.abs(toDisplay(diff, pcs))) + '</span>';
+    if (statusBadge) { statusBadge.textContent = diff > 0 ? '↓ Reduce' : '↑ Add'; statusBadge.style.cssText = base + 'background:' + c.badgeBg + ';color:' + c.badgeColor; }
   }
 }
 
-// ── Update a single item row ──────────────────────────────────────
+// ── User typed a physical value (entry is in the current display unit) ──
 function updateItemRow(input) {
-  var row         = input.closest('tr');
-  var digital     = parseFloat(row.dataset.digital) || 0;
-  var val         = input.value.trim();
-  var diffCell    = row.querySelector('.diff-cell');
-  var statusBadge = row.querySelector('.status-badge');
-  var base        = 'font-size:11px;padding:3px 9px;border-radius:20px;font-weight:600;white-space:nowrap;';
-
-  if (val === '') {
-    diffCell.innerHTML = '<span style="color:var(--text-muted)">—</span>';
-    statusBadge.textContent = 'Pending';
-    statusBadge.style.cssText = base + 'background:rgba(160,160,160,.12);color:var(--text-muted)';
-  } else {
-    var phys = parseFloat(val) || 0;
-    var diff = digital - phys;
-    if (Math.abs(diff) < 0.001) {
-      diffCell.innerHTML = '<span style="color:var(--text-muted)">✓</span>';
-      statusBadge.textContent = 'Match';
-      statusBadge.style.cssText = base + 'background:rgba(16,185,129,.12);color:var(--success)';
-    } else {
-      var c = diffColors(diff, digital);
-      var sign = diff > 0 ? '+' : '';
-      diffCell.innerHTML = '<span style="color:' + c.text + '">' + sign + formatIndian(diff) + '</span>';
-      statusBadge.textContent = diff > 0 ? '↓ Reduce' : '↑ Add';
-      statusBadge.style.cssText = base + 'background:' + c.badgeBg + ';color:' + c.badgeColor;
-    }
-  }
-
+  var row    = input.closest('tr');
+  var pcs    = parseFloat(row.dataset.pcs) || 0;
+  var hidden = row.querySelector('.physical-pieces');
+  var v      = input.value.trim();
+  if (hidden) hidden.value = (v === '') ? '' : toPieces(parseFloat(v) || 0, pcs);
+  renderRow(row);
   updateParentRow(row.dataset.productId);
   updateSummary();
 }
 
-// ── Recompute parent aggregate row ───────────────────────────────
+// ── Per-product total row (running totals, even when partial) ──────
 function updateParentRow(productId) {
   var parentRow = document.querySelector('.tally-parent-row[data-product-id="' + productId + '"]');
   if (!parentRow) return;
 
   var itemRows = document.querySelectorAll('.tally-item-row[data-product-id="' + productId + '"]');
-  var totalDigital = 0, totalPhysical = 0, totalDiff = 0, pending = 0;
+  var tDigital = 0, tPhys = 0, tDiff = 0, pending = 0, filled = 0, anyNoBox = false;
 
   itemRows.forEach(function(row) {
     var digital = parseFloat(row.dataset.digital) || 0;
-    totalDigital += digital;
-    var input = row.querySelector('.physical-input');
-    if (input && input.value.trim() !== '') {
-      var phys = parseFloat(input.value) || 0;
-      totalPhysical += phys;
-      totalDiff += (digital - phys);
-    } else {
-      pending++;
-    }
+    var pcs     = parseFloat(row.dataset.pcs) || 0;
+    if (MODE === 'box' && pcs <= 0) anyNoBox = true;
+    tDigital += toDisplay(digital, pcs);
+    var p = getPhys(row);
+    if (p.filled) { tPhys += toDisplay(p.pieces, pcs); tDiff += toDisplay(digital - p.pieces, pcs); filled++; }
+    else pending++;
   });
 
-  parentRow.querySelector('.parent-digital').textContent = formatIndian(totalDigital);
+  var pd = parentRow.querySelector('.parent-digital');
+  if (pd) pd.innerHTML = fmtQty(tDigital) + (anyNoBox ? ' <span style="color:var(--text-muted);font-size:10px">*</span>' : '');
 
-  if (pending > 0) {
-    parentRow.querySelector('.parent-physical').innerHTML = '<span style="color:var(--text-muted);font-size:12px">partial</span>';
-    parentRow.querySelector('.parent-diff').innerHTML = '<span style="color:var(--text-muted)">—</span>';
-  } else {
-    parentRow.querySelector('.parent-physical').textContent = formatIndian(totalPhysical);
-    var diffEl = parentRow.querySelector('.parent-diff');
-    if (Math.abs(totalDiff) < 0.001) {
-      diffEl.innerHTML = '<span style="color:var(--text-muted)">✓ 0</span>';
+  var pp    = parentRow.querySelector('.parent-physical');
+  var pdiff = parentRow.querySelector('.parent-diff');
+
+  if (filled === 0) {
+    if (pp)    pp.innerHTML    = '<span style="color:var(--text-muted)">—</span>';
+    if (pdiff) pdiff.innerHTML = '<span style="color:var(--text-muted)">—</span>';
+    return;
+  }
+  // Running total count — shown even while some sub-products are still pending.
+  if (pp) {
+    pp.innerHTML = fmtQty(tPhys) +
+      (pending > 0 ? ' <span style="color:var(--text-muted);font-size:11px">(' + pending + ' pending)</span>' : '');
+  }
+  if (pdiff) {
+    if (Math.abs(tDiff) < 0.001) {
+      pdiff.innerHTML = '<span style="color:var(--text-muted)">✓ 0</span>';
     } else {
-      var c    = diffColors(totalDiff, totalDigital);
-      var sign = totalDiff > 0 ? '+' : '';
-      diffEl.innerHTML = '<span style="color:' + c.text + '">' + sign + formatIndian(totalDiff) + '</span>';
+      var col = tDiff > 0 ? 'var(--danger)' : 'var(--success)';
+      pdiff.innerHTML = '<span style="color:' + col + '">' + fmtQty(Math.abs(tDiff)) + '</span>';
     }
   }
 }
@@ -302,69 +382,175 @@ function updateParentRow(productId) {
 function updateSummary() {
   var match = 0, add = 0, reduce = 0, pending = 0;
   document.querySelectorAll('.tally-item-row').forEach(function(row) {
-    var input = row.querySelector('.physical-input');
-    if (!input) return;
-    if (input.value.trim() === '') {
-      pending++;
-    } else {
-      var digital = parseFloat(row.dataset.digital) || 0;
-      var phys    = parseFloat(input.value) || 0;
-      var diff    = digital - phys;
-      if (Math.abs(diff) < 0.001) match++;
-      else if (diff > 0) reduce++;
-      else add++;
-    }
+    var p = getPhys(row);
+    if (!p.filled) { pending++; return; }
+    var digital = parseFloat(row.dataset.digital) || 0;
+    var diff = digital - p.pieces;
+    if (Math.abs(diff) < 0.001) match++;
+    else if (diff > 0) reduce++;
+    else add++;
   });
-
-  document.getElementById('sum-match').textContent   = match;
-  document.getElementById('sum-add').textContent     = add;
-  document.getElementById('sum-reduce').textContent  = reduce;
-  document.getElementById('sum-pending').textContent = pending;
-
+  var e;
+  if (e = document.getElementById('sum-match'))   e.textContent = match;
+  if (e = document.getElementById('sum-add'))     e.textContent = add;
+  if (e = document.getElementById('sum-reduce'))  e.textContent = reduce;
+  if (e = document.getElementById('sum-pending')) e.textContent = pending;
   var applyBtn = document.getElementById('applyBtn');
-  if (applyBtn) {
-    applyBtn.disabled = pending > 0;
+  if (applyBtn) applyBtn.disabled = pending > 0;
+}
+
+// ── Switch display unit (Pcs ⇄ Box) ───────────────────────────────
+function setUnit(mode) {
+  MODE = mode;
+  document.querySelectorAll('.unit-seg').forEach(function(b) { b.classList.toggle('active', b.dataset.mode === mode); });
+  document.querySelectorAll('.unit-suffix').forEach(function(s) { s.textContent = (mode === 'box') ? ' (box)' : ' (pcs)'; });
+  // Re-fill visible inputs from the canonical pieces value, in the new unit (no drift — hidden is untouched).
+  document.querySelectorAll('.tally-item-row').forEach(function(row) {
+    var pcs    = parseFloat(row.dataset.pcs) || 0;
+    var input  = row.querySelector('.physical-input');
+    var hidden = row.querySelector('.physical-pieces');
+    if (input && hidden && hidden.value.trim() !== '') {
+      input.value = trimNum(toDisplay(parseFloat(hidden.value) || 0, pcs));
+    }
+    renderRow(row);
+  });
+  document.querySelectorAll('.tally-parent-row').forEach(function(pr) { updateParentRow(pr.dataset.productId); });
+  updateSummary();
+}
+
+// ── Insert correction(s) via AJAX — update only the affected row(s) ──
+function _toast(msg, ok) {
+  var t = document.createElement('div');
+  t.textContent = msg;
+  t.style.cssText = 'position:fixed;bottom:88px;left:50%;transform:translateX(-50%);z-index:9999;' +
+    'padding:10px 18px;border-radius:8px;font-size:13px;font-weight:600;color:#fff;max-width:80%;text-align:center;' +
+    'background:' + (ok ? 'var(--success)' : 'var(--danger)') + ';box-shadow:0 6px 20px rgba(0,0,0,.28)';
+  document.body.appendChild(t);
+  setTimeout(function () { t.style.transition = 'opacity .4s'; t.style.opacity = '0'; setTimeout(function () { t.remove(); }, 400); }, 2200);
+}
+
+function _applyItemUpdate(it) {
+  var row = document.querySelector('.tally-item-row[data-item-id="' + it.id + '"]');
+  if (!row) return null;
+  row.dataset.digital  = (it.digital_qty == null ? 0 : it.digital_qty);
+  row.dataset.physical = (it.physical_qty == null ? '' : it.physical_qty);
+  var pcs    = parseFloat(row.dataset.pcs) || 0;
+  var hidden = row.querySelector('.physical-pieces');
+  var input  = row.querySelector('.physical-input');
+  if (it.physical_qty != null) {
+    if (hidden) hidden.value = it.physical_qty;
+    if (input)  input.value = trimNum(toDisplay(it.physical_qty, pcs));
   }
+  renderRow(row);
+  // brief green highlight
+  var prev = row.style.background;
+  row.style.transition = 'background .15s';
+  row.style.background = 'rgba(16,185,129,.18)';
+  setTimeout(function () { row.style.background = prev; }, 900);
+  return row;
+}
+
+function _postForm(url) {
+  return fetch(url, {
+    method: 'POST',
+    headers: { 'X-Requested-With': 'XMLHttpRequest' },
+    body: new FormData(document.getElementById('tallyForm')),
+  }).then(function (r) { return r.json(); });
+}
+
+// Each AJAX action POSTs (and thus saves) the whole form — reset the dirty baseline.
+function _markFormSaved() {
+  document.querySelectorAll('.physical-pieces').forEach(function (h) { h.defaultValue = h.value; });
+}
+
+function correctItem(btn) {
+  if (!confirm('Insert correction? This adjusts warehouse stock to the counted quantity.')) return;
+  btn.disabled = true;
+  _postForm(btn.dataset.url).then(function (d) {
+    btn.disabled = false;
+    if (!d.ok) { _toast(d.error || 'Could not insert correction', false); return; }
+    var row = _applyItemUpdate(d.item);
+    if (row) updateParentRow(row.dataset.productId);
+    _markFormSaved(); updateSummary();
+    _toast(d.message || 'Correction inserted', true);
+  }).catch(function (e) { btn.disabled = false; _toast('Error: ' + e, false); });
+}
+
+function correctProduct(btn) {
+  if (!confirm('Insert corrections for all counted sub-products of this product? This adjusts warehouse stock to the counted quantities.')) return;
+  var pid = btn.closest('tr').dataset.productId;
+  btn.disabled = true;
+  _postForm(btn.dataset.url).then(function (d) {
+    btn.disabled = false;
+    if (!d.ok) { _toast(d.error || 'Could not insert corrections', false); return; }
+    (d.items || []).forEach(_applyItemUpdate);
+    updateParentRow(pid);
+    _markFormSaved(); updateSummary();
+    _toast(d.message || 'Corrections inserted', true);
+  }).catch(function (e) { btn.disabled = false; _toast('Error: ' + e, false); });
+}
+
+function refreshItem(btn) {
+  btn.disabled = true;
+  _postForm(btn.dataset.url).then(function (d) {
+    btn.disabled = false;
+    if (!d.ok) { _toast(d.error || 'Could not refresh', false); return; }
+    var row = _applyItemUpdate(d.item);
+    if (row) updateParentRow(row.dataset.productId);
+    _markFormSaved(); updateSummary();
+    _toast(d.message || 'Digital refreshed', true);
+  }).catch(function (e) { btn.disabled = false; _toast('Error: ' + e, false); });
+}
+
+function refreshProduct(btn) {
+  var pid = btn.closest('tr').dataset.productId;
+  btn.disabled = true;
+  _postForm(btn.dataset.url).then(function (d) {
+    btn.disabled = false;
+    if (!d.ok) { _toast(d.error || 'Could not refresh', false); return; }
+    (d.items || []).forEach(_applyItemUpdate);
+    updateParentRow(pid);
+    _markFormSaved(); updateSummary();
+    _toast(d.message || 'Digital refreshed', true);
+  }).catch(function (e) { btn.disabled = false; _toast('Error: ' + e, false); });
 }
 
 // ── Collapse / expand a category ─────────────────────────────────
 function toggleCategory(catId) {
-  var header  = document.querySelector('.tally-cat-header[data-cat-id="' + catId + '"]');
-  var rows    = document.querySelectorAll('.cat-' + catId);
-  var isCollapsed = header.classList.contains('is-collapsed');
-  if (isCollapsed) {
-    header.classList.remove('is-collapsed');
-    rows.forEach(function(r) { r.classList.remove('collapsed'); });
-  } else {
-    header.classList.add('is-collapsed');
-    rows.forEach(function(r) { r.classList.add('collapsed'); });
-  }
+  var header = document.querySelector('.tally-cat-header[data-cat-id="' + catId + '"]');
+  var rows   = document.querySelectorAll('.cat-' + catId);
+  var collapsed = !header.classList.contains('is-collapsed');
+  header.classList.toggle('is-collapsed', collapsed);
+  rows.forEach(function(r) { r.classList.toggle('cat-hidden', collapsed); });
 }
 
 // ── Collapse / expand a product group ────────────────────────────
 function toggleGroup(productId) {
   var parentRow = document.querySelector('.tally-parent-row[data-product-id="' + productId + '"]');
   var subEls    = document.querySelectorAll('.sub-of-' + productId);
-  var isCollapsed = parentRow.classList.contains('is-collapsed');
-
-  if (isCollapsed) {
-    parentRow.classList.remove('is-collapsed');
-    subEls.forEach(function(el) { el.classList.remove('collapsed'); });
-  } else {
-    parentRow.classList.add('is-collapsed');
-    subEls.forEach(function(el) { el.classList.add('collapsed'); });
-  }
+  var collapsed = !parentRow.classList.contains('is-collapsed');
+  parentRow.classList.toggle('is-collapsed', collapsed);
+  subEls.forEach(function(el) { el.classList.toggle('grp-hidden', collapsed); });
 }
 
 // ── Initialise on load ────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', function() {
-  document.querySelectorAll('.physical-input').forEach(updateItemRow);
+  document.querySelectorAll('.unit-suffix').forEach(function(s) { s.textContent = ' (pcs)'; });
+  document.querySelectorAll('.tally-item-row').forEach(renderRow);
+  document.querySelectorAll('.tally-parent-row').forEach(function(pr) { updateParentRow(pr.dataset.productId); });
+  updateSummary();
+
+  // Collapse everything by default — every product group, then every category.
+  document.querySelectorAll('.tally-parent-row').forEach(function(p) { p.classList.add('is-collapsed'); });
+  document.querySelectorAll('[class*="sub-of-"]').forEach(function(r) { r.classList.add('grp-hidden'); });
+  document.querySelectorAll('.tally-cat-header').forEach(function(h) { h.classList.add('is-collapsed'); });
+  document.querySelectorAll('.tally-cat-row').forEach(function(r) { r.classList.add('cat-hidden'); });
 });
 
-// ── Dirty check for unsaved-changes modal ─────────────────────────
+// ── Dirty check for unsaved-changes modal (based on canonical pieces) ──
 window.__dirtyCheck = function() {
-  var inputs  = document.querySelectorAll('.physical-input');
-  var isDirty = Array.from(inputs).some(function(inp) { return inp.value !== inp.defaultValue; });
+  var hidden  = document.querySelectorAll('.physical-pieces');
+  var isDirty = Array.from(hidden).some(function(h) { return h.value !== h.defaultValue; });
   return {
     isDirty: isDirty,
     save: isDirty ? function() { document.getElementById('saveBtn').click(); } : null,
