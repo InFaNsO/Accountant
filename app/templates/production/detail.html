@@ -2,7 +2,12 @@
 {% block title %}{{ po.name }}{% endblock %}
 {% block page_title %}{{ po.name }}{% endblock %}
 {% block topbar_actions %}
-  {% if po.status == 'open' %}
+  {% if po.status == 'draft' %}
+  <form method="post" action="{{ url_for('production.activate_production', po_id=po.id) }}" style="display:inline">
+    <button class="btn btn-primary" onclick="return confirm('Activate this order? Its quantities will be added to production stock.')">Activate</button>
+  </form>
+  <a href="{{ url_for('production.edit_production', po_id=po.id) }}" class="btn btn-secondary">Edit</a>
+  {% elif po.status == 'open' %}
   <form method="post" action="{{ url_for('production.close_production', po_id=po.id) }}" style="display:inline">
     <button class="btn btn-secondary" onclick="return confirm('Mark this order as closed?')">Mark Closed</button>
   </form>
@@ -15,6 +20,15 @@
   <a href="{{ url_for('production.list_production') }}" class="btn btn-secondary">Back</a>
 {% endblock %}
 {% block content %}
+
+{% if po.status == 'draft' %}
+<div class="card" style="margin-bottom:18px;border-left:3px solid var(--warning)">
+  <div class="card-body" style="padding:14px 20px;font-size:13px;color:var(--text-secondary)">
+    <strong style="color:var(--warning)">Draft</strong> — nothing has been added to production stock yet.
+    Click <strong>Activate</strong> to commit these quantities into production.
+  </div>
+</div>
+{% endif %}
 
 <!-- Header -->
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px">

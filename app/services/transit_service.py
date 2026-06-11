@@ -7,6 +7,16 @@ def _update_qty(db, product_id, sub_product_id, field, delta):
     db.execute(f"UPDATE {tbl} SET {field}={field}+? WHERE id=?", (delta, pk))
 
 
+def _available_production(db, product_id, sub_product_id):
+    """Current production_qty for a product / sub-product (0 if missing)."""
+    tbl = "sub_products" if sub_product_id else "products"
+    pk  = sub_product_id if sub_product_id else product_id
+    if pk is None:
+        return 0.0
+    row = db.execute(f"SELECT production_qty FROM {tbl} WHERE id=?", (pk,)).fetchone()
+    return float(row["production_qty"] or 0) if row else 0.0
+
+
 # ── FIFO deduction from purchase order items ─────────────────────────────────
 
 def _deduct_production_fifo(db, product_id, sub_product_id, qty_needed, supplier_id=None):
@@ -111,19 +121,62 @@ def get_dispatch_items(dispatch_id):
     ).fetchall()
 
 
+def _apply_dispatch_item_stock(db, dispatch_id, di_id, product_id, sub_product_id, qty,
+                               supplier_id, notes, expected_arrival, label):
+    """Run FIFO PO deduction + move production_qty → in_transit_qty + log a movement
+    for one dispatch item. Returns an optional warning string (or None).
+
+    dispatch_id: parent dispatch row id (used for the stock_movement).
+    di_id:       dispatch_item row id (used for the PO allocation rows).
+    """
+    allocations, leftover = _deduct_production_fifo(
+        db, product_id, sub_product_id, qty, supplier_id
+    )
+    for po_item_id, alloc_qty in allocations:
+        db.execute(
+            """INSERT INTO dispatch_po_allocations
+                   (dispatch_item_id, po_item_id, quantity)
+               VALUES (?,?,?)""",
+            (di_id, po_item_id, alloc_qty),
+        )
+    warning = None
+    if leftover > 0.001:
+        warning = (
+            f"Only {qty - leftover} of {qty} units found in open POs for "
+            f"item {label}; {leftover} taken from production anyway."
+        )
+
+    # Move qty: production_qty → in_transit_qty (full qty regardless of PO coverage)
+    _update_qty(db, product_id, sub_product_id, "production_qty", -qty)
+    _update_qty(db, product_id, sub_product_id, "in_transit_qty", +qty)
+
+    db.execute(
+        """INSERT INTO stock_movements
+               (product_id, sub_product_id, movement_type, quantity, notes, dispatch_id, expected_arrival)
+           VALUES (?,?,'transit_dispatch',?,?,?,?)""",
+        (product_id, sub_product_id, qty, notes, dispatch_id, expected_arrival),
+    )
+    return warning
+
+
 def create_dispatch(data, items):
     """
-    Create dispatch, run FIFO deduction from PO items, move qty from
-    production_qty → in_transit_qty for each product/sub-product.
+    Create a dispatch. A normal dispatch runs FIFO deduction from PO items and moves
+    qty from production_qty → in_transit_qty for each product/sub-product.
+
+    A draft (data['status'] == 'draft') records the dispatch and its items but moves
+    NO stock — the production → transit move is deferred to activate_dispatch().
     """
     db = get_db()
+    is_draft = (data.get("status") == "draft")
     cur = db.execute(
-        """INSERT INTO dispatches (name, supplier_id, dispatch_date, expected_arrival, notes)
-           VALUES (?,?,?,?,?)""",
+        """INSERT INTO dispatches (name, supplier_id, dispatch_date, expected_arrival, status, notes)
+           VALUES (?,?,?,?,?,?)""",
         (data["name"],
          data.get("supplier_id") or None,
          data.get("dispatch_date") or None,
          data.get("expected_arrival") or None,
+         "draft" if is_draft else "in_transit",
          data.get("notes")),
     )
     dispatch_id = cur.lastrowid
@@ -147,46 +200,71 @@ def create_dispatch(data, items):
                VALUES (?,?,?,?,?,?,?)""",
             (dispatch_id, product_id, sub_product_id, qty, price, cbm, gross_weight),
         )
-        di_id = di_cur.lastrowid
 
-        # FIFO deduction from open POs — only for this dispatch's supplier
-        allocations, leftover = _deduct_production_fifo(
-            db, product_id, sub_product_id, qty, supplier_id
+        if is_draft:
+            continue  # drafts hold no stock until activated
+
+        w = _apply_dispatch_item_stock(
+            db, dispatch_id, di_cur.lastrowid, product_id, sub_product_id, qty, supplier_id,
+            data.get("notes"), data.get("expected_arrival") or None,
+            it.get("display_name", product_id),
         )
-        for po_item_id, alloc_qty in allocations:
-            db.execute(
-                """INSERT INTO dispatch_po_allocations
-                       (dispatch_item_id, po_item_id, quantity)
-                   VALUES (?,?,?)""",
-                (di_id, po_item_id, alloc_qty),
-            )
-        if leftover > 0.001:
-            warnings.append(
-                f"Only {qty - leftover} of {qty} units found in open POs for "
-                f"item {it.get('display_name', product_id)}; {leftover} taken from production anyway."
-            )
-
-        # Move qty: production_qty → in_transit_qty
-        effective = qty  # move full qty regardless of PO coverage
-        _update_qty(db, product_id, sub_product_id, "production_qty", -effective)
-        _update_qty(db, product_id, sub_product_id, "in_transit_qty", +effective)
-
-        # Record stock movement for transit dispatch
-        db.execute(
-            """INSERT INTO stock_movements
-                   (product_id, sub_product_id, movement_type, quantity, notes, dispatch_id, expected_arrival)
-               VALUES (?,?,'transit_dispatch',?,?,?,?)""",
-            (product_id, sub_product_id, effective,
-             data.get("notes"), dispatch_id, data.get("expected_arrival") or None),
-        )
+        if w:
+            warnings.append(w)
 
     db.commit()
     return dispatch_id, warnings
 
 
-def delete_dispatch(dispatch_id):
-    """Reverse in_transit_qty → production_qty for unreceived items, undo PO allocations."""
+def activate_dispatch(dispatch_id):
+    """Promote a draft dispatch to 'in_transit', applying the FIFO PO deduction and
+    moving production_qty → in_transit_qty for every line.
+
+    Re-checks availability first: if any line's quantity exceeds the product's current
+    production_qty, nothing is applied. Returns (ok, errors, warnings).
+    """
     db = get_db()
+    d = db.execute("SELECT * FROM dispatches WHERE id=?", (dispatch_id,)).fetchone()
+    if not d or d["status"] != "draft":
+        return False, ["This dispatch is not a draft."], []
+
+    items = get_dispatch_items(dispatch_id)
+    errors = []
+    for it in items:
+        available = _available_production(db, it["product_id"], it["sub_product_id"])
+        if it["quantity"] > available + 1e-9:
+            errors.append(
+                f"{it['display_name']}: dispatch qty {it['quantity']} exceeds "
+                f"production qty {available}."
+            )
+    if errors:
+        return False, errors, []
+
+    supplier_id = d["supplier_id"]
+    warnings = []
+    for it in items:
+        w = _apply_dispatch_item_stock(
+            db, dispatch_id, it["id"], it["product_id"], it["sub_product_id"], it["quantity"],
+            supplier_id, d["notes"], d["expected_arrival"], it["display_name"],
+        )
+        if w:
+            warnings.append(w)
+    db.execute("UPDATE dispatches SET status='in_transit' WHERE id=?", (dispatch_id,))
+    db.commit()
+    return True, [], warnings
+
+
+def delete_dispatch(dispatch_id):
+    """Reverse in_transit_qty → production_qty for unreceived items, undo PO allocations.
+
+    A draft never moved any stock, so it is simply deleted with no reversal.
+    """
+    db = get_db()
+    d = db.execute("SELECT status FROM dispatches WHERE id=?", (dispatch_id,)).fetchone()
+    if d and d["status"] == "draft":
+        db.execute("DELETE FROM dispatches WHERE id=?", (dispatch_id,))
+        db.commit()
+        return
     items = get_dispatch_items(dispatch_id)
     for it in items:
         unreceived = it["quantity"] - (it["qty_received"] or 0)

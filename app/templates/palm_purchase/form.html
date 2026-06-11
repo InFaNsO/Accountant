@@ -58,7 +58,8 @@
       <button type="button" class="btn btn-secondary btn-sm" onclick="addRow()" style="margin-bottom:24px">+ Add Product</button>
 
       <div class="form-actions">
-        <button type="submit" class="btn btn-primary">Save & Add to Stock</button>
+        <button type="submit" name="status" value="active" class="btn btn-primary">Save &amp; Add to Stock</button>
+        <button type="submit" name="status" value="draft" class="btn btn-secondary">Save as Draft</button>
         <a href="{{ url_for('palm_purchase.list_purchases') }}" class="btn btn-secondary">Cancel</a>
       </div>
     </form>
@@ -261,6 +262,25 @@ function addRow(prefill) {
 
 document.addEventListener('DOMContentLoaded', () => {
   addRow();
+});
+
+/* ── Dirty tracking + save-as-draft (for the unsaved-changes guard) ────────── */
+let _formDirty = false;
+(function () {
+  const f = document.getElementById('ppForm');
+  f.addEventListener('input',  () => { _formDirty = true; });
+  f.addEventListener('change', () => { _formDirty = true; });
+  f.addEventListener('submit', () => { _formDirty = false; });
+})();
+window.__dirtyCheck = () => ({
+  isDirty: _formDirty,
+  label: 'Palm Purchase',
+  save: null,
+  saveDraft: () => {
+    _formDirty = false;
+    const b = document.querySelector('#ppForm button[value="draft"]');
+    if (b) b.click();
+  },
 });
 </script>
 

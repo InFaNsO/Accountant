@@ -104,7 +104,10 @@ def new_purchase():
             return render_template("palm_purchase/form.html", pp=data, action="new",
                                    suppliers=suppliers, products=products,
                                    today=str(date.today()))
-        flash("Palm purchase recorded — warehouse stock updated.", "success")
+        if data.get("status") == "draft":
+            flash("Draft palm purchase saved — warehouse stock not added yet.", "success")
+        else:
+            flash("Palm purchase recorded — warehouse stock updated.", "success")
         return redirect(url_for("palm_purchase.detail", pp_id=pp_id))
     return render_template("palm_purchase/form.html", pp={}, action="new",
                            suppliers=suppliers, products=products,
@@ -121,6 +124,17 @@ def detail(pp_id):
         return redirect(url_for("palm_purchase.list_purchases"))
     items = palm_purchase_service.get_palm_purchase_items(pp_id)
     return render_template("palm_purchase/detail.html", pp=pp, items=items)
+
+
+@bp.route("/<int:pp_id>/activate", methods=["POST"])
+@login_required
+@permission_required("palm_purchase", "edit")
+def activate(pp_id):
+    if palm_purchase_service.activate_palm_purchase(pp_id):
+        flash("Palm purchase activated — warehouse stock updated.", "success")
+    else:
+        flash("This purchase is not a draft and could not be activated.", "error")
+    return redirect(url_for("palm_purchase.detail", pp_id=pp_id))
 
 
 @bp.route("/<int:pp_id>/delete", methods=["POST"])

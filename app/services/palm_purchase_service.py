@@ -110,15 +110,17 @@ def create_palm_purchase(data, items):
     if not clean_items:
         raise ValueError("Palm purchase needs at least one product line with quantity > 0.")
 
+    is_draft = (data.get("status") == "draft")
     cur = db.execute(
-        """INSERT INTO palm_purchases (name, supplier_id, purchase_date, notes, total_cost)
-           VALUES (?, ?, ?, ?, ?)""",
+        """INSERT INTO palm_purchases (name, supplier_id, purchase_date, notes, total_cost, status)
+           VALUES (?, ?, ?, ?, ?, ?)""",
         (
             (data.get("name") or "").strip() or None,
             int(data["supplier_id"]) if data.get("supplier_id") else None,
             data.get("purchase_date") or str(date.today()),
             (data.get("notes") or "").strip() or None,
             total_cost,
+            "draft" if is_draft else "active",
         ),
     )
     pp_id = cur.lastrowid
@@ -131,34 +133,66 @@ def create_palm_purchase(data, items):
             (pp_id, it["product_id"], it["sub_product_id"],
              it["quantity"], it["unit_cost"], it["notes"]),
         )
+        if not is_draft:
+            _bump_stock(db, it["product_id"], it["sub_product_id"], it["quantity"])
+            note = f"Palm Purchase #{pp_id}" + (f" — {data.get('name')}" if data.get("name") else "")
+            db.execute(
+                """INSERT INTO stock_movements
+                      (product_id, sub_product_id, movement_type, quantity, notes, palm_purchase_id)
+                   VALUES (?, ?, 'palm_purchase', ?, ?, ?)""",
+                (it["product_id"], it["sub_product_id"], it["quantity"], note, pp_id),
+            )
+
+    db.commit()
+    return pp_id
+
+
+def activate_palm_purchase(pp_id):
+    """Promote a draft palm purchase to 'active', bumping warehouse stock_qty and
+    logging the 'palm_purchase' movements. Returns True if a draft was activated."""
+    db = get_db()
+    pp = db.execute("SELECT * FROM palm_purchases WHERE id = ?", (pp_id,)).fetchone()
+    if not pp or pp["status"] != "draft":
+        return False
+    items = db.execute(
+        "SELECT product_id, sub_product_id, quantity FROM palm_purchase_items WHERE palm_purchase_id = ?",
+        (pp_id,),
+    ).fetchall()
+    for it in items:
         _bump_stock(db, it["product_id"], it["sub_product_id"], it["quantity"])
-        note = f"Palm Purchase #{pp_id}" + (f" — {data.get('name')}" if data.get("name") else "")
+        note = f"Palm Purchase #{pp_id}" + (f" — {pp['name']}" if pp["name"] else "")
         db.execute(
             """INSERT INTO stock_movements
                   (product_id, sub_product_id, movement_type, quantity, notes, palm_purchase_id)
                VALUES (?, ?, 'palm_purchase', ?, ?, ?)""",
             (it["product_id"], it["sub_product_id"], it["quantity"], note, pp_id),
         )
-
+    db.execute("UPDATE palm_purchases SET status='active' WHERE id = ?", (pp_id,))
     db.commit()
-    return pp_id
+    return True
 
 
 def delete_palm_purchase(pp_id):
-    """Reverse stock_qty for each item, log reversal movements, delete rows."""
+    """Reverse stock_qty for each item, log reversal movements, delete rows.
+
+    A draft never added stock, so it is deleted with no reversal.
+    """
     db = get_db()
-    items = db.execute(
-        "SELECT product_id, sub_product_id, quantity FROM palm_purchase_items WHERE palm_purchase_id = ?",
-        (pp_id,),
-    ).fetchall()
-    for it in items:
-        _bump_stock(db, it["product_id"], it["sub_product_id"], -float(it["quantity"]))
-        db.execute(
-            """INSERT INTO stock_movements
-                  (product_id, sub_product_id, movement_type, quantity, notes, palm_purchase_id)
-               VALUES (?, ?, 'palm_purchase_reversed', ?, ?, ?)""",
-            (it["product_id"], it["sub_product_id"], it["quantity"],
-             f"Palm Purchase #{pp_id} deleted (stock reversed)", pp_id),
-        )
+    pp = db.execute("SELECT status FROM palm_purchases WHERE id = ?", (pp_id,)).fetchone()
+    is_draft = bool(pp and pp["status"] == "draft")
+    if not is_draft:
+        items = db.execute(
+            "SELECT product_id, sub_product_id, quantity FROM palm_purchase_items WHERE palm_purchase_id = ?",
+            (pp_id,),
+        ).fetchall()
+        for it in items:
+            _bump_stock(db, it["product_id"], it["sub_product_id"], -float(it["quantity"]))
+            db.execute(
+                """INSERT INTO stock_movements
+                      (product_id, sub_product_id, movement_type, quantity, notes, palm_purchase_id)
+                   VALUES (?, ?, 'palm_purchase_reversed', ?, ?, ?)""",
+                (it["product_id"], it["sub_product_id"], it["quantity"],
+                 f"Palm Purchase #{pp_id} deleted (stock reversed)", pp_id),
+            )
     db.execute("DELETE FROM palm_purchases WHERE id = ?", (pp_id,))
     db.commit()

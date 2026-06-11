@@ -61,13 +61,14 @@
       <button type="button" class="btn btn-secondary btn-sm" onclick="addRow()" style="margin-bottom:24px">+ Add Product</button>
 
       <div class="form-actions">
-        <button type="submit" class="btn btn-primary">Create Dispatch</button>
+        <button type="submit" name="status" value="in_transit" class="btn btn-primary">Create Dispatch</button>
+        <button type="submit" name="status" value="draft" class="btn btn-secondary">Save as Draft</button>
         <a href="{{ url_for('transit.list_transit') }}" class="btn btn-secondary">Cancel</a>
       </div>
     </form>
   </div>
 </div>
-{% endblock %}
+
 <!-- Qty error modal -->
 <div id="qtyModal" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.45);align-items:center;justify-content:center">
   <div style="background:var(--bg);border-radius:var(--radius);padding:28px;max-width:540px;width:100%;box-shadow:0 8px 40px rgba(0,0,0,.3)">
@@ -80,6 +81,7 @@
     </div>
   </div>
 </div>
+{% endblock %}
 
 {% block scripts %}
 <script>
@@ -134,9 +136,25 @@ function cbRender(inp, matches) {
   _cbDD.style.display = '';
 }
 
+// Keys (pid:sid) already chosen on other rows — excluded from the dropdown.
+function _selectedKeys(excludeInput) {
+  const keys = new Set();
+  document.querySelectorAll('#itemsBody tr').forEach(tr => {
+    if (tr.querySelector('.cb-inp') === excludeInput) return;
+    const pid = (tr.querySelector('[name^="product_id_"]')     || {}).value;
+    const sid = (tr.querySelector('[name^="sub_product_id_"]') || {}).value;
+    if (pid || sid) keys.add((pid || '') + ':' + (sid || ''));
+  });
+  return keys;
+}
+function _availableCatalog(excludeInput) {
+  const sel = _selectedKeys(excludeInput);
+  return CATALOG.filter(p => !sel.has((p.product_id || '') + ':' + (p.sub_product_id || '')));
+}
+
 function cbFilter(inp) {
   const q = inp.value.toLowerCase();
-  const matches = CATALOG.filter(p =>
+  const matches = _availableCatalog(inp).filter(p =>
     p.label.toLowerCase().includes(q) ||
     (p.label.match(/\[([^\]]+)\]/) || ['',''])[1].toLowerCase().includes(q)
   );
@@ -144,7 +162,7 @@ function cbFilter(inp) {
   markFormDirty();
 }
 
-function cbOpen(inp) { cbRender(inp, CATALOG); }
+function cbOpen(inp) { cbRender(inp, _availableCatalog(inp)); }
 
 function cbBlur(inp) {
   setTimeout(() => {
@@ -164,7 +182,16 @@ function cbSelectShared(e, optEl) {
   wrap.querySelector('[name^="product_id_"]').value     = p.product_id || '';
   wrap.querySelector('[name^="sub_product_id_"]').value = p.sub_product_id || '';
   const prodCell = row.querySelector('.prod-qty-cell');
-  if (prodCell) prodCell.textContent = p.production_qty > 0 ? p.production_qty : '—';
+  if (prodCell) {
+    if (p.production_qty > 0) {
+      prodCell.innerHTML =
+        '<span>' + p.production_qty + '</span>' +
+        '<button type="button" class="btn btn-secondary btn-sm" title="Set quantity to production stock" ' +
+        'style="padding:0 7px;margin-left:6px;line-height:1.6" onclick="useProductionQty(this)">→</button>';
+    } else {
+      prodCell.textContent = '—';
+    }
+  }
   const qtyInp = row.querySelector('[name^="quantity_"]');
   if (qtyInp) { qtyInp.dataset.productionQty = p.production_qty != null ? p.production_qty : 0; validateQty(qtyInp); }
   _cbDD.style.display = 'none'; _cbInput = null;
@@ -248,13 +275,29 @@ function removeRow(i) {
 // Start with one blank row
 addRow();
 
+// Set a line's quantity to its available production stock (the "→" button).
+function useProductionQty(btn) {
+  const row = btn.closest('tr');
+  const qtyInp = row.querySelector('[name^="quantity_"]');
+  if (!qtyInp) return;
+  qtyInp.value = qtyInp.dataset.productionQty || 0;
+  validateQty(qtyInp);
+  markFormDirty();
+}
+
 /* ── Dirty tracking ───────────────────────────────────────────────────────── */
 let _formDirty = false;
 function markFormDirty() { _formDirty = true; }
+function _submitAsDraft() {
+  _formDirty = false;
+  const b = document.querySelector('#dispatchForm button[value="draft"]');
+  if (b) b.click();
+}
 window.__dirtyCheck = () => ({
   isDirty: _formDirty,
   label: 'Dispatch',
   save: null,
+  saveDraft: _submitAsDraft,
 });
 /* ── Inline qty validation ────────────────────────────────────────────────── */
 function validateQty(inp) {
@@ -277,6 +320,8 @@ function validateQty(inp) {
 /* ── Submit: check all rows, show modal if any are over production qty ─────── */
 document.getElementById('dispatchForm').addEventListener('submit', function(e) {
   _formDirty = false;
+  // Drafts may exceed production stock — skip the over-quantity gate for them.
+  if (e.submitter && e.submitter.value === 'draft') return;
   const bad = [];
   document.querySelectorAll('#itemsBody tr').forEach(row => {
     const qtyInp  = row.querySelector('[name^="quantity_"]');

@@ -54,7 +54,8 @@
       <button type="button" class="btn btn-secondary btn-sm" onclick="addRow()" style="margin-bottom:24px">+ Add Product</button>
 
       <div class="form-actions">
-        <button type="submit" class="btn btn-primary">Create Production Order</button>
+        <button type="submit" name="status" value="open" class="btn btn-primary">Create Production Order</button>
+        <button type="submit" name="status" value="draft" class="btn btn-secondary">Save as Draft</button>
         <a href="{{ url_for('production.list_production') }}" class="btn btn-secondary">Cancel</a>
       </div>
     </form>
@@ -114,9 +115,25 @@ function cbRender(inp, matches) {
   _cbDD.style.display = '';
 }
 
+// Keys (pid:sid) already chosen on other rows — excluded from the dropdown.
+function _selectedKeys(excludeInput) {
+  const keys = new Set();
+  document.querySelectorAll('#itemsBody tr').forEach(tr => {
+    if (tr.querySelector('.cb-inp') === excludeInput) return;
+    const pid = (tr.querySelector('[name^="product_id_"]')     || {}).value;
+    const sid = (tr.querySelector('[name^="sub_product_id_"]') || {}).value;
+    if (pid || sid) keys.add((pid || '') + ':' + (sid || ''));
+  });
+  return keys;
+}
+function _availableCatalog(excludeInput) {
+  const sel = _selectedKeys(excludeInput);
+  return CATALOG.filter(p => !sel.has((p.product_id || '') + ':' + (p.sub_product_id || '')));
+}
+
 function cbFilter(inp) {
   const q = inp.value.toLowerCase();
-  const matches = CATALOG.filter(p =>
+  const matches = _availableCatalog(inp).filter(p =>
     p.label.toLowerCase().includes(q) ||
     (p.label.match(/\[([^\]]+)\]/) || ['',''])[1].toLowerCase().includes(q)
   );
@@ -124,7 +141,7 @@ function cbFilter(inp) {
   markFormDirty();
 }
 
-function cbOpen(inp) { cbRender(inp, CATALOG); }
+function cbOpen(inp) { cbRender(inp, _availableCatalog(inp)); }
 
 function cbBlur(inp) {
   setTimeout(() => {
@@ -229,6 +246,11 @@ window.__dirtyCheck = () => ({
   isDirty: _formDirty,
   label: 'Production Order',
   save: null,   // no auto-save for new forms
+  saveDraft: () => {
+    _formDirty = false;
+    const b = document.querySelector('#poForm button[value="draft"]');
+    if (b) b.click();
+  },
 });
 document.getElementById('poForm').addEventListener('submit', () => { _formDirty = false; });
 </script>

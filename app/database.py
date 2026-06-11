@@ -527,5 +527,8 @@ def _create_schema(db):
     # Payments explicitly assigned to the opening balance: never allocated to invoices,
     # and skipped entirely by reconciliation (recalculate_client_balance).
     _add_column(db, "payments",               "is_opening_balance", "INTEGER DEFAULT 0")
+    # Palm purchases can be saved as a draft (no stock-in until activated). Existing
+    # rows default to 'active' so historical purchases keep their applied stock.
+    _add_column(db, "palm_purchases",          "status",             "TEXT DEFAULT 'active'")
 
     db.commit()

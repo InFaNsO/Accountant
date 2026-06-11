@@ -8,10 +8,26 @@
   </a>
 {% endblock %}
 {% block content %}
+<style>
+  .status-toggle { display:inline-flex; align-items:center; gap:6px; cursor:pointer; user-select:none;
+    border:1px solid var(--border); border-radius:16px; padding:3px 11px 3px 7px; font-size:12px; font-weight:600; }
+  .status-toggle .tickbox { display:inline-flex; width:16px; height:16px; align-items:center; justify-content:center;
+    border-radius:50%; font-size:10px; font-weight:800; color:#fff; }
+  .status-toggle.on  { border-color:var(--success); color:var(--success); background:rgba(16,185,129,.08); }
+  .status-toggle.on  .tickbox { background:var(--success); }
+  .status-toggle.off { border-color:var(--danger); color:var(--text-muted); background:rgba(239,68,68,.05); }
+  .status-toggle.off .tickbox { background:var(--danger); }
+</style>
 <div class="card">
-  <div class="card-header">
-    <span class="card-title">All Palm Purchases ({{ purchases|length }})</span>
-    <input type="search" placeholder="Search…" style="width:200px" oninput="filterTable(this.value,'ppTable')">
+  <div class="card-header" style="flex-wrap:wrap;gap:10px">
+    <span class="card-title">Palm Purchases (<span id="ppCount">{{ purchases|length }}</span>)</span>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-left:auto">
+      <span class="status-toggle on" data-status="draft"  onclick="toggleStatus(this)" title="Toggle Draft"><span class="tickbox">✓</span>Draft</span>
+      <span class="status-toggle on" data-status="active" onclick="toggleStatus(this)" title="Toggle Active"><span class="tickbox">✓</span>Active</span>
+      <button type="button" class="btn btn-secondary btn-sm" onclick="setAllStatuses(true)">Select all</button>
+      <button type="button" class="btn btn-secondary btn-sm" onclick="setAllStatuses(false)">Remove all</button>
+      <input type="search" id="ppSearch" placeholder="Search…" style="width:170px" oninput="applyFilters()">
+    </div>
   </div>
   {% if purchases %}
   <div class="table-wrap">
@@ -21,6 +37,7 @@
           <th>Date</th>
           <th>Name / Reference</th>
           <th>Supplier</th>
+          <th>Status</th>
           <th style="text-align:center">Items</th>
           <th style="text-align:right">Total Qty</th>
           <th style="text-align:right">Total Cost</th>
@@ -29,7 +46,7 @@
       </thead>
       <tbody>
         {% for pp in purchases %}
-        <tr>
+        <tr data-status="{{ pp.status }}">
           <td class="muted">{{ pp.purchase_date }}</td>
           <td class="fw-700">
             <a href="{{ url_for('palm_purchase.detail', pp_id=pp.id) }}" style="color:var(--accent);text-decoration:none">
@@ -37,10 +54,23 @@
             </a>
           </td>
           <td class="muted">{{ pp.supplier_name or '—' }}</td>
+          <td>
+            {% if pp.status == 'draft' %}
+              <span class="badge" style="background:rgba(245,158,11,.15);color:#d97706">Draft</span>
+            {% else %}
+              <span class="badge badge-active">Active</span>
+            {% endif %}
+          </td>
           <td style="text-align:center" class="muted">{{ pp.item_count }}</td>
           <td style="text-align:right">{{ pp.total_qty | indian }}</td>
           <td style="text-align:right" class="fw-700">{{ pp.total_cost|inr }}</td>
           <td style="text-align:right;white-space:nowrap">
+            {% if pp.status == 'draft' %}
+            <form method="post" action="{{ url_for('palm_purchase.activate', pp_id=pp.id) }}" style="display:inline"
+                  onsubmit="return confirm('Activate this purchase? Warehouse stock will be increased now.')">
+              <button class="btn btn-primary btn-sm">Activate</button>
+            </form>
+            {% endif %}
             <a href="{{ url_for('palm_purchase.detail', pp_id=pp.id) }}" class="btn btn-secondary btn-sm">View</a>
           </td>
         </tr>
@@ -56,4 +86,47 @@
   </div>
   {% endif %}
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function _activeStatuses() {
+  var set = {};
+  document.querySelectorAll('.status-toggle.on').forEach(function (el) { set[el.dataset.status] = true; });
+  return set;
+}
+
+// Combined status (tick/cross) + search filter
+function applyFilters() {
+  var searchEl = document.getElementById('ppSearch');
+  var q = (searchEl ? searchEl.value : '').toLowerCase().trim();
+  var active = _activeStatuses();
+  var visible = 0;
+  document.querySelectorAll('#ppTable tbody tr').forEach(function (tr) {
+    var okStatus = !!active[tr.dataset.status || ''];
+    var okText   = !q || tr.textContent.toLowerCase().indexOf(q) >= 0;
+    var show = okStatus && okText;
+    tr.style.display = show ? '' : 'none';
+    if (show) visible++;
+  });
+  var cnt = document.getElementById('ppCount');
+  if (cnt) cnt.textContent = visible;
+}
+
+function _setTick(el, on) {
+  el.classList.toggle('on', on);
+  el.classList.toggle('off', !on);
+  var b = el.querySelector('.tickbox');
+  if (b) b.textContent = on ? '✓' : '✕';
+}
+
+// Clicking a status chip cycles tick ⇄ cross
+function toggleStatus(el) { _setTick(el, !el.classList.contains('on')); applyFilters(); }
+function setAllStatuses(on) {
+  document.querySelectorAll('.status-toggle').forEach(function (el) { _setTick(el, on); });
+  applyFilters();
+}
+
+document.addEventListener('DOMContentLoaded', applyFilters);
+</script>
 {% endblock %}

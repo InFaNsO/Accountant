@@ -22,6 +22,7 @@
   <div class="card-header" style="flex-wrap:wrap;gap:10px">
     <span class="card-title">Dispatches (<span id="dispCount">{{ dispatches|length }}</span>)</span>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-left:auto">
+      <span class="status-toggle on"  data-status="draft"              onclick="toggleStatus(this)" title="Toggle Draft"><span class="tickbox">✓</span>Draft</span>
       <span class="status-toggle on"  data-status="in_transit"         onclick="toggleStatus(this)" title="Toggle In Transit"><span class="tickbox">✓</span>In Transit</span>
       <span class="status-toggle on"  data-status="partially_received" onclick="toggleStatus(this)" title="Toggle Partial"><span class="tickbox">✓</span>Partial</span>
       <span class="status-toggle off" data-status="received"           onclick="toggleStatus(this)" title="Toggle Received"><span class="tickbox">✕</span>Received</span>
@@ -59,7 +60,9 @@
           </td>
           <td style="text-align:center" class="muted">{{ d.item_count }}</td>
           <td>
-            {% if d.status == 'in_transit' %}
+            {% if d.status == 'draft' %}
+              <span class="badge" style="background:rgba(245,158,11,.15);color:#d97706">Draft</span>
+            {% elif d.status == 'in_transit' %}
               <span class="badge" style="background:rgba(99,102,241,.15);color:#6366f1">In Transit</span>
             {% elif d.status == 'partially_received' %}
               <span class="badge" style="background:rgba(245,158,11,.15);color:#d97706">Partial</span>

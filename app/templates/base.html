@@ -5,6 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{% block title %}Ledger{% endblock %} — Ledger</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}" />
+  <style>
+    /* Number inputs: remove the spinner buttons (and the scroll-wheel handler is
+       disabled globally in JS) so values only change via typing. */
+    input[type=number]::-webkit-outer-spin-button,
+    input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+    input[type=number] { -moz-appearance: textfield; appearance: textfield; }
+  </style>
   <!-- Apply theme & stock unit preference before first paint to avoid flash -->
   <script>
     if(localStorage.getItem('theme')==='dark') document.body.classList.add('dark');
@@ -518,6 +525,10 @@ window.showClientLedger = function(clientId, name) {
               style="display:none" onclick="__unsavedSaveAndLeave()">
         💾 Save Changes and Leave
       </button>
+      <button id="unsavedSaveDraftLeave" class="btn btn-primary"
+              style="display:none" onclick="__unsavedSaveDraftAndLeave()">
+        📝 Save as Draft and Leave
+      </button>
       <button class="btn btn-secondary" onclick="__unsavedDiscard()">
         🚪 Discard and Leave
       </button>
@@ -552,10 +563,12 @@ window.showClientLedger = function(clientId, name) {
     e.preventDefault();
     _pendingHref = anchor.href;
 
-    const modal   = document.getElementById('unsavedModal');
-    const saveBtn = document.getElementById('unsavedSaveLeave');
-    saveBtn.style.display = dirty.save ? '' : 'none';
-    modal.style.display   = 'flex';
+    const modal    = document.getElementById('unsavedModal');
+    const saveBtn  = document.getElementById('unsavedSaveLeave');
+    const draftBtn = document.getElementById('unsavedSaveDraftLeave');
+    saveBtn.style.display  = dirty.save ? '' : 'none';
+    draftBtn.style.display = dirty.saveDraft ? '' : 'none';
+    modal.style.display    = 'flex';
   }, true);
 
   // A genuine form submit (Save, Refresh, Correct, Apply, etc.) is an intentional
@@ -585,6 +598,18 @@ window.showClientLedger = function(clientId, name) {
     window.location.href = _pendingHref;
   };
 
+  window.__unsavedSaveDraftAndLeave = async function () {
+    const dirty = _getDirty();
+    document.getElementById('unsavedModal').style.display = 'none';
+    if (dirty.saveDraft) {
+      // saveDraft submits the form as a draft (full POST → server redirects to the
+      // saved draft). The pending link is intentionally abandoned.
+      await dirty.saveDraft();
+    } else {
+      window.location.href = _pendingHref;
+    }
+  };
+
   window.__unsavedDiscard = function () {
     document.getElementById('unsavedModal').style.display = 'none';
     // Temporarily disable dirty check so beforeunload doesn't fire
@@ -593,6 +618,14 @@ window.showClientLedger = function(clientId, name) {
     window.location.href = _pendingHref;
     setTimeout(() => { window.__dirtyCheck = orig; }, 500);
   };
+
+  // ── Number inputs: disable scroll-wheel value changes globally ──────────────
+  document.addEventListener('wheel', function (e) {
+    const el = e.target;
+    if (el && el.tagName === 'INPUT' && el.type === 'number' && el === document.activeElement) {
+      e.preventDefault();
+    }
+  }, { passive: false });
 
   window.__unsavedStay = function () {
     document.getElementById('unsavedModal').style.display = 'none';

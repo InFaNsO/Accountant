@@ -2,8 +2,13 @@
 {% block title %}{{ pp.name or ('Palm Purchase #' ~ pp.id) }}{% endblock %}
 {% block page_title %}{{ pp.name or ('Palm Purchase #' ~ pp.id) }}{% endblock %}
 {% block topbar_actions %}
+  {% if pp.status == 'draft' %}
+  <form method="post" action="{{ url_for('palm_purchase.activate', pp_id=pp.id) }}" style="display:inline">
+    <button class="btn btn-primary" onclick="return confirm('Activate this purchase? Warehouse stock will be increased now.')">Activate</button>
+  </form>
+  {% endif %}
   <form method="post" action="{{ url_for('palm_purchase.delete', pp_id=pp.id) }}"
-        onsubmit="return confirm('Delete this palm purchase? The stock added to warehouse will be reversed.')"
+        onsubmit="return confirm('Delete this palm purchase? {% if pp.status != 'draft' %}The stock added to warehouse will be reversed.{% else %}It is a draft, so no stock changes.{% endif %}')"
         style="display:inline">
     <button class="btn btn-danger">Delete</button>
   </form>
@@ -11,12 +16,25 @@
 {% endblock %}
 {% block content %}
 
+{% if pp.status == 'draft' %}
+<div class="card" style="margin-bottom:18px;border-left:3px solid var(--warning)">
+  <div class="card-body" style="padding:14px 20px;font-size:13px;color:var(--text-secondary)">
+    <strong style="color:var(--warning)">Draft</strong> — warehouse stock has not been increased yet.
+    Click <strong>Activate</strong> to add these quantities to stock.
+  </div>
+</div>
+{% endif %}
+
 <div class="invoice-header-box">
   <div class="card">
     <div class="card-header"><span class="card-title">Purchase Info</span></div>
     <div class="card-body">
       <div class="info-list">
         <div class="info-row"><span class="info-label">Reference</span><span class="info-value fw-700">{{ pp.name or '—' }}</span></div>
+        <div class="info-row"><span class="info-label">Status</span><span class="info-value">
+          {% if pp.status == 'draft' %}<span class="badge" style="background:rgba(245,158,11,.15);color:#d97706">Draft</span>
+          {% else %}<span class="badge badge-active">Active</span>{% endif %}
+        </span></div>
         <div class="info-row"><span class="info-label">Supplier</span><span class="info-value">{{ pp.supplier_name or 'Walk-in / Other' }}</span></div>
         <div class="info-row"><span class="info-label">Date</span><span class="info-value">{{ pp.purchase_date }}</span></div>
         <div class="info-row"><span class="info-label">Created</span><span class="info-value muted">{{ pp.created_at[:16] }}</span></div>
@@ -25,11 +43,11 @@
     </div>
   </div>
   <div class="card">
-    <div class="card-header"><span class="card-title">Stock Impact</span></div>
+    <div class="card-header"><span class="card-title">Stock Impact{% if pp.status == 'draft' %} (on activation){% endif %}</span></div>
     <div class="card-body">
       <div class="info-list">
         <div class="info-row"><span class="info-label">Items</span><span class="info-value fw-700">{{ items|length }}</span></div>
-        <div class="info-row"><span class="info-label">Total Qty Added</span>
+        <div class="info-row"><span class="info-label">{% if pp.status == 'draft' %}Total Qty to Add{% else %}Total Qty Added{% endif %}</span>
           <span class="info-value fw-700" style="color:var(--success)">+{{ items|sum(attribute='quantity') | indian }}</span></div>
         <div class="info-row"><span class="info-label">Total Cost</span><span class="info-value fw-700">{{ pp.total_cost|inr }}</span></div>
       </div>
@@ -38,7 +56,7 @@
 </div>
 
 <div class="card" style="margin-top:18px">
-  <div class="card-header"><span class="card-title">Items Added to Warehouse</span></div>
+  <div class="card-header"><span class="card-title">{% if pp.status == 'draft' %}Items to Add to Warehouse{% else %}Items Added to Warehouse{% endif %}</span></div>
   <div class="table-wrap">
     <table>
       <thead>

@@ -8,10 +8,27 @@
   </a>
 {% endblock %}
 {% block content %}
+<style>
+  .status-toggle { display:inline-flex; align-items:center; gap:6px; cursor:pointer; user-select:none;
+    border:1px solid var(--border); border-radius:16px; padding:3px 11px 3px 7px; font-size:12px; font-weight:600; }
+  .status-toggle .tickbox { display:inline-flex; width:16px; height:16px; align-items:center; justify-content:center;
+    border-radius:50%; font-size:10px; font-weight:800; color:#fff; }
+  .status-toggle.on  { border-color:var(--success); color:var(--success); background:rgba(16,185,129,.08); }
+  .status-toggle.on  .tickbox { background:var(--success); }
+  .status-toggle.off { border-color:var(--danger); color:var(--text-muted); background:rgba(239,68,68,.05); }
+  .status-toggle.off .tickbox { background:var(--danger); }
+</style>
 <div class="card">
-  <div class="card-header">
-    <span class="card-title">All Production Orders ({{ orders|length }})</span>
-    <input type="search" placeholder="Search…" style="width:200px" oninput="filterTable(this.value,'poTable')">
+  <div class="card-header" style="flex-wrap:wrap;gap:10px">
+    <span class="card-title">Production Orders (<span id="poCount">{{ orders|length }}</span>)</span>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-left:auto">
+      <span class="status-toggle on"  data-status="draft"  onclick="toggleStatus(this)" title="Toggle Draft"><span class="tickbox">✓</span>Draft</span>
+      <span class="status-toggle on"  data-status="open"   onclick="toggleStatus(this)" title="Toggle Open"><span class="tickbox">✓</span>Open</span>
+      <span class="status-toggle off" data-status="closed" onclick="toggleStatus(this)" title="Toggle Closed"><span class="tickbox">✕</span>Closed</span>
+      <button type="button" class="btn btn-secondary btn-sm" onclick="setAllStatuses(true)">Select all</button>
+      <button type="button" class="btn btn-secondary btn-sm" onclick="setAllStatuses(false)">Remove all</button>
+      <input type="search" id="poSearch" placeholder="Search…" style="width:170px" oninput="applyFilters()">
+    </div>
   </div>
   {% if orders %}
   <div class="table-wrap">
@@ -29,7 +46,7 @@
       <tbody>
         {% for po in orders %}
         {% set days = po.days_remaining if po.days_remaining is defined else none %}
-        <tr>
+        <tr data-status="{{ po.status }}">
           <td class="fw-700">
             <a href="{{ url_for('production.detail', po_id=po.id) }}" style="color:var(--accent);text-decoration:none">{{ po.name }}</a>
           </td>
@@ -41,7 +58,9 @@
           </td>
           <td style="text-align:center" class="muted">{{ po.item_count }}</td>
           <td>
-            {% if po.status == 'open' %}
+            {% if po.status == 'draft' %}
+              <span class="badge" style="background:rgba(245,158,11,.15);color:#d97706">Draft</span>
+            {% elif po.status == 'open' %}
               <span class="badge badge-sent">Open</span>
             {% elif po.status == 'closed' %}
               <span class="badge badge-active">Closed</span>
@@ -69,4 +88,47 @@
   </div>
   {% endif %}
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function _activeStatuses() {
+  var set = {};
+  document.querySelectorAll('.status-toggle.on').forEach(function (el) { set[el.dataset.status] = true; });
+  return set;
+}
+
+// Combined status (tick/cross) + search filter
+function applyFilters() {
+  var searchEl = document.getElementById('poSearch');
+  var q = (searchEl ? searchEl.value : '').toLowerCase().trim();
+  var active = _activeStatuses();
+  var visible = 0;
+  document.querySelectorAll('#poTable tbody tr').forEach(function (tr) {
+    var okStatus = !!active[tr.dataset.status || ''];
+    var okText   = !q || tr.textContent.toLowerCase().indexOf(q) >= 0;
+    var show = okStatus && okText;
+    tr.style.display = show ? '' : 'none';
+    if (show) visible++;
+  });
+  var cnt = document.getElementById('poCount');
+  if (cnt) cnt.textContent = visible;
+}
+
+function _setTick(el, on) {
+  el.classList.toggle('on', on);
+  el.classList.toggle('off', !on);
+  var b = el.querySelector('.tickbox');
+  if (b) b.textContent = on ? '✓' : '✕';
+}
+
+// Clicking a status chip cycles tick ⇄ cross
+function toggleStatus(el) { _setTick(el, !el.classList.contains('on')); applyFilters(); }
+function setAllStatuses(on) {
+  document.querySelectorAll('.status-toggle').forEach(function (el) { _setTick(el, on); });
+  applyFilters();
+}
+
+document.addEventListener('DOMContentLoaded', applyFilters);
+</script>
 {% endblock %}
