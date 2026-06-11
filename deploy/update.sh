@@ -11,7 +11,16 @@ APP_DIR="/home/ledger/app"
 cd "$APP_DIR"
 
 echo "[deploy] Pulling latest code..."
-git pull origin main
+# Retry up to 3 times in case of transient GitHub network issues
+for _attempt in 1 2 3; do
+    git pull origin main && break
+    if [ "$_attempt" -eq 3 ]; then
+        echo "[deploy] git pull failed after 3 attempts — aborting."
+        exit 1
+    fi
+    echo "[deploy] git pull failed (attempt $_attempt), retrying in 5s..."
+    sleep 5
+done
 
 echo "[deploy] Installing/updating dependencies..."
 source venv/bin/activate
