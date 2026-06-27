@@ -1308,6 +1308,32 @@ def get_client_full(client_id: int, invoice_days: int = 30, invoice_limit: int =
 
 
 @mcp.tool()
+def get_client_product_breakdown(
+    client_id: int,
+    date_from: str = None,
+    date_to: str = None,
+) -> dict:
+    """What a client DID and DID NOT buy in a date window — useful for spotting
+    cross-sell gaps ('what isn't this client buying?').
+
+    Args:
+      date_from / date_to: 'YYYY-MM-DD' inclusive bounds. Both optional — omitting
+                           them defaults to the last 2 months (… today).
+
+    Returns:
+      purchased: products bought in the window, each with total quantity in BOTH
+                 `boxes` (null if the product has no box size configured) and
+                 `pieces`, plus the `amount` invoiced — sorted by amount desc.
+      not_purchased: every other ACTIVE catalogue product, grouped by category.
+      Plus the effective date_from/date_to and counts.
+    """
+    return _call("GET", f"clients/{client_id}/product-breakdown", params={
+        "date_from": date_from,
+        "date_to":   date_to,
+    })
+
+
+@mcp.tool()
 def get_category_products(category_id: int, include_inactive: bool = False) -> dict:
     """All products in a category with nested sub-products. Each product/sub-product
     reports box size and bucket quantities (warehouse / production / transit) plus

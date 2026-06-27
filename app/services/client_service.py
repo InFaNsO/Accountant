@@ -231,6 +231,139 @@ def get_client_invoices(client_id):
     ).fetchall()
 
 
+def get_client_product_breakdown(client_id, date_from=None, date_to=None):
+    """Split the catalogue into what this client bought in a date window vs not.
+
+    date_from / date_to are 'YYYY-MM-DD' strings (inclusive). When omitted they
+    default to the last 2 months (date('now','-2 months') … today).
+
+    Returns a dict:
+      {
+        "purchased": [ {product_id, name, category_id, category_name, total_qty,
+                        total_boxes, has_box_size, total_amount}, ... ]   # sorted by amount desc
+        "purchased_by_category": [ {category_id, category_name, total_amount,
+                        total_boxes, any_box_size, products:[...]}, ... ]  # by total spend desc
+        "not_purchased": [ {category_id, category_name, products:[{id,name}]}, ... ]  # by category, then name
+        "period_label": "2 months",   # or "<from> → <to>" for an explicit range
+        "date_from": "YYYY-MM-DD", "date_to": "YYYY-MM-DD",   # effective bounds used
+      }
+
+    total_qty is pieces; total_boxes uses the sub-product's pcs_per_carton when set,
+    else the parent product's (same COALESCE rule the invoice/box toggle uses). Lines
+    for products with no box size contribute 0 boxes (qty still counts toward total_qty).
+    Only catalogued line items (product_id NOT NULL) on non-cancelled invoices count.
+    """
+    db = get_db()
+
+    # Resolve the effective window once (lets us echo the dates back and reuse them).
+    bounds = db.execute(
+        "SELECT COALESCE(?, date('now', '-2 months')) AS df, COALESCE(?, date('now')) AS dt",
+        (date_from, date_to),
+    ).fetchone()
+    eff_from, eff_to = bounds["df"], bounds["dt"]
+
+    purchased_rows = db.execute(
+        """
+        SELECT
+            p.id                                   AS product_id,
+            p.name                                 AS name,
+            p.category_id                          AS category_id,
+            COALESCE(cat.name, 'Uncategorized')    AS category_name,
+            SUM(ii.quantity)                       AS total_qty,
+            SUM(ii.line_total)                     AS total_amount,
+            SUM(
+                CASE WHEN COALESCE(NULLIF(sp.pcs_per_carton, 0), p.pcs_per_carton, 0) > 0
+                     THEN ii.quantity * 1.0 / COALESCE(NULLIF(sp.pcs_per_carton, 0), p.pcs_per_carton)
+                     ELSE 0 END
+            )                                      AS total_boxes,
+            MAX(
+                CASE WHEN COALESCE(NULLIF(sp.pcs_per_carton, 0), p.pcs_per_carton, 0) > 0
+                     THEN 1 ELSE 0 END
+            )                                      AS has_box_size
+        FROM invoice_items ii
+        JOIN invoices i        ON i.id = ii.invoice_id
+        JOIN products p        ON p.id = ii.product_id
+        LEFT JOIN sub_products sp ON sp.id = ii.sub_product_id
+        LEFT JOIN categories cat  ON cat.id = p.category_id
+        WHERE i.client_id = ?
+          AND i.status != 'cancelled'
+          AND i.issue_date >= ?
+          AND i.issue_date <= ?
+          AND ii.product_id IS NOT NULL
+        GROUP BY p.id
+        ORDER BY total_amount DESC, total_boxes DESC, p.name
+        """,
+        (client_id, eff_from, eff_to),
+    ).fetchall()
+
+    purchased = [dict(r) for r in purchased_rows]
+    purchased_ids = {r["product_id"] for r in purchased}
+
+    # Group the purchased products under their category (collapsible in the UI).
+    # `purchased` is already sorted by amount desc, so products stay amount-ordered
+    # within each category; we re-sort the categories themselves by total spend.
+    pcats = {}
+    for r in purchased:
+        key = r["category_id"] or 0
+        if key not in pcats:
+            pcats[key] = {
+                "category_id":   r["category_id"],
+                "category_name": r["category_name"],
+                "total_amount":  0.0,
+                "total_boxes":   0.0,
+                "any_box_size":  False,
+                "products":      [],
+            }
+        g = pcats[key]
+        g["products"].append(r)
+        g["total_amount"] += float(r["total_amount"] or 0)
+        g["total_boxes"]  += float(r["total_boxes"] or 0)
+        if r["has_box_size"]:
+            g["any_box_size"] = True
+    purchased_by_category = sorted(
+        pcats.values(), key=lambda c: c["total_amount"], reverse=True
+    )
+
+    # Every active catalogue product, grouped by category, minus what they bought.
+    catalogue = db.execute(
+        """
+        SELECT p.id, p.name, p.category_id,
+               COALESCE(cat.name, 'Uncategorized') AS category_name
+        FROM products p
+        LEFT JOIN categories cat ON cat.id = p.category_id
+        WHERE p.is_active = 1
+        ORDER BY category_name, p.name
+        """
+    ).fetchall()
+
+    cats = {}
+    cat_order = []
+    for row in catalogue:
+        if row["id"] in purchased_ids:
+            continue
+        key = row["category_id"] or 0
+        if key not in cats:
+            cats[key] = {
+                "category_id":   row["category_id"],
+                "category_name": row["category_name"],
+                "products":      [],
+            }
+            cat_order.append(key)
+        cats[key]["products"].append({"id": row["id"], "name": row["name"]})
+
+    not_purchased = [cats[k] for k in cat_order]
+
+    label = f"{eff_from} → {eff_to}" if (date_from or date_to) else "2 months"
+    return {
+        "purchased":             purchased,
+        "purchased_by_category": purchased_by_category,
+        "not_purchased":         not_purchased,
+        "period_label":          label,
+        "date_from":             eff_from,
+        "date_to":               eff_to,
+    }
+
+
 def get_client_balance(client_id):
     """
     Returns signed balance: negative = client owes us, positive = client has credit.

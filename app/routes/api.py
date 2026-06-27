@@ -4193,6 +4193,56 @@ def client_full(client_id):
     }})
 
 
+@bp.route("/clients/<int:client_id>/product-breakdown")
+@require_auth
+def client_product_breakdown(client_id):
+    """Products this client bought in a date window vs. the active products they did not.
+
+    Query params:
+      date_from / date_to — 'YYYY-MM-DD' inclusive bounds. Both optional; omitting
+                            them defaults to the last 2 months (… today).
+
+    Purchased entries carry total quantity in BOTH boxes and pieces (boxes is null
+    when the product has no box size configured) plus the amount invoiced. The
+    not-purchased list is every other active catalogue product, grouped by category.
+    """
+    from ..services import client_service
+
+    db = get_db()
+    client = db.execute("SELECT id, name FROM clients WHERE id=?", (client_id,)).fetchone()
+    if not client:
+        return jsonify({"error": f"Client ID {client_id} not found."}), 404
+
+    date_from = _arg_date("date_from")
+    date_to   = _arg_date("date_to")
+    bd = client_service.get_client_product_breakdown(client_id, date_from, date_to)
+
+    purchased = [{
+        "product_id": p["product_id"],
+        "product":    p["name"],
+        "category":   p["category_name"],
+        "boxes":      round(_f(p["total_boxes"]), 3) if p["has_box_size"] else None,
+        "pieces":     round(_f(p["total_qty"]), 3),
+        "amount":     round(_f(p["total_amount"]), 2),
+    } for p in bd["purchased"]]
+
+    not_purchased = [{
+        "category": c["category_name"],
+        "products": [pp["name"] for pp in c["products"]],
+    } for c in bd["not_purchased"]]
+
+    return jsonify({"result": {
+        "client_id":           client["id"],
+        "client_name":         client["name"],
+        "date_from":           bd["date_from"],
+        "date_to":             bd["date_to"],
+        "purchased_count":     len(purchased),
+        "purchased":           purchased,
+        "not_purchased_count": sum(len(c["products"]) for c in not_purchased),
+        "not_purchased":       not_purchased,
+    }})
+
+
 @bp.route("/categories/<int:category_id>/products")
 @require_auth
 def category_products(category_id):

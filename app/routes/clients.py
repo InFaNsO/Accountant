@@ -75,8 +75,10 @@ def detail(client_id):
         ]
     else:
         companies = [dict(c) for c in companies_raw]
+    product_breakdown = client_service.get_client_product_breakdown(client_id)
     return render_template("clients/detail.html", client=client, invoices=invoices,
-                           companies=companies, balance=balance, can_financials=can_financials)
+                           companies=companies, balance=balance, can_financials=can_financials,
+                           product_breakdown=product_breakdown)
 
 
 @bp.route("/<int:client_id>/edit", methods=["GET", "POST"])

@@ -92,6 +92,52 @@ body {
 .nav-item:hover { background: var(--sidebar-hover); color: #fff; }
 .nav-item.active { background: var(--accent); color: #fff; }
 
+/* ── Sidebar collapse toggle (desktop icon rail) ──────────── */
+.sidebar-collapse-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--sidebar-text);
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+  transition: background .15s, color .15s;
+}
+.sidebar-collapse-btn:hover { background: var(--sidebar-hover); color: #fff; }
+.sidebar-collapse-btn svg { width: 18px; height: 18px; transition: transform .2s ease; }
+
+@media (min-width: 901px) {
+  .sidebar { transition: width .2s ease; }
+  .main    { transition: margin-left .2s ease; }
+
+  body.sidebar-collapsed { --sidebar-w: 74px; }
+  body.sidebar-collapsed .sidebar-brand { justify-content: center; gap: 0; }
+  body.sidebar-collapsed .sidebar-brand > svg,
+  body.sidebar-collapsed .sidebar-brand > span { display: none; }
+  body.sidebar-collapsed .sidebar-collapse-btn { margin-left: 0; }
+  body.sidebar-collapsed .sidebar-collapse-btn svg { transform: rotate(180deg); }
+  body.sidebar-collapsed .nav-item {
+    justify-content: center;
+    gap: 0;
+    font-size: 0;          /* hides the bare-text labels; icons keep their fixed size */
+    padding: 10px;
+  }
+  body.sidebar-collapsed .sidebar-user { justify-content: center; }
+  body.sidebar-collapsed .sidebar-user-info,
+  body.sidebar-collapsed .sidebar-user-logout { display: none; }
+}
+
+/* Collapse is a desktop affordance only — mobile uses the off-canvas drawer */
+@media (max-width: 900px) {
+  .sidebar-collapse-btn { display: none; }
+}
+
 /* ── Main Layout ──────────────────────────────────────────── */
 .main {
   margin-left: var(--sidebar-w);
