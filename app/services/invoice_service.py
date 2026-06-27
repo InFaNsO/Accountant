@@ -4,18 +4,32 @@ from . import product_service
 from .payment_service import _refresh_invoice_paid
 
 
+def _max_seq(db, prefix):
+    """Highest numeric suffix among invoice_numbers with the given prefix (e.g. 'INV-')."""
+    rows = db.execute(
+        "SELECT invoice_number FROM invoices WHERE invoice_number LIKE ?",
+        (f"{prefix}%",),
+    ).fetchall()
+    mx = 0
+    for r in rows:
+        try:
+            mx = max(mx, int(r["invoice_number"].split("-")[-1]))
+        except (ValueError, AttributeError):
+            pass
+    return mx
+
+
 def _next_invoice_number(db):
-    row = db.execute(
-        "SELECT invoice_number FROM invoices ORDER BY id DESC LIMIT 1"
-    ).fetchone()
-    if not row:
-        return "INV-0001"
-    last = row["invoice_number"]
-    try:
-        num = int(last.split("-")[-1]) + 1
-    except ValueError:
-        num = 1
-    return f"INV-{num:04d}"
+    """Next issued serial (INV-0001, ...). Ignores draft (D-###) numbers so a
+    pending draft never reserves an issued serial — the serial is assigned at issue
+    time, keeping issued invoices in true issue order."""
+    return f"INV-{_max_seq(db, 'INV-') + 1:04d}"
+
+
+def _next_draft_number(db):
+    """Next draft placeholder number (D-001, ...). Replaced with a real INV-### serial
+    when the draft is issued."""
+    return f"D-{_max_seq(db, 'D-') + 1:03d}"
 
 
 def get_all_invoices():
@@ -25,7 +39,8 @@ def get_all_invoices():
            FROM invoices i
            JOIN clients c ON i.client_id = c.id
            LEFT JOIN client_companies cc ON i.company_id = cc.id
-           ORDER BY i.created_at DESC"""
+           ORDER BY (i.status = 'draft') DESC,
+                    COALESCE(i.issued_at, i.created_at) DESC"""
     ).fetchall()
 
 
@@ -195,8 +210,8 @@ def _compute_totals(items, invoice_discount_value, invoice_discount_type):
 
 def create_invoice(data, items):
     db = get_db()
-    invoice_number = _next_invoice_number(db)
     is_draft = data.get("status", "issued") == "draft"
+    invoice_number = _next_draft_number(db) if is_draft else _next_invoice_number(db)
 
     inv_dtype = (data.get("discount_type") or "value").lower()
     inv_dval  = float(data.get("discount_amount", 0) or 0)
@@ -279,6 +294,11 @@ def update_invoice_status(invoice_id, status):
         short = [s for s in stock_items if not s["sufficient"]]
         if short:
             return False, short
+        # Assign the real serial now (replaces the D-### draft number) so issued
+        # invoices are numbered in true issue order.
+        new_number = (_next_invoice_number(db)
+                      if str(inv["invoice_number"]).startswith("D-")
+                      else inv["invoice_number"])
         items = db.execute(
             "SELECT product_id, sub_product_id, quantity FROM invoice_items WHERE invoice_id=?",
             (invoice_id,),
@@ -293,9 +313,12 @@ def update_invoice_status(invoice_id, status):
                 db.execute(f"UPDATE {tbl} SET stock_qty = stock_qty - ? WHERE id = ?", (qty, pk))
                 db.execute(
                     "INSERT INTO stock_movements (product_id, sub_product_id, movement_type, quantity, notes, invoice_id) VALUES (?,?,?,?,?,?)",
-                    (pid, spid, "sale", qty, f"Invoice {inv['invoice_number']}", invoice_id),
+                    (pid, spid, "sale", qty, f"Invoice {new_number}", invoice_id),
                 )
-        db.execute("UPDATE invoices SET status=? WHERE id=?", (status, invoice_id))
+        db.execute(
+            "UPDATE invoices SET status=?, invoice_number=?, issued_at=CURRENT_TIMESTAMP WHERE id=?",
+            (status, new_number, invoice_id),
+        )
         db.commit()
         if inv["company_id"]:
             _apply_company_ob_credit(db, inv["client_id"], inv["company_id"], invoice_id, inv["issue_date"])
@@ -335,12 +358,20 @@ def update_invoice(invoice_id, data, items):
 
     company_id = int(data["company_id"]) if data.get("company_id") else None
 
+    prev = db.execute("SELECT status FROM invoices WHERE id=?", (invoice_id,)).fetchone()
+    requested_status = data.get("status", "issued")
+    # Issuing a draft from the edit form: keep the row in 'draft' for this field/item
+    # update, then let update_invoice_status run the real transition (stock check +
+    # serial assignment). Single source of truth for draft→issued.
+    issuing = bool(prev) and prev["status"] == "draft" and requested_status == "issued"
+    effective_status = "draft" if issuing else requested_status
+
     db.execute(
         """UPDATE invoices SET client_id=?, company_id=?, status=?, issue_date=?, due_date=?,
            notes=?, subtotal=?, tax_total=?, discount_amount=?, discount_type=?, discount_value=?, total=?
            WHERE id=?""",
         (
-            data["client_id"], company_id, data.get("status", "issued"),
+            data["client_id"], company_id, effective_status,
             data.get("issue_date"), data.get("due_date"),
             data.get("notes"), subtotal, tax_total, discount, inv_dtype, inv_dval, total,
             invoice_id,
@@ -369,6 +400,11 @@ def update_invoice(invoice_id, data, items):
             ),
         )
     db.commit()
+
+    if issuing:
+        # Runs stock check + serial assignment; returns (ok, stock-shortage errors).
+        return update_invoice_status(invoice_id, "issued")
+    return True, []
 
 
 def delete_invoice(invoice_id):

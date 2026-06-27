@@ -499,6 +499,9 @@ def _create_schema(db):
     _add_column(db, "clients",          "payment_terms",   "INTEGER DEFAULT 0")
     _add_column(db, "client_companies", "opening_balance", "REAL DEFAULT 0")
     _add_column(db, "invoices",         "company_id",      "INTEGER")
+    # Timestamp set the moment a draft is issued (drafts stay NULL). Used to order
+    # issued invoices by true issue order, independent of when the draft was created.
+    _add_column(db, "invoices",         "issued_at",       "TIMESTAMP")
     _add_column(db, "payments",         "company_id",      "INTEGER")
     _add_column(db, "products",         "category_id",     "INTEGER")
     _add_column(db, "products",         "min_quantity",    "REAL DEFAULT 0")

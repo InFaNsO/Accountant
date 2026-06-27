@@ -193,8 +193,16 @@ def edit_invoice(invoice_id):
             flash("Add at least one line item.", "error")
             existing_items = invoice_service.get_invoice_items(invoice_id)
             return render_template("invoices/form.html", invoice=data, items=existing_items, clients=clients, products=products, all_companies=all_companies, action="edit", invoice_id=invoice_id)
-        invoice_service.update_invoice(invoice_id, data, items)
-        flash("Invoice updated.", "success")
+        ok, errors = invoice_service.update_invoice(invoice_id, data, items)
+        if not ok:
+            for e in errors:
+                flash(
+                    f"Saved as draft — cannot issue: insufficient stock for '{e['name']}': "
+                    f"need {e['required']:.0f}, have {e['available']:.0f} in warehouse.",
+                    "error",
+                )
+        else:
+            flash("Invoice updated.", "success")
         return redirect(url_for("invoices.detail", invoice_id=invoice_id))
     items = invoice_service.get_invoice_items(invoice_id)
     return render_template("invoices/form.html", invoice=dict(invoice), items=[dict(i) for i in items], clients=clients, products=products, all_companies=all_companies, action="edit", invoice_id=invoice_id)

@@ -64,17 +64,30 @@ def _f(v, default=0.0):
         return default
 
 
+def _max_seq(db, prefix):
+    """Highest numeric suffix among invoice_numbers with the given prefix (e.g. 'INV-')."""
+    rows = db.execute(
+        "SELECT invoice_number FROM invoices WHERE invoice_number LIKE ?",
+        (f"{prefix}%",),
+    ).fetchall()
+    mx = 0
+    for r in rows:
+        try:
+            mx = max(mx, int(r["invoice_number"].split("-")[-1]))
+        except (ValueError, AttributeError):
+            pass
+    return mx
+
+
 def _next_invoice_number(db):
-    row = db.execute(
-        "SELECT invoice_number FROM invoices ORDER BY id DESC LIMIT 1"
-    ).fetchone()
-    if not row:
-        return "INV-0001"
-    try:
-        num = int(row["invoice_number"].split("-")[-1]) + 1
-    except ValueError:
-        num = 1
-    return f"INV-{num:04d}"
+    """Next issued serial. Ignores draft (D-###) numbers so the serial is assigned at
+    issue time, keeping issued invoices in true issue order."""
+    return f"INV-{_max_seq(db, 'INV-') + 1:04d}"
+
+
+def _next_draft_number(db):
+    """Next draft placeholder (D-001, ...), replaced with a real serial when issued."""
+    return f"D-{_max_seq(db, 'D-') + 1:03d}"
 
 
 def _refresh_invoice_paid(db, invoice_id):
@@ -904,7 +917,7 @@ def create_invoice():
 
     company_id = data.get("company_id") or None
     is_draft = status == "draft"
-    invoice_number = _next_invoice_number(db)
+    invoice_number = _next_draft_number(db) if is_draft else _next_invoice_number(db)
     cur = db.execute(
         """INSERT INTO invoices (invoice_number, client_id, company_id, status, issue_date, due_date,
            notes, subtotal, tax_total, discount_amount, total)
@@ -995,6 +1008,11 @@ def update_invoice_status(invoice_id):
                 short.append(f"  '{name}': need {required:.0f}, have {available:.0f}")
         if short:
             return jsonify({"error": "Cannot issue — insufficient warehouse stock:\n" + "\n".join(short)}), 400
+        # Assign the real serial now (replaces a D-### draft number) so issued
+        # invoices are numbered in true issue order.
+        new_number = (_next_invoice_number(db)
+                      if str(inv["invoice_number"]).startswith("D-")
+                      else inv["invoice_number"])
         # Apply stock deductions
         for it in items:
             pid = it["product_id"]; spid = it["sub_product_id"]
@@ -1009,13 +1027,16 @@ def update_invoice_status(invoice_id):
                 "(product_id, sub_product_id, movement_type, quantity, notes, invoice_id) "
                 "VALUES (?,?,?,?,?,?)",
                 (it["product_id"], it["sub_product_id"], "sale", qty,
-                 f"Invoice {inv['invoice_number']}", invoice_id),
+                 f"Invoice {new_number}", invoice_id),
             )
-        db.execute("UPDATE invoices SET status=? WHERE id=?", (status, invoice_id))
+        db.execute(
+            "UPDATE invoices SET status=?, invoice_number=?, issued_at=CURRENT_TIMESTAMP WHERE id=?",
+            (status, new_number, invoice_id),
+        )
         db.commit()
         _apply_client_credit(db, inv["client_id"], invoice_id)
         db.commit()
-        return jsonify({"result": f"✓ Invoice {inv['invoice_number']} issued. Stock deducted and ledger updated."})
+        return jsonify({"result": f"✓ Invoice {new_number} issued. Stock deducted and ledger updated."})
 
     db.execute("UPDATE invoices SET status=? WHERE id=?", (status, invoice_id))
     # Restore stock when cancelling a previously-issued invoice (draft never held stock)
