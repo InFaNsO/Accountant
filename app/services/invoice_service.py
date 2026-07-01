@@ -44,6 +44,25 @@ def get_all_invoices():
     ).fetchall()
 
 
+def get_adjacent_invoices(invoice_id):
+    """Return (prev_id, next_id) for navigation, following the same ordering as
+    the invoice list (drafts first, then newest issued/created). 'prev' is the
+    invoice above the current one in the list, 'next' the one below."""
+    rows = get_db().execute(
+        """SELECT id FROM invoices
+           ORDER BY (status = 'draft') DESC,
+                    COALESCE(issued_at, created_at) DESC, id DESC"""
+    ).fetchall()
+    ids = [r["id"] for r in rows]
+    try:
+        pos = ids.index(invoice_id)
+    except ValueError:
+        return (None, None)
+    prev_id = ids[pos - 1] if pos > 0 else None
+    next_id = ids[pos + 1] if pos < len(ids) - 1 else None
+    return (prev_id, next_id)
+
+
 def get_invoice(invoice_id):
     return get_db().execute(
         """SELECT i.*, c.name as client_name, c.company as client_company,

@@ -166,9 +166,10 @@ def detail(invoice_id):
             except Exception:
                 ppc = 0
         item_ppc[it["id"]] = ppc
+    prev_id, next_id = invoice_service.get_adjacent_invoices(invoice_id)
     return render_template("invoices/detail.html", invoice=invoice, items=items,
                            payments=payments, stock_status=stock_status,
-                           item_ppc=item_ppc)
+                           item_ppc=item_ppc, prev_id=prev_id, next_id=next_id)
 
 
 @bp.route("/<int:invoice_id>/edit", methods=["GET", "POST"])
