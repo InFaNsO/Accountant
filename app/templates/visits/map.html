@@ -1,0 +1,217 @@
+{% extends "base.html" %}
+{% block title %}Visit Map{% endblock %}
+{% block page_title %}Visit Map{% endblock %}
+
+{% block topbar_actions %}
+<a href="{{ url_for('visits.check_in_page') }}" class="btn btn-secondary btn-sm">Check-In Screen</a>
+{% endblock %}
+
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet/leaflet.css') }}">
+
+<!-- Filters -->
+<div class="card" style="margin-bottom:14px">
+  <div class="card-body" style="display:flex;flex-wrap:wrap;gap:10px;align-items:end;padding:14px 16px">
+    <div>
+      <label style="font-size:11px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px">Staff</label>
+      <select id="fStaff" style="width:auto" onchange="loadVisits()">
+        <option value="">All staff</option>
+        {% for u in staff %}
+        <option value="{{ u.id }}">{{ u.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label style="font-size:11px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px">From</label>
+      <input type="date" id="fFrom" style="width:auto" onchange="loadVisits()">
+    </div>
+    <div>
+      <label style="font-size:11px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px">To</label>
+      <input type="date" id="fTo" style="width:auto" onchange="loadVisits()">
+    </div>
+    <label style="display:flex;align-items:center;gap:6px;font-size:13px;padding-bottom:8px;cursor:pointer">
+      <input type="checkbox" id="fRoutes" checked onchange="renderMap()" style="width:auto"> Day routes
+    </label>
+    <label style="display:flex;align-items:center;gap:6px;font-size:13px;padding-bottom:8px;cursor:pointer">
+      <input type="checkbox" id="fClients" checked onchange="renderMap()" style="width:auto"> Client pins
+    </label>
+    <div id="visitCount" style="margin-left:auto;font-size:13px;color:var(--text-muted);padding-bottom:8px"></div>
+  </div>
+</div>
+
+<!-- Map -->
+<div class="card" style="margin-bottom:14px">
+  <div id="map" style="height:62vh;min-height:380px;border-radius:var(--radius);z-index:0"></div>
+  <div style="display:flex;flex-wrap:wrap;gap:8px 18px;padding:10px 16px;font-size:12.5px;color:var(--text-muted)">
+    <span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#10B981"></span> Visited ≤ 30 days</span>
+    <span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#F59E0B"></span> Stale &gt; 30 days</span>
+    <span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#EF4444"></span> Never visited</span>
+    <span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#6366F1"></span> Visit check-in</span>
+    <span style="margin-left:auto">Tiles © OpenStreetMap contributors</span>
+  </div>
+</div>
+
+<!-- Visit list -->
+<div class="card">
+  <div class="card-body">
+    <div style="font-weight:700;margin-bottom:10px">Visits</div>
+    <div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:13.5px">
+        <thead>
+          <tr style="border-bottom:1px solid var(--border)">
+            <th style="text-align:left;padding:8px 10px;color:var(--text-muted);font-weight:600">Date</th>
+            <th style="text-align:left;padding:8px 10px;color:var(--text-muted);font-weight:600">Time</th>
+            <th style="text-align:left;padding:8px 10px;color:var(--text-muted);font-weight:600">Staff</th>
+            <th style="text-align:left;padding:8px 10px;color:var(--text-muted);font-weight:600">Client / Prospect</th>
+            <th style="text-align:left;padding:8px 10px;color:var(--text-muted);font-weight:600">Purpose</th>
+            <th style="text-align:left;padding:8px 10px;color:var(--text-muted);font-weight:600">Outcome</th>
+            <th style="text-align:left;padding:8px 10px;color:var(--text-muted);font-weight:600">Notes</th>
+          </tr>
+        </thead>
+        <tbody id="visitRows"></tbody>
+      </table>
+      <div id="visitEmpty" style="display:none;padding:24px;text-align:center;color:var(--text-muted);font-size:13px">
+        No visits in this period.
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='vendor/leaflet/leaflet.js') }}"></script>
+<script>
+const VISIT_COLOR = '#6366F1';
+const STATUS_COLORS = { recent: '#10B981', stale: '#F59E0B', never: '#EF4444' };
+const ROUTE_PALETTE = ['#E2703A','#3B6FB5','#0C7A64','#B5485D','#7A5CB8','#C98F1B'];
+
+let map, visitLayer, clientLayer, routeLayer;
+let visits = [], clientsGeo = [];
+
+const esc = s => String(s ?? '').replace(/[&<>"']/g,
+  m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const nice = s => esc(String(s || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()));
+
+function initMap() {
+  map = L.map('map').setView([23.5, 78.9], 5);   // India
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; OpenStreetMap contributors',
+  }).addTo(map);
+  visitLayer  = L.layerGroup().addTo(map);
+  clientLayer = L.layerGroup().addTo(map);
+  routeLayer  = L.layerGroup().addTo(map);
+}
+
+/* ── Data loading ────────────────────────────────────────────── */
+function loadVisits() {
+  const p = new URLSearchParams();
+  const staff = document.getElementById('fStaff').value;
+  const from  = document.getElementById('fFrom').value;
+  const to    = document.getElementById('fTo').value;
+  if (staff) p.set('user_id', staff);
+  if (from)  p.set('from', from);
+  if (to)    p.set('to', to);
+  fetch('{{ url_for("visits.api_visits") }}?' + p.toString())
+    .then(r => r.json())
+    .then(d => { visits = d; renderMap(); renderList(); });
+}
+
+function loadClients() {
+  fetch('{{ url_for("visits.api_clients_geo") }}')
+    .then(r => r.json())
+    .then(d => { clientsGeo = d; renderMap(); });
+}
+
+/* ── Rendering ───────────────────────────────────────────────── */
+function renderMap() {
+  visitLayer.clearLayers(); clientLayer.clearLayers(); routeLayer.clearLayers();
+
+  // Client coverage pins
+  if (document.getElementById('fClients').checked) {
+    clientsGeo.forEach(c => {
+      if (c.latitude == null || c.longitude == null) return;
+      L.circleMarker([c.latitude, c.longitude], {
+        radius: 7, weight: 2, color: '#fff',
+        fillColor: STATUS_COLORS[c.status] || '#999', fillOpacity: 0.95,
+      }).bindPopup(
+        '<b>' + esc(c.name) + '</b><br>' +
+        esc([c.city, c.state].filter(Boolean).join(', ')) + '<br>' +
+        (c.last_visit
+          ? 'Last visit: ' + esc(c.last_visit) + ' (' + c.days_since + ' days ago)'
+          : 'Never visited')
+      ).addTo(clientLayer);
+    });
+  }
+
+  // Visit pins
+  const bounds = [];
+  visits.forEach(v => {
+    bounds.push([v.latitude, v.longitude]);
+    L.circleMarker([v.latitude, v.longitude], {
+      radius: 6, weight: 2, color: '#fff',
+      fillColor: VISIT_COLOR, fillOpacity: 0.95,
+    }).bindPopup(
+      '<b>' + esc(v.client_name || v.prospect_name || 'Unknown') + '</b>' +
+      (v.client_id ? '' : ' <i>(prospect)</i>') + '<br>' +
+      esc(v.user_name) + ' · ' + esc(v.checked_in_ist) + '<br>' +
+      nice(v.purpose) + (v.outcome ? ' → ' + nice(v.outcome) : '') +
+      (v.notes ? '<br><i>' + esc(v.notes) + '</i>' : '')
+    ).addTo(visitLayer);
+  });
+
+  // Day routes: one polyline per staff member per IST day, in check-in order
+  if (document.getElementById('fRoutes').checked) {
+    const groups = {};
+    visits.forEach(v => {
+      const key = v.user_id + '|' + v.visit_date_ist;
+      (groups[key] = groups[key] || []).push(v);
+    });
+    Object.entries(groups).forEach(([key, g]) => {
+      if (g.length < 2) return;
+      g.sort((a, b) => a.checked_in_ist.localeCompare(b.checked_in_ist));
+      const userId = parseInt(key.split('|')[0], 10);
+      L.polyline(g.map(v => [v.latitude, v.longitude]), {
+        color: ROUTE_PALETTE[userId % ROUTE_PALETTE.length],
+        weight: 3, dashArray: '7 5', opacity: 0.8,
+      }).bindPopup(esc(g[0].user_name) + ' — ' + esc(g[0].visit_date_ist) +
+                   ' (' + g.length + ' stops)')
+        .addTo(routeLayer);
+    });
+  }
+
+  document.getElementById('visitCount').textContent = visits.length + ' visit' + (visits.length === 1 ? '' : 's');
+  if (bounds.length) map.fitBounds(bounds, { padding: [40, 40], maxZoom: 13 });
+}
+
+function renderList() {
+  const rows = document.getElementById('visitRows');
+  document.getElementById('visitEmpty').style.display = visits.length ? 'none' : '';
+  rows.innerHTML = visits.map(v => `
+    <tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:8px 10px;font-family:monospace;font-size:12px">${esc(v.visit_date_ist)}</td>
+      <td style="padding:8px 10px;font-family:monospace;font-size:12px">${esc((v.checked_in_ist || '').slice(11, 16))}${v.checked_out_ist ? '–' + esc(v.checked_out_ist.slice(11, 16)) : ''}</td>
+      <td style="padding:8px 10px">${esc(v.user_name)}</td>
+      <td style="padding:8px 10px;font-weight:600">${
+        v.client_id
+          ? '<a href="/clients/' + v.client_id + '">' + esc(v.client_name) + '</a>'
+          : esc(v.prospect_name || 'Unknown') + ' <span style="font-size:11px;color:var(--text-muted)">(prospect)</span>'
+      }</td>
+      <td style="padding:8px 10px">${nice(v.purpose)}</td>
+      <td style="padding:8px 10px">${nice(v.outcome) || '—'}</td>
+      <td style="padding:8px 10px;color:var(--text-muted)">${esc(v.notes || '')}</td>
+    </tr>`).join('');
+}
+
+/* ── Init: default to the last 7 days ─────────────────────────── */
+(function () {
+  const today = new Date();
+  const weekAgo = new Date(today); weekAgo.setDate(today.getDate() - 6);
+  document.getElementById('fTo').value   = today.toISOString().slice(0, 10);
+  document.getElementById('fFrom').value = weekAgo.toISOString().slice(0, 10);
+  initMap();
+  loadClients();
+  loadVisits();
+})();
+</script>
+{% endblock %}

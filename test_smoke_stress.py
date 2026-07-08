@@ -2,10 +2,10 @@
 Smoke test + stress test for the Accountant Ledger app.
 Run against a live Flask server at http://127.0.0.1:5000
 """
-import requests, re, random, sys
+import os, requests, re, random, sys
 from datetime import date, timedelta
 
-BASE = "http://127.0.0.1:5000"
+BASE = os.environ.get("SMOKE_BASE", "http://127.0.0.1:5000")
 s = requests.Session()
 s.max_redirects = 10
 
@@ -42,6 +42,15 @@ def check_page(path, label, expect=200):
     return r
 
 # ─────────────────────────────────────────────────────────────────────────────
+# LOGIN (all routes require auth)
+# ─────────────────────────────────────────────────────────────────────────────
+r = post("/login", {"email": "bhavilg101@gmail.com", "password": "Mymomisgr8"})
+if "/login" in r.url:
+    print("✗ Could not log in — aborting.")
+    sys.exit(1)
+print("✓ Logged in")
+
+# ─────────────────────────────────────────────────────────────────────────────
 # SMOKE TEST
 # ─────────────────────────────────────────────────────────────────────────────
 print("\n══════════════════════════════════════════")
@@ -65,7 +74,11 @@ for path, label in [
 # ── Clients ───────────────────────────────────────────────────────────────────
 print("\n── Clients ──")
 r = post("/clients/new", {"name": "Smoke Client", "opening_balance_amt": "500",
-                           "opening_balance_type": "debt", "email": "smoke@test.com"})
+                           "opening_balance_type": "debt", "email": "smoke@test.com",
+                           "city": "Ludhiana", "state": "Punjab",
+                           "companies[0][name]": "Smoke Co",
+                           "companies[0][opening_balance_amt]": "500",
+                           "companies[0][opening_balance_type]": "debt"})
 c_id = extract_id(r.url)
 if c_id: ok(f"Create client (id={c_id})")
 else:     fail("Create client", r.url)
@@ -81,6 +94,178 @@ if r.status_code == 200 and "entries" in r.text:
     ok("Client ledger API")
 else:
     fail("Client ledger API", r.text[:100])
+
+# ── Visits (field-sales check-ins) ───────────────────────────────────────────
+print("\n── Visits ──")
+check_page("/visits/map", "Visit map page")
+check_page("/visits/check-in", "Check-in page")
+
+r = s.post(BASE + "/visits/check-in", json={
+    "client_id": c_id, "latitude": 30.9010, "longitude": 75.8573,
+    "accuracy_m": 12.5, "purpose": "sales_call", "notes": "Smoke visit"})
+v_id = r.json().get("id") if r.status_code == 200 else None
+ok(f"Check in at client (id={v_id})") if v_id else fail("Check in at client", r.text[:100])
+
+r = s.post(BASE + "/visits/check-in", json={
+    "prospect_name": "Smoke Prospect", "latitude": 30.9100, "longitude": 75.8600,
+    "purpose": "sales_call"})
+ok("Check in at prospect") if r.status_code == 200 and r.json().get("ok") else fail("Check in at prospect", r.text[:100])
+
+r = s.post(BASE + "/visits/check-in", json={"client_id": c_id})
+ok("Reject check-in without GPS") if r.status_code == 400 else fail("Reject check-in without GPS", f"HTTP {r.status_code}")
+
+r = s.post(BASE + "/visits/check-in", json={"latitude": 30.9, "longitude": 75.85})
+ok("Reject check-in without client/prospect") if r.status_code == 400 else fail("Reject check-in without client/prospect", f"HTTP {r.status_code}")
+
+r = s.post(BASE + f"/visits/{v_id}/check-out", json={"outcome": "order_placed", "notes": "Smoke order"})
+ok("Check out") if r.status_code == 200 and r.json().get("ok") else fail("Check out", r.text[:100])
+
+r = s.post(BASE + f"/visits/{v_id}/check-out", json={})
+ok("Reject double check-out") if r.status_code == 404 else fail("Reject double check-out", f"HTTP {r.status_code}")
+
+r = get("/visits/api/visits")
+if r.status_code == 200:
+    visits_json = r.json()
+    mine = [v for v in visits_json if v.get("id") == v_id]
+    if mine and mine[0]["outcome"] == "order_placed" and mine[0]["checked_out_at"]:
+        ok(f"Visits API returns check-in with outcome ({len(visits_json)} visits)")
+    else:
+        fail("Visits API returns check-in with outcome", str(mine)[:120])
+else:
+    fail("Visits API", f"HTTP {r.status_code}")
+
+r = get(f"/visits/api/visits?client_id={c_id}")
+ok("Visits API client filter") if r.status_code == 200 and all(v["client_id"] == c_id for v in r.json()) else fail("Visits API client filter")
+
+r = get("/visits/api/clients/geo")
+if r.status_code == 200:
+    geo = {g["id"]: g for g in r.json()}
+    g = geo.get(c_id)
+    if g and g["status"] == "recent" and g["days_since"] == 0:
+        ok("Clients geo API: coverage status 'recent' after visit")
+    else:
+        fail("Clients geo API: coverage status", str(g)[:120])
+else:
+    fail("Clients geo API", f"HTTP {r.status_code}")
+
+# ── Sales rep assignments ────────────────────────────────────────────────────
+print("\n── Sales Rep Assignments ──")
+check_page("/clients/assignments", "Assignments page")
+
+post("/users/new", {"name": "Smoke Rep", "email": "smoke-rep@test.local",
+                    "password": "smoke-1234", "role": "user", "is_active": "1",
+                    "perm_visits_view": "1", "perm_visits_create": "1",
+                    "managed_clients": str(c_id)})
+import sqlite3 as _sql2; _dbr = _sql2.connect("data/ledger.db"); _dbr.row_factory = _sql2.Row
+_rep = _dbr.execute("SELECT id FROM users WHERE email='smoke-rep@test.local'").fetchone()
+rep_id = _rep["id"] if _rep else None
+_dbr.close()
+ok(f"Create staff user (id={rep_id})") if rep_id else fail("Create staff user")
+
+_dbr = _sql2.connect("data/ledger.db")
+_val = _dbr.execute("SELECT sales_rep_id FROM clients WHERE id=?", (c_id,)).fetchone()[0]
+_dbr.close()
+ok("User form managed_clients fills sales_rep_id") if _val == rep_id else fail("User form managed_clients", str(_val))
+
+# Editing the user with the client unticked releases it
+post(f"/users/{rep_id}/edit", {"name": "Smoke Rep", "email": "smoke-rep@test.local",
+                               "role": "user", "is_active": "1",
+                               "perm_visits_view": "1", "perm_visits_create": "1"})
+_dbr = _sql2.connect("data/ledger.db")
+_val = _dbr.execute("SELECT sales_rep_id FROM clients WHERE id=?", (c_id,)).fetchone()[0]
+_dbr.close()
+ok("Untick on user edit releases client") if _val is None else fail("Untick on user edit releases client", str(_val))
+
+r = s.post(BASE + f"/clients/{c_id}/assign-rep", json={"user_id": rep_id})
+ok("Assign client to rep") if r.status_code == 200 and r.json().get("ok") else fail("Assign client to rep", r.text[:100])
+
+_dbr = _sql2.connect("data/ledger.db")
+_val = _dbr.execute("SELECT sales_rep_id FROM clients WHERE id=?", (c_id,)).fetchone()[0]
+_dbr.close()
+ok("clients.sales_rep_id filled") if _val == rep_id else fail("clients.sales_rep_id filled", str(_val))
+
+r = s.post(BASE + f"/clients/{c_id}/assign-rep", json={"user_id": 999999})
+ok("Reject unknown rep") if r.status_code == 404 else fail("Reject unknown rep", f"HTTP {r.status_code}")
+
+r = s.post(BASE + f"/clients/{c_id}/assign-rep", json={"user_id": None})
+_dbr = _sql2.connect("data/ledger.db")
+_val = _dbr.execute("SELECT sales_rep_id FROM clients WHERE id=?", (c_id,)).fetchone()[0]
+_dbr.close()
+ok("Unassign rep (field emptied)") if r.status_code == 200 and _val is None else fail("Unassign rep", str(_val))
+
+# ── Sales-manager role: team + scoping ───────────────────────────────────────
+print("\n── Sales Manager Role ──")
+# rep_id is our staff member; give them client c_id and a foreign client to compare
+s.post(BASE + f"/clients/{c_id}/assign-rep", json={"user_id": rep_id})
+_dbr = _sql2.connect("data/ledger.db"); _dbr.row_factory = _sql2.Row
+_foreign = _dbr.execute("SELECT id FROM clients WHERE id != ? AND sales_rep_id IS NULL LIMIT 1", (c_id,)).fetchone()
+foreign_id = _foreign["id"] if _foreign else None
+_dbr.close()
+
+# Create a sales manager with rep on the team; default-denied modules left unticked
+post("/users/new", {"name": "Smoke Manager", "email": "smoke-mgr@test.local",
+                    "password": "smoke-1234", "role": "sales", "is_active": "1",
+                    "perm_clients_view": "1", "perm_invoices_view": "1",
+                    "perm_payments_view": "1", "perm_visits_view": "1",
+                    "team_staff": str(rep_id)})
+_dbr = _sql2.connect("data/ledger.db"); _dbr.row_factory = _sql2.Row
+_mgr = _dbr.execute("SELECT id, role FROM users WHERE email='smoke-mgr@test.local'").fetchone()
+mgr_id = _mgr["id"] if _mgr else None
+_staff_mgr = _dbr.execute("SELECT manager_id FROM users WHERE id=?", (rep_id,)).fetchone()
+_dbr.close()
+ok(f"Create sales manager (id={mgr_id}, role={_mgr['role'] if _mgr else '?'})") if _mgr and _mgr["role"] == "sales" else fail("Create sales manager")
+ok("Staff linked to manager") if _staff_mgr and _staff_mgr["manager_id"] == mgr_id else fail("Staff linked to manager", str(_staff_mgr and _staff_mgr["manager_id"]))
+
+# Log in as the manager in a fresh session
+mgr = requests.Session()
+r = mgr.post(BASE + "/login", data={"email": "smoke-mgr@test.local", "password": "smoke-1234"})
+ok("Sales manager can log in") if "/login" not in r.url else fail("Sales manager login", r.url)
+
+# Dashboard renders the sales variant
+r = mgr.get(BASE + "/")
+ok("Sales dashboard renders") if r.status_code == 200 and "My Sales Staff" in r.text else fail("Sales dashboard", f"HTTP {r.status_code}")
+
+# Client list scoped to team's clients only
+r = mgr.get(BASE + "/clients/")
+if r.status_code == 200:
+    import re as _re
+    shown = _re.findall(r'/clients/(\d+)"', r.text)
+    shown_ids = {int(x) for x in shown}
+    scoped_ok = c_id in shown_ids and (foreign_id is None or foreign_id not in shown_ids)
+    ok("Client list scoped to team") if scoped_ok else fail("Client list scoped", f"c_id in={c_id in shown_ids} foreign in={foreign_id in shown_ids}")
+else:
+    fail("Client list scoped", f"HTTP {r.status_code}")
+
+# Own client allowed, foreign client 403
+r = mgr.get(BASE + f"/clients/{c_id}")
+ok("Manager can view own client") if r.status_code == 200 else fail("Manager own client", f"HTTP {r.status_code}")
+if foreign_id:
+    r = mgr.get(BASE + f"/clients/{foreign_id}")
+    ok("Manager blocked from foreign client (403)") if r.status_code == 403 else fail("Foreign client block", f"HTTP {r.status_code}")
+
+# Denied module (products) is 403 for the sales manager
+r = mgr.get(BASE + "/products/")
+ok("Sales manager denied products (403)") if r.status_code == 403 else fail("Products denied", f"HTTP {r.status_code}")
+
+# Rep assignment page blocked for scoped user
+r = mgr.get(BASE + "/clients/assignments")
+ok("Sales manager blocked from assignments (403)") if r.status_code == 403 else fail("Assignments block", f"HTTP {r.status_code}")
+
+# Visits API scoped to team members only
+r = mgr.get(BASE + "/visits/api/visits")
+if r.status_code == 200:
+    users_in = {v["user_id"] for v in r.json()}
+    ok("Visits API scoped to team") if users_in <= {mgr_id, rep_id} else fail("Visits API scoped", str(users_in))
+else:
+    fail("Visits API scoped", f"HTTP {r.status_code}")
+
+# Cleanup manager + release
+post(f"/users/{mgr_id}/delete", {})
+s.post(BASE + f"/clients/{c_id}/assign-rep", json={"user_id": None})
+ok("Delete sales manager")
+
+post(f"/users/{rep_id}/delete", {})
+ok("Delete staff user")
 
 # ── Categories ────────────────────────────────────────────────────────────────
 print("\n── Categories ──")
@@ -239,6 +424,9 @@ for i in range(1, 51):
         "country":              "India",
         "opening_balance_amt":  str(ob_amt),
         "opening_balance_type": ob_type,
+        "companies[0][name]":                 f"Co-{i:02d}",
+        "companies[0][opening_balance_amt]":  str(ob_amt),
+        "companies[0][opening_balance_type]": ob_type,
     })
     cid = extract_id(r.url)
     if cid: client_ids.append(cid)

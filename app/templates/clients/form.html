@@ -33,6 +33,16 @@
                    min="0" step="1" placeholder="30">
           </div>
 
+          <div class="form-group">
+            <label for="city">City <span style="color:var(--text-muted);font-size:12px">(optional)</span></label>
+            <input type="text" id="city" name="city" value="{{ client.get('city','') or '' }}" placeholder="e.g. Ludhiana">
+          </div>
+
+          <div class="form-group">
+            <label for="state">State <span style="color:var(--text-muted);font-size:12px">(optional)</span></label>
+            <input type="text" id="state" name="state" value="{{ client.get('state','') or '' }}" placeholder="e.g. Punjab">
+          </div>
+
           <div class="form-group span-2">
             <label for="notes">Notes</label>
             <textarea id="notes" name="notes" placeholder="Any relevant notes about this client…">{{ client.get('notes','') }}</textarea>
@@ -42,7 +52,8 @@
       </div>
     </div>
 
-    <!-- Invoice Locks -->
+    <!-- Invoice Locks (requires the clients "Invoice Locks" permission) -->
+    {% if can_locks %}
     <div class="card" style="margin-bottom:18px">
       <div class="card-header">
         <span class="card-title">Invoice Locks</span>
@@ -89,6 +100,7 @@
         </div>
       </div>
     </div>
+    {% endif %}
 
     <!-- Company Details -->
     <div class="card" style="margin-bottom:18px">

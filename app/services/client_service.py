@@ -120,18 +120,21 @@ def _parse_lock_fields(data):
     )
 
 
-def create_client(data, companies=None):
-    """Create a client. If companies list provided, create them and derive OB from their sum."""
+def create_client(data, companies=None, include_locks=True):
+    """Create a client. If companies list provided, create them and derive OB from their sum.
+    include_locks=False ignores lock fields (caller lacks the clients.locks permission)."""
     db = get_db()
-    tally_lock, bl_enabled, bl_limit = _parse_lock_fields(data)
+    tally_lock, bl_enabled, bl_limit = _parse_lock_fields(data) if include_locks else (0, 0, 0.0)
     cur = db.execute(
-        """INSERT INTO clients (name, phone, notes, opening_balance, payment_terms,
+        """INSERT INTO clients (name, phone, notes, city, state, opening_balance, payment_terms,
                                 tally_lock, balance_lock_enabled, balance_lock_limit)
-           VALUES (?, ?, ?, 0, ?, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)""",
         (
             data["name"],
             data.get("phone"),
             data.get("notes"),
+            (data.get("city") or "").strip() or None,
+            (data.get("state") or "").strip() or None,
             int(data.get("payment_terms") or 30),
             tally_lock, bl_enabled, bl_limit,
         ),
@@ -174,25 +177,32 @@ def _sync_client_ob(db, client_id):
     )
 
 
-def update_client(client_id, data, companies=None):
-    """Update a client's basic info. If companies list provided, sync company records."""
+def update_client(client_id, data, companies=None, include_locks=True):
+    """Update a client's basic info. If companies list provided, sync company records.
+    include_locks=False leaves lock settings untouched (caller lacks the
+    clients.locks permission, so the form didn't render the lock fields)."""
     db = get_db()
-    tally_lock, bl_enabled, bl_limit = _parse_lock_fields(data)
     db.execute(
         """UPDATE clients
-           SET name=?, phone=?, notes=?,
-               payment_terms=?, tally_lock=?, balance_lock_enabled=?,
-               balance_lock_limit=?, updated_at=CURRENT_TIMESTAMP
+           SET name=?, phone=?, notes=?, city=?, state=?,
+               payment_terms=?, updated_at=CURRENT_TIMESTAMP
            WHERE id=?""",
         (
             data["name"],
             data.get("phone"),
             data.get("notes"),
+            (data.get("city") or "").strip() or None,
+            (data.get("state") or "").strip() or None,
             int(data.get("payment_terms") or 30),
-            tally_lock, bl_enabled, bl_limit,
             client_id,
         ),
     )
+    if include_locks:
+        tally_lock, bl_enabled, bl_limit = _parse_lock_fields(data)
+        db.execute(
+            "UPDATE clients SET tally_lock=?, balance_lock_enabled=?, balance_lock_limit=? WHERE id=?",
+            (tally_lock, bl_enabled, bl_limit, client_id),
+        )
 
     if companies is not None:
         existing_ids = {
@@ -614,4 +624,80 @@ def delete_company(company_id):
     db.execute("DELETE FROM client_companies WHERE id=?", (company_id,))
     if row:
         _sync_client_ob(db, row["client_id"])
+    db.commit()
+
+
+# ── Sales rep assignment ──────────────────────────────────────────────────────
+
+def get_sales_reps():
+    """Active non-god users who can be assigned clients."""
+    return get_db().execute(
+        "SELECT id, name FROM users WHERE is_active=1 AND role != 'god' ORDER BY name"
+    ).fetchall()
+
+
+def get_clients_with_reps():
+    """All clients with their assigned rep's name (NULL rep = handled directly)."""
+    return get_db().execute(
+        """SELECT c.id, c.name, c.city, c.state, c.sales_rep_id,
+                  u.name AS rep_name
+           FROM clients c
+           LEFT JOIN users u ON u.id = c.sales_rep_id
+           ORDER BY c.name"""
+    ).fetchall()
+
+
+def set_sales_rep(client_id, user_id):
+    """Assign (or clear, with user_id=None) the active sales rep for a client.
+    Returns False if the client doesn't exist or the rep isn't an active user."""
+    db = get_db()
+    if user_id is not None:
+        rep = db.execute(
+            "SELECT 1 FROM users WHERE id=? AND is_active=1 AND role != 'god'",
+            (user_id,),
+        ).fetchone()
+        if not rep:
+            return False
+    cur = db.execute(
+        "UPDATE clients SET sales_rep_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+        (user_id, client_id),
+    )
+    db.commit()
+    return cur.rowcount > 0
+
+
+def get_client_rep_name(client_id):
+    """Name of the client's assigned rep, or None (includes deactivated reps)."""
+    row = get_db().execute(
+        """SELECT u.name FROM clients c JOIN users u ON u.id = c.sales_rep_id
+           WHERE c.id=?""",
+        (client_id,),
+    ).fetchone()
+    return row["name"] if row else None
+
+
+def set_rep_clients(user_id, client_ids):
+    """Replace a rep's managed-client list in one save: every client in the list
+    becomes theirs (moving over from another rep if needed), and any client they
+    currently hold that is NOT in the list is released to 'handled directly'."""
+    db = get_db()
+    ids = sorted({int(i) for i in client_ids})
+    if ids:
+        ph = ",".join("?" * len(ids))
+        db.execute(
+            f"UPDATE clients SET sales_rep_id=NULL, updated_at=CURRENT_TIMESTAMP "
+            f"WHERE sales_rep_id=? AND id NOT IN ({ph})",
+            (user_id, *ids),
+        )
+        db.execute(
+            f"UPDATE clients SET sales_rep_id=?, updated_at=CURRENT_TIMESTAMP "
+            f"WHERE id IN ({ph})",
+            (user_id, *ids),
+        )
+    else:
+        db.execute(
+            "UPDATE clients SET sales_rep_id=NULL, updated_at=CURRENT_TIMESTAMP "
+            "WHERE sales_rep_id=?",
+            (user_id,),
+        )
     db.commit()

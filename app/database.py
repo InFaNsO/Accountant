@@ -477,6 +477,30 @@ def _create_schema(db):
         );
     """)
 
+    # ── Client visits (field-sales GPS check-ins) ─────────────
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS client_visits (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id        INTEGER NOT NULL,
+            client_id      INTEGER,
+            prospect_name  TEXT,
+            latitude       REAL NOT NULL,
+            longitude      REAL NOT NULL,
+            accuracy_m     REAL,
+            checked_in_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            checked_out_at TIMESTAMP,
+            purpose        TEXT,
+            outcome        TEXT,
+            notes          TEXT,
+            invoice_id     INTEGER,
+            FOREIGN KEY (user_id)    REFERENCES users(id),
+            FOREIGN KEY (client_id)  REFERENCES clients(id) ON DELETE SET NULL,
+            FOREIGN KEY (invoice_id) REFERENCES invoices(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_visits_user_date ON client_visits(user_id, checked_in_at);
+        CREATE INDEX IF NOT EXISTS idx_visits_client    ON client_visits(client_id);
+    """)
+
     # ── Mobile push notifications ─────────────────────────────
     db.executescript("""
         CREATE TABLE IF NOT EXISTS device_tokens (
@@ -499,6 +523,10 @@ def _create_schema(db):
 
     # ── Column-level migrations for existing installs ─────────
     _add_column(db, "user_permissions",  "can_financials",  "INTEGER DEFAULT 0")
+    # Clients-only extras: see invoice-lock status / manage locks (tally toggle +
+    # balance-lock settings)
+    _add_column(db, "user_permissions",  "can_locks_view",  "INTEGER DEFAULT 0")
+    _add_column(db, "user_permissions",  "can_locks_edit",  "INTEGER DEFAULT 0")
     _add_column(db, "clients",          "opening_balance", "REAL DEFAULT 0")
     _add_column(db, "clients",          "payment_terms",   "INTEGER DEFAULT 0")
     _add_column(db, "client_companies", "opening_balance", "REAL DEFAULT 0")
@@ -544,5 +572,14 @@ def _create_schema(db):
     _add_column(db, "clients",                 "tally_lock",           "INTEGER DEFAULT 0")
     _add_column(db, "clients",                 "balance_lock_enabled", "INTEGER DEFAULT 0")
     _add_column(db, "clients",                 "balance_lock_limit",   "REAL DEFAULT 0")
+    # Field-visit tracking: state for map grouping, lat/lng geocoded from the
+    # registered address (visit coordinates come from the phone GPS instead).
+    _add_column(db, "clients",                 "state",                "TEXT")
+    _add_column(db, "clients",                 "latitude",             "REAL")
+    _add_column(db, "clients",                 "longitude",            "REAL")
+    # Active sales rep managing this client; NULL = handled directly (no rep).
+    _add_column(db, "clients",                 "sales_rep_id",         "INTEGER")
+    # Sales-manager hierarchy: staff members point at their manager (role='sales').
+    _add_column(db, "users",                   "manager_id",           "INTEGER")
 
     db.commit()

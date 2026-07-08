@@ -1,11 +1,23 @@
-from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
+from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, abort
 from flask_login import login_required, current_user
-from ..services import client_service
+from ..services import client_service, visit_service
 from ..services.payment_service import recalculate_client_balance, reconcile_all_clients
-from ..services.auth_service import permission_required
+from ..services.auth_service import permission_required, get_scoped_client_ids
 from ..database import get_db
 
 bp = Blueprint("clients", __name__, url_prefix="/clients")
+
+
+def _scope():
+    """Client ids the current user may see, or None for unrestricted."""
+    return get_scoped_client_ids(current_user)
+
+
+def _guard_client(client_id):
+    """403 when a row-scoped user (sales role) reaches for a foreign client."""
+    scope = _scope()
+    if scope is not None and client_id not in scope:
+        abort(403)
 
 
 @bp.route("/")
@@ -13,8 +25,13 @@ bp = Blueprint("clients", __name__, url_prefix="/clients")
 @permission_required("clients", "view")
 def list_clients():
     clients = client_service.get_all_clients_with_companies()
+    scope = _scope()
+    if scope is not None:
+        clients = [c for c in clients if c["id"] in scope]
     can_financials = current_user.has_permission("clients", "financials")
-    locked_clients = client_service.get_locked_clients()
+    can_locks_view = (current_user.has_permission("clients", "locks_view")
+                      or current_user.has_permission("clients", "locks_edit"))
+    locked_clients = client_service.get_locked_clients() if can_locks_view else {}
     return render_template("clients/list.html", clients=clients, can_financials=can_financials,
                            locked_clients=locked_clients)
 
@@ -43,25 +60,27 @@ def _parse_companies(form):
 @login_required
 @permission_required("clients", "create")
 def new_client():
+    can_locks = current_user.has_permission("clients", "locks_edit")
     if request.method == "POST":
         data = request.form.to_dict()
         companies = _parse_companies(request.form)
         if not data.get("name"):
             flash("Client name is required.", "error")
-            return render_template("clients/form.html", client=data, companies=companies, action="new")
+            return render_template("clients/form.html", client=data, companies=companies, action="new", can_locks=can_locks)
         if not companies:
             flash("At least one company is required.", "error")
-            return render_template("clients/form.html", client=data, companies=companies, action="new")
-        client_id = client_service.create_client(data, companies)
+            return render_template("clients/form.html", client=data, companies=companies, action="new", can_locks=can_locks)
+        client_id = client_service.create_client(data, companies, include_locks=can_locks)
         flash("Client created successfully.", "success")
         return redirect(url_for("clients.detail", client_id=client_id))
-    return render_template("clients/form.html", client={}, companies=[], action="new")
+    return render_template("clients/form.html", client={}, companies=[], action="new", can_locks=can_locks)
 
 
 @bp.route("/<int:client_id>")
 @login_required
 @permission_required("clients", "view")
 def detail(client_id):
+    _guard_client(client_id)
     client = client_service.get_client(client_id)
     if not client:
         flash("Client not found.", "error")
@@ -79,19 +98,30 @@ def detail(client_id):
         companies = [dict(c) for c in companies_raw]
     product_breakdown = client_service.get_client_product_breakdown(client_id)
     lock = client_service.get_client_lock_status(client_id)
+    can_locks = current_user.has_permission("clients", "locks_edit")
+    # Edit ability implies seeing the lock card
+    can_locks_view = can_locks or current_user.has_permission("clients", "locks_view")
+    if current_user.has_permission("visits", "view"):
+        visits = [dict(v) for v in visit_service.get_client_visits(client_id, limit=10)]
+    else:
+        visits = None
+    rep_name = client_service.get_client_rep_name(client_id)
     return render_template("clients/detail.html", client=client, invoices=invoices,
                            companies=companies, balance=balance, can_financials=can_financials,
-                           product_breakdown=product_breakdown, lock=lock)
+                           product_breakdown=product_breakdown, lock=lock, can_locks=can_locks,
+                           can_locks_view=can_locks_view, visits=visits, rep_name=rep_name)
 
 
 @bp.route("/<int:client_id>/edit", methods=["GET", "POST"])
 @login_required
 @permission_required("clients", "edit")
 def edit_client(client_id):
+    _guard_client(client_id)
     client = client_service.get_client(client_id)
     if not client:
         flash("Client not found.", "error")
         return redirect(url_for("clients.list_clients"))
+    can_locks = current_user.has_permission("clients", "locks_edit")
     if request.method == "POST":
         data = request.form.to_dict()
         companies = _parse_companies(request.form)
@@ -99,25 +129,26 @@ def edit_client(client_id):
             flash("Client name is required.", "error")
             existing = client_service.get_companies(client_id)
             return render_template("clients/form.html", client=data, companies=[dict(c) for c in existing],
-                                   action="edit", client_id=client_id)
+                                   action="edit", client_id=client_id, can_locks=can_locks)
         if not companies:
             flash("At least one company is required.", "error")
             existing = client_service.get_companies(client_id)
             return render_template("clients/form.html", client=data, companies=[dict(c) for c in existing],
-                                   action="edit", client_id=client_id)
-        client_service.update_client(client_id, data, companies)
+                                   action="edit", client_id=client_id, can_locks=can_locks)
+        client_service.update_client(client_id, data, companies, include_locks=can_locks)
         flash("Client updated successfully.", "success")
         return redirect(url_for("clients.detail", client_id=client_id))
     companies = [dict(c) for c in client_service.get_companies(client_id)]
     return render_template("clients/form.html", client=dict(client), companies=companies,
-                           action="edit", client_id=client_id)
+                           action="edit", client_id=client_id, can_locks=can_locks)
 
 
 @bp.route("/<int:client_id>/tally-lock", methods=["POST"])
 @login_required
-@permission_required("clients", "edit")
+@permission_required("clients", "locks_edit")
 def toggle_tally_lock(client_id):
     """Quick on/off for the manual tally lock from the client detail page."""
+    _guard_client(client_id)
     client = client_service.get_client(client_id)
     if not client:
         return jsonify({"error": "Client not found."}), 404
@@ -130,6 +161,7 @@ def toggle_tally_lock(client_id):
 @login_required
 @permission_required("clients", "financials")
 def ledger(client_id):
+    _guard_client(client_id)
     client = client_service.get_client(client_id)
     if not client:
         return jsonify({"error": "Not found"}), 404
@@ -288,6 +320,7 @@ def ledger(client_id):
 @login_required
 @permission_required("clients", "financials")
 def add_ledger_entry(client_id):
+    _guard_client(client_id)
     data        = request.get_json(silent=True) or {}
     entry_date  = data.get("entry_date")
     description = data.get("description", "")
@@ -310,6 +343,7 @@ def add_ledger_entry(client_id):
 @login_required
 @permission_required("clients", "financials")
 def recalculate(client_id):
+    _guard_client(client_id)
     recalculate_client_balance(client_id)
     return jsonify({"ok": True})
 
@@ -319,6 +353,8 @@ def recalculate(client_id):
 @permission_required("clients", "financials")
 def reconcile_all():
     """Apply every client's unallocated payments to their oldest unpaid invoices."""
+    if _scope() is not None:
+        abort(403)   # global operation — not for row-scoped (sales) users
     summary = reconcile_all_clients()
     return jsonify({"ok": True, **summary})
 
@@ -327,6 +363,7 @@ def reconcile_all():
 @login_required
 @permission_required("clients", "delete")
 def delete_client(client_id):
+    _guard_client(client_id)
     client_service.delete_client(client_id)
     flash("Client deleted.", "success")
     return redirect(url_for("clients.list_clients"))
@@ -337,6 +374,7 @@ def delete_client(client_id):
 @bp.route("/api/<int:client_id>/companies")
 @login_required
 def api_companies(client_id):
+    _guard_client(client_id)
     companies = client_service.get_companies(client_id)
     return jsonify([dict(c) for c in companies])
 
@@ -345,6 +383,7 @@ def api_companies(client_id):
 @login_required
 @permission_required("clients", "edit")
 def add_company(client_id):
+    _guard_client(client_id)
     data = request.get_json(silent=True) or {}
     if not data.get("name"):
         return jsonify({"error": "Company name is required"}), 400
@@ -359,6 +398,7 @@ def add_company(client_id):
 @login_required
 @permission_required("clients", "edit")
 def edit_company(client_id, company_id):
+    _guard_client(client_id)
     data = request.get_json(silent=True) or {}
     if not data.get("name"):
         return jsonify({"error": "Company name is required"}), 400
@@ -372,5 +412,39 @@ def edit_company(client_id, company_id):
 @login_required
 @permission_required("clients", "edit")
 def delete_company(client_id, company_id):
+    _guard_client(client_id)
     client_service.delete_company(company_id)
+    return jsonify({"ok": True})
+
+
+# ── Sales rep assignments ─────────────────────────────────────────────────────
+
+@bp.route("/assignments")
+@login_required
+@permission_required("clients", "edit")
+def assignments():
+    if _scope() is not None:
+        abort(403)   # rep assignment is an owner/admin function
+    reps    = [dict(r) for r in client_service.get_sales_reps()]
+    clients = [dict(c) for c in client_service.get_clients_with_reps()]
+    return render_template("clients/assignments.html", reps=reps, clients=clients)
+
+
+@bp.route("/<int:client_id>/assign-rep", methods=["POST"])
+@login_required
+@permission_required("clients", "edit")
+def assign_rep(client_id):
+    if _scope() is not None:
+        abort(403)   # rep assignment is an owner/admin function
+    data = request.get_json(silent=True) or {}
+    user_id = data.get("user_id")
+    if user_id in ("", None):
+        user_id = None
+    else:
+        try:
+            user_id = int(user_id)
+        except (TypeError, ValueError):
+            return jsonify({"error": "Invalid staff member."}), 400
+    if not client_service.set_sales_rep(client_id, user_id):
+        return jsonify({"error": "Client not found or staff member not active."}), 404
     return jsonify({"ok": True})

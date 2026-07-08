@@ -1,10 +1,22 @@
 import re
-from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
-from flask_login import login_required
+from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, abort
+from flask_login import login_required, current_user
 from ..services import invoice_service, client_service, product_service
-from ..services.auth_service import permission_required
+from ..services.auth_service import permission_required, get_scoped_client_ids
 
 bp = Blueprint("invoices", __name__, url_prefix="/invoices")
+
+
+def _scope():
+    """Client ids the current user may see, or None for unrestricted."""
+    return get_scoped_client_ids(current_user)
+
+
+def _guard_invoice(invoice):
+    """403 when a row-scoped (sales) user reaches for an out-of-scope invoice."""
+    scope = _scope()
+    if scope is not None and (not invoice or invoice["client_id"] not in scope):
+        abort(403)
 
 
 def _build_product_choices():
@@ -81,6 +93,9 @@ def _parse_items(form):
 @bp.route("/api/client-companies/<int:client_id>")
 @login_required
 def api_client_companies(client_id):
+    scope = _scope()
+    if scope is not None and client_id not in scope:
+        abort(403)
     companies = client_service.get_companies(client_id)
     return jsonify([{"id": c["id"], "name": c["name"]} for c in companies])
 
@@ -106,6 +121,9 @@ def api_stock_refresh():
 @permission_required("invoices", "view")
 def list_invoices():
     invoices = invoice_service.get_all_invoices()
+    scope = _scope()
+    if scope is not None:
+        invoices = [i for i in invoices if i["client_id"] in scope]
     return render_template("invoices/list.html", invoices=invoices)
 
 
@@ -114,6 +132,9 @@ def list_invoices():
 @permission_required("invoices", "create")
 def new_invoice():
     clients        = client_service.get_all_clients()
+    scope = _scope()
+    if scope is not None:
+        clients = [c for c in clients if c["id"] in scope]
     products       = _build_product_choices()
     all_companies  = client_service.get_all_companies_with_client()
     locked_clients = client_service.get_locked_clients()
@@ -123,6 +144,8 @@ def new_invoice():
         if not data.get("client_id"):
             flash("Please select a client.", "error")
             return render_template("invoices/form.html", invoice=data, items=[], clients=clients, products=products, all_companies=all_companies, locked_clients=locked_clients, action="new")
+        if scope is not None and int(data["client_id"]) not in scope:
+            abort(403)
         if not items:
             flash("Add at least one line item.", "error")
             return render_template("invoices/form.html", invoice=data, items=[], clients=clients, products=products, all_companies=all_companies, locked_clients=locked_clients, action="new")
@@ -144,6 +167,7 @@ def detail(invoice_id):
     if not invoice:
         flash("Invoice not found.", "error")
         return redirect(url_for("invoices.list_invoices"))
+    _guard_invoice(invoice)
     items = invoice_service.get_invoice_items(invoice_id)
     payments = invoice_service.get_invoice_payments(invoice_id)
     stock_status = (invoice_service.check_stock_for_issue(invoice_id)
@@ -189,7 +213,11 @@ def edit_invoice(invoice_id):
     if not invoice:
         flash("Invoice not found.", "error")
         return redirect(url_for("invoices.list_invoices"))
+    _guard_invoice(invoice)
+    scope = _scope()
     clients        = client_service.get_all_clients()
+    if scope is not None:
+        clients = [c for c in clients if c["id"] in scope]
     products       = _build_product_choices()
     all_companies  = client_service.get_all_companies_with_client()
     locked_clients = client_service.get_locked_clients()
@@ -204,6 +232,8 @@ def edit_invoice(invoice_id):
             flash("Add at least one line item.", "error")
             existing_items = invoice_service.get_invoice_items(invoice_id)
             return render_template("invoices/form.html", invoice=data, items=existing_items, clients=clients, products=products, all_companies=all_companies, locked_clients=locked_clients, action="edit", invoice_id=invoice_id)
+        if scope is not None and int(data["client_id"]) not in scope:
+            abort(403)
         ok, errors = invoice_service.update_invoice(invoice_id, data, items)
         if not ok:
             for e in errors:
@@ -227,6 +257,7 @@ def edit_invoice(invoice_id):
 @login_required
 @permission_required("invoices", "edit")
 def update_status(invoice_id):
+    _guard_invoice(invoice_service.get_invoice(invoice_id))
     status = request.form.get("status")
     valid = {"draft", "issued", "paid", "cancelled", "partial"}
     if status not in valid:
@@ -253,6 +284,7 @@ def update_status(invoice_id):
 @login_required
 @permission_required("invoices", "delete")
 def delete_invoice(invoice_id):
+    _guard_invoice(invoice_service.get_invoice(invoice_id))
     invoice_service.delete_invoice(invoice_id)
     flash("Invoice deleted.", "success")
     return redirect(url_for("invoices.list_invoices"))

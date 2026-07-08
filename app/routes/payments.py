@@ -1,9 +1,14 @@
-from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
-from flask_login import login_required
+from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, abort
+from flask_login import login_required, current_user
 from ..services import payment_service, invoice_service, client_service
-from ..services.auth_service import permission_required
+from ..services.auth_service import permission_required, get_scoped_client_ids
 
 bp = Blueprint("payments", __name__, url_prefix="/payments")
+
+
+def _scope():
+    """Client ids the current user may see, or None for unrestricted."""
+    return get_scoped_client_ids(current_user)
 
 
 @bp.route("/")
@@ -11,6 +16,9 @@ bp = Blueprint("payments", __name__, url_prefix="/payments")
 @permission_required("payments", "view")
 def list_payments():
     payments = payment_service.get_all_payments()
+    scope = _scope()
+    if scope is not None:
+        payments = [p for p in payments if p["client_id"] in scope]
     return render_template("payments/list.html", payments=payments)
 
 
@@ -18,9 +26,14 @@ def list_payments():
 @login_required
 @permission_required("payments", "create")
 def new_payment():
+    scope = _scope()
     clients       = client_service.get_all_clients_with_companies()
     invoices      = invoice_service.get_all_invoices()
     all_companies = client_service.get_all_companies_with_client()
+    if scope is not None:
+        clients       = [c for c in clients if c["id"] in scope]
+        invoices      = [i for i in invoices if i["client_id"] in scope]
+        all_companies = [co for co in all_companies if co["client_id"] in scope]
 
     # Pre-fill from query string (e.g. coming from invoice detail)
     prefill = {}
@@ -43,6 +56,8 @@ def new_payment():
             flash("Client and amount are required.", "error")
             return render_template("payments/form.html",
                                    clients=clients, invoices=invoices, all_companies=all_companies, prefill=data)
+        if scope is not None and int(data["client_id"]) not in scope:
+            abort(403)
         try:
             payment_service.create_payment(data)
             flash("Payment recorded and allocated.", "success")
@@ -68,6 +83,9 @@ def toggle_opening_balance(payment_id):
     if not p:
         flash("Payment not found.", "error")
         return redirect(url_for("payments.list_payments"))
+    scope = _scope()
+    if scope is not None and p["client_id"] not in scope:
+        abort(403)
     new_flag = 0 if (p["is_opening_balance"] or 0) else 1
     payment_service.set_payment_opening_balance(payment_id, new_flag)
     flash(
@@ -82,6 +100,11 @@ def toggle_opening_balance(payment_id):
 @login_required
 @permission_required("payments", "delete")
 def delete_payment(payment_id):
+    scope = _scope()
+    if scope is not None:
+        p = payment_service.get_payment(payment_id)
+        if p and p["client_id"] not in scope:
+            abort(403)
     allocs = payment_service.get_payment_allocations(payment_id)
     first_invoice = allocs[0]["invoice_id"] if allocs else None
     payment_service.delete_payment(payment_id)
@@ -96,6 +119,9 @@ def delete_payment(payment_id):
 @login_required
 @permission_required("payments", "view")
 def api_client_companies(client_id):
+    scope = _scope()
+    if scope is not None and client_id not in scope:
+        abort(403)
     companies = client_service.get_companies(client_id)
     return jsonify([{"id": c["id"], "name": c["name"]} for c in companies])
 
@@ -105,6 +131,9 @@ def api_client_companies(client_id):
 @login_required
 @permission_required("payments", "view")
 def api_client_invoices(client_id):
+    scope = _scope()
+    if scope is not None and client_id not in scope:
+        abort(403)
     invoices = invoice_service.get_all_invoices()
     client_invs = [
         {
@@ -129,7 +158,10 @@ def import_payments():
     import io, xlrd
     from datetime import datetime
 
+    scope = _scope()
     clients = client_service.get_all_clients()
+    if scope is not None:
+        clients = [c for c in clients if c["id"] in scope]
 
     if request.method == "POST" and "statement" in request.files:
         f = request.files["statement"]
@@ -195,6 +227,8 @@ def import_payments():
             idx = key.split("_", 1)[1]
             client_id = val.strip()
             if not client_id:
+                continue
+            if scope is not None and int(client_id) not in scope:
                 continue
             amount    = request.form.get(f"amount_{idx}", "0")
             date      = request.form.get(f"date_{idx}", "")

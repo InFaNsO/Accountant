@@ -3,6 +3,8 @@ from flask_login import login_required, current_user
 from ..services.payment_service import get_dashboard_stats
 from ..services.product_service import get_stock_alerts
 from ..services.transit_service import get_dispatches_due_soon
+from ..services import sales_service
+from ..services.auth_service import get_scoped_client_ids, get_manager_staff
 from datetime import date, timedelta
 
 bp = Blueprint("dashboard", __name__)
@@ -78,6 +80,24 @@ def index():
     d_from, d_to = resolve_window(window, custom_from, custom_to)
     date_from = d_from.isoformat() if d_from else None
     date_to   = d_to.isoformat()   if d_to   else None
+
+    # ── Sales-manager dashboard: scoped to their team's clients ─────────────
+    if getattr(current_user, "role", None) == "sales":
+        client_ids = get_scoped_client_ids(current_user)
+        staff      = [dict(u) for u in get_manager_staff(current_user.id)]
+        stats      = sales_service.get_scoped_stats(client_ids, date_from, date_to)
+        team       = sales_service.get_team_breakdown(staff, date_from, date_to)
+        return render_template(
+            "dashboard_sales.html",
+            stats=stats,
+            team=team,
+            window=window,
+            window_label=WINDOW_LABELS.get(window, "Custom Range"),
+            date_from=date_from or "",
+            date_to=date_to or "",
+            custom_from=custom_from,
+            custom_to=custom_to,
+        )
 
     dash_sections = current_user.get_dashboard_sections()
     stats         = get_dashboard_stats(date_from=date_from, date_to=date_to)
