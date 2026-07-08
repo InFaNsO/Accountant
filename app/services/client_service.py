@@ -111,17 +111,29 @@ def get_client(client_id):
     ).fetchone()
 
 
+def _parse_lock_fields(data):
+    """Lock settings from a form/JSON dict. Checkboxes are absent when unchecked."""
+    return (
+        1 if data.get("tally_lock") else 0,
+        1 if data.get("balance_lock_enabled") else 0,
+        max(0.0, float(data.get("balance_lock_limit") or 0)),
+    )
+
+
 def create_client(data, companies=None):
     """Create a client. If companies list provided, create them and derive OB from their sum."""
     db = get_db()
+    tally_lock, bl_enabled, bl_limit = _parse_lock_fields(data)
     cur = db.execute(
-        """INSERT INTO clients (name, phone, notes, opening_balance, payment_terms)
-           VALUES (?, ?, ?, 0, ?)""",
+        """INSERT INTO clients (name, phone, notes, opening_balance, payment_terms,
+                                tally_lock, balance_lock_enabled, balance_lock_limit)
+           VALUES (?, ?, ?, 0, ?, ?, ?, ?)""",
         (
             data["name"],
             data.get("phone"),
             data.get("notes"),
             int(data.get("payment_terms") or 30),
+            tally_lock, bl_enabled, bl_limit,
         ),
     )
     client_id = cur.lastrowid
@@ -165,16 +177,19 @@ def _sync_client_ob(db, client_id):
 def update_client(client_id, data, companies=None):
     """Update a client's basic info. If companies list provided, sync company records."""
     db = get_db()
+    tally_lock, bl_enabled, bl_limit = _parse_lock_fields(data)
     db.execute(
         """UPDATE clients
            SET name=?, phone=?, notes=?,
-               payment_terms=?, updated_at=CURRENT_TIMESTAMP
+               payment_terms=?, tally_lock=?, balance_lock_enabled=?,
+               balance_lock_limit=?, updated_at=CURRENT_TIMESTAMP
            WHERE id=?""",
         (
             data["name"],
             data.get("phone"),
             data.get("notes"),
             int(data.get("payment_terms") or 30),
+            tally_lock, bl_enabled, bl_limit,
             client_id,
         ),
     )
@@ -396,6 +411,140 @@ def get_client_balance(client_id):
     ).fetchone()["s"])
 
     return (total_paid + credit_ob) - (total_invoiced + debit_ob)
+
+
+def _fmt_inr(amount):
+    """₹ with Indian digit grouping (12,34,567)."""
+    amount = float(amount or 0)
+    sign = "-" if amount < 0 else ""
+    whole = int(abs(amount))
+    s = str(whole)
+    if len(s) > 3:
+        head, tail = s[:-3], s[-3:]
+        parts = []
+        while len(head) > 2:
+            parts.insert(0, head[-2:])
+            head = head[:-2]
+        if head:
+            parts.insert(0, head)
+        s = ",".join(parts) + "," + tail
+    return f"{sign}₹{s}"
+
+
+def get_client_lock_status(client_id):
+    """Effective invoice-issue lock for a client. While locked, drafts can still be
+    created but nothing can be issued.
+
+    Two independent locks, either one locks the client:
+      - tally_lock: manual on/off toggle.
+      - balance lock: engages while outstanding debt exceeds balance_lock_limit.
+        Computed live (never stored), so it releases on its own the moment the
+        balance drops back under the limit.
+
+    Debt here counts issued invoices only — drafts are excluded, since drafts are
+    exactly what the lock still permits and have no real balance impact.
+
+    Returns dict: locked, tally_lock, balance_lock, balance_lock_enabled,
+    balance_lock_limit, debt, reasons (human-readable strings, empty if unlocked).
+    """
+    db = get_db()
+    row = db.execute(
+        "SELECT tally_lock, balance_lock_enabled, balance_lock_limit, opening_balance "
+        "FROM clients WHERE id=?",
+        (client_id,),
+    ).fetchone()
+    if not row:
+        return {"locked": False, "tally_lock": False, "balance_lock": False,
+                "balance_lock_enabled": False, "balance_lock_limit": 0.0,
+                "debt": 0.0, "reasons": []}
+
+    tally_lock = bool(row["tally_lock"])
+    bl_enabled = bool(row["balance_lock_enabled"])
+    bl_limit   = float(row["balance_lock_limit"] or 0)
+
+    ob = float(row["opening_balance"] or 0)
+    total_invoiced = float(db.execute(
+        "SELECT COALESCE(SUM(total), 0) AS s FROM invoices "
+        "WHERE client_id=? AND status NOT IN ('cancelled', 'draft')",
+        (client_id,),
+    ).fetchone()["s"])
+    total_paid = float(db.execute(
+        "SELECT COALESCE(SUM(amount), 0) AS s FROM payments WHERE client_id=?",
+        (client_id,),
+    ).fetchone()["s"])
+    debt = max(0.0, (total_invoiced + ob) - total_paid)
+
+    balance_lock = bl_enabled and bl_limit > 0 and debt > bl_limit
+
+    reasons = []
+    if tally_lock:
+        reasons.append("tally lock is on")
+    if balance_lock:
+        reasons.append(
+            f"outstanding balance {_fmt_inr(debt)} exceeds the "
+            f"{_fmt_inr(bl_limit)} debt limit"
+        )
+
+    return {
+        "locked": tally_lock or balance_lock,
+        "tally_lock": tally_lock,
+        "balance_lock": balance_lock,
+        "balance_lock_enabled": bl_enabled,
+        "balance_lock_limit": bl_limit,
+        "debt": debt,
+        "reasons": reasons,
+    }
+
+
+def get_locked_clients():
+    """{client_id: [reasons]} for every currently-locked client, in one query.
+    Same semantics as get_client_lock_status (drafts excluded from debt)."""
+    db = get_db()
+    rows = db.execute("""
+        SELECT c.id, c.tally_lock, c.balance_lock_enabled, c.balance_lock_limit,
+               c.opening_balance,
+               COALESCE(i.s, 0) AS invoiced, COALESCE(p.s, 0) AS paid
+        FROM clients c
+        LEFT JOIN (SELECT client_id, SUM(total) AS s FROM invoices
+                   WHERE status NOT IN ('cancelled', 'draft')
+                   GROUP BY client_id) i ON i.client_id = c.id
+        LEFT JOIN (SELECT client_id, SUM(amount) AS s FROM payments
+                   GROUP BY client_id) p ON p.client_id = c.id
+        WHERE c.tally_lock = 1
+           OR (c.balance_lock_enabled = 1 AND c.balance_lock_limit > 0)
+    """).fetchall()
+    locked = {}
+    for r in rows:
+        reasons = []
+        if r["tally_lock"]:
+            reasons.append("tally lock is on")
+        debt = max(0.0, (float(r["invoiced"]) + float(r["opening_balance"] or 0))
+                        - float(r["paid"]))
+        limit = float(r["balance_lock_limit"] or 0)
+        if r["balance_lock_enabled"] and limit > 0 and debt > limit:
+            reasons.append(f"outstanding balance {_fmt_inr(debt)} exceeds the "
+                           f"{_fmt_inr(limit)} debt limit")
+        if reasons:
+            locked[r["id"]] = reasons
+    return locked
+
+
+def set_lock_settings(client_id, tally_lock=None, balance_lock_enabled=None,
+                      balance_lock_limit=None):
+    """Update only the lock settings; None means leave unchanged."""
+    db = get_db()
+    sets, args = [], []
+    if tally_lock is not None:
+        sets.append("tally_lock=?");           args.append(1 if tally_lock else 0)
+    if balance_lock_enabled is not None:
+        sets.append("balance_lock_enabled=?"); args.append(1 if balance_lock_enabled else 0)
+    if balance_lock_limit is not None:
+        sets.append("balance_lock_limit=?");   args.append(max(0.0, float(balance_lock_limit or 0)))
+    if not sets:
+        return
+    args.append(client_id)
+    db.execute(f"UPDATE clients SET {', '.join(sets)}, updated_at=CURRENT_TIMESTAMP WHERE id=?", args)
+    db.commit()
 
 
 # ── Client companies ──────────────────────────────────────────────────────────

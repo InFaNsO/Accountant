@@ -334,6 +334,14 @@ def get_client_details(client_id):
     ]
     if ob != 0:
         lines.append(f"Opening:  {_inr(abs(ob))} ({'debt' if ob > 0 else 'credit'})")
+    from ..services.client_service import get_client_lock_status
+    lock = get_client_lock_status(client_id)
+    if lock["locked"]:
+        lines.append(f"Lock:     🔒 LOCKED — {'; '.join(lock['reasons'])}. "
+                     "Drafts allowed; invoices cannot be issued.")
+    elif lock["balance_lock_enabled"]:
+        lines.append(f"Lock:     unlocked — balance lock armed "
+                     f"(auto-locks over {_inr(lock['balance_lock_limit'])} debt)")
     # Companies
     companies = db.execute(
         "SELECT id, name, tax_id, opening_balance FROM client_companies WHERE client_id=? ORDER BY name",
@@ -609,6 +617,20 @@ def update_client(client_id):
          data.get("address") or None, data.get("city") or None, data.get("country") or None,
          data.get("tax_id") or None, data.get("notes") or None, ob, client_id),
     )
+    # Invoice-lock settings: only touch fields explicitly provided (None = unchanged)
+    lock_msgs = []
+    if data.get("tally_lock") is not None:
+        db.execute("UPDATE clients SET tally_lock=? WHERE id=?",
+                   (1 if data["tally_lock"] else 0, client_id))
+        lock_msgs.append(f"tally lock {'ON' if data['tally_lock'] else 'off'}")
+    if data.get("balance_lock_enabled") is not None:
+        db.execute("UPDATE clients SET balance_lock_enabled=? WHERE id=?",
+                   (1 if data["balance_lock_enabled"] else 0, client_id))
+        lock_msgs.append(f"balance lock {'ON' if data['balance_lock_enabled'] else 'off'}")
+    if data.get("balance_lock_limit") is not None:
+        db.execute("UPDATE clients SET balance_lock_limit=? WHERE id=?",
+                   (max(0.0, _f(data["balance_lock_limit"])), client_id))
+        lock_msgs.append(f"debt limit {_inr(max(0.0, _f(data['balance_lock_limit'])))}")
     # Update companies if provided
     companies = data.get("companies")
     co_msgs = []
@@ -635,9 +657,68 @@ def update_client(client_id):
                 co_msgs.append(f"added '{co_name}'")
     db.commit()
     msg = f"✓ Client ID {client_id} ('{name}') updated."
+    if lock_msgs:
+        msg += f" Locks: {', '.join(lock_msgs)}."
     if co_msgs:
         msg += f" Companies: {', '.join(co_msgs)}."
     return jsonify({"result": msg})
+
+
+def _lock_status_lines(client_id, name):
+    from ..services.client_service import get_client_lock_status
+    lock = get_client_lock_status(client_id)
+    lines = [f"Lock status for '{name}' (ID {client_id}):"]
+    if lock["locked"]:
+        lines.append(f"  Status:       🔒 LOCKED — {'; '.join(lock['reasons'])}.")
+        lines.append("                Drafts allowed; invoices cannot be issued.")
+    else:
+        lines.append("  Status:       Unlocked — invoices can be issued.")
+    lines.append(f"  Tally lock:   {'ON' if lock['tally_lock'] else 'off'}")
+    if lock["balance_lock_enabled"]:
+        state = "TRIGGERED" if lock["balance_lock"] else "armed"
+        limit = (_inr(lock["balance_lock_limit"]) if lock["balance_lock_limit"] > 0
+                 else "no limit set — inactive")
+        lines.append(f"  Balance lock: enabled ({state}) | max debt: {limit}")
+    else:
+        lines.append("  Balance lock: off")
+    lines.append(f"  Outstanding:  {_inr(lock['debt'])} (issued invoices only, drafts excluded)")
+    return lines
+
+
+@bp.route("/clients/<int:client_id>/locks")
+@require_auth
+def get_client_locks(client_id):
+    db = get_db()
+    c = db.execute("SELECT name FROM clients WHERE id=?", (client_id,)).fetchone()
+    if not c:
+        return jsonify({"error": f"Client ID {client_id} not found."}), 404
+    return jsonify({"result": "\n".join(_lock_status_lines(client_id, c["name"]))})
+
+
+@bp.route("/clients/<int:client_id>/locks", methods=["PUT"])
+@require_auth
+def set_client_locks(client_id):
+    data = _jb()
+    db = get_db()
+    c = db.execute("SELECT name FROM clients WHERE id=?", (client_id,)).fetchone()
+    if not c:
+        return jsonify({"error": f"Client ID {client_id} not found."}), 404
+    if all(data.get(k) is None for k in
+           ("tally_lock", "balance_lock_enabled", "balance_lock_limit")):
+        return jsonify({"error": "Nothing to change — provide tally_lock, "
+                                 "balance_lock_enabled and/or balance_lock_limit."}), 400
+    limit = data.get("balance_lock_limit")
+    if limit is not None and _f(limit) < 0:
+        return jsonify({"error": "balance_lock_limit cannot be negative."}), 400
+    from ..services.client_service import set_lock_settings
+    set_lock_settings(
+        client_id,
+        tally_lock=data.get("tally_lock"),
+        balance_lock_enabled=data.get("balance_lock_enabled"),
+        balance_lock_limit=limit,
+    )
+    return jsonify({"result": "✓ Lock settings updated.\n"
+                              + "\n".join(_lock_status_lines(client_id, c["name"]))})
 
 
 @bp.route("/clients/<int:client_id>", methods=["DELETE"])
@@ -908,6 +989,17 @@ def create_invoice():
     if not client:
         return jsonify({"error": f"Client ID {client_id} not found."}), 404
 
+    # Locked clients can still get drafts, never a direct issue — demote and say so.
+    lock_note = ""
+    if status != "draft":
+        from ..services.client_service import get_client_lock_status
+        lock = get_client_lock_status(int(client_id))
+        if lock["locked"]:
+            status = "draft"
+            lock_note = ("\n  ⚠ Client is locked (" + "; ".join(lock["reasons"])
+                         + ") — saved as a DRAFT instead of issuing. "
+                         "Issue it once the lock clears.")
+
     subtotal = sum(_f(it.get("unit_price")) * _f(it.get("quantity", 1)) for it in items)
     tax_total = sum(
         _f(it.get("unit_price")) * _f(it.get("quantity", 1)) * _f(it.get("tax_rate", 0)) / 100
@@ -962,6 +1054,7 @@ def create_invoice():
     return jsonify({"result": (
         f"✓ Invoice {invoice_number} (ID: {invoice_id}) created for {client['name']}.\n"
         f"  Subtotal: {_inr(subtotal)} | Tax: {_inr(tax_total)} | Discount: {_inr(discount_amount)} | Total: {_inr(total)}"
+        + lock_note
     )})
 
 
@@ -982,8 +1075,15 @@ def update_invoice_status(invoice_id):
         return jsonify({"error": f"Invoice ID {invoice_id} not found."}), 404
     prev = inv["status"]
 
-    # Draft → Issued: check warehouse stock first
+    # Draft → Issued: check client lock, then warehouse stock
     if prev == "draft" and status == "issued":
+        from ..services.client_service import get_client_lock_status
+        lock = get_client_lock_status(inv["client_id"])
+        if lock["locked"]:
+            return jsonify({"error": (
+                "Cannot issue — client is locked (" + "; ".join(lock["reasons"]) + "). "
+                "The invoice stays a draft until the lock clears."
+            )}), 423
         items = db.execute(
             """SELECT ii.description, ii.quantity, ii.product_id, ii.sub_product_id,
                       p.name AS product_name, sp.name AS sub_name

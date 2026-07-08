@@ -31,7 +31,9 @@
   <form method="post" action="{{ url_for('invoices.update_status', invoice_id=invoice.id) }}" id="issueForm">
     <input type="hidden" name="status" value="issued">
     <button class="btn btn-primary" id="issueBtn"
-            {% if not _all_ok %}disabled title="Cannot issue: some items are short on stock. Resolve before issuing."
+            {% if client_lock.locked %}disabled title="Cannot issue: client is locked ({{ client_lock.reasons | join('; ') }})."
+                              style="opacity:.55;cursor:not-allowed"
+            {% elif not _all_ok %}disabled title="Cannot issue: some items are short on stock. Resolve before issuing."
                               style="opacity:.55;cursor:not-allowed"{% endif %}>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
       Issue Invoice
@@ -51,6 +53,15 @@
 {% endblock %}
 
 {% block content %}
+
+{% if invoice.status == 'draft' and client_lock.locked %}
+<div style="margin-bottom:18px;padding:12px 16px;border-radius:var(--radius);
+     background:var(--danger-light);border:1px solid var(--danger);color:#991B1B;font-size:13.5px;line-height:1.5">
+  🔒 <strong>{{ invoice.client_name }}</strong> is locked — {{ client_lock.reasons | join('; ') }}.
+  This draft cannot be issued until the lock is removed.
+  <a href="{{ url_for('clients.detail', client_id=invoice.client_id) }}" style="color:#991B1B;font-weight:600">View client →</a>
+</div>
+{% endif %}
 
 <!-- Status bar -->
 <div class="card" style="margin-bottom:18px">

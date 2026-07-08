@@ -230,6 +230,13 @@ def _compute_totals(items, invoice_discount_value, invoice_discount_type):
 def create_invoice(data, items):
     db = get_db()
     is_draft = data.get("status", "issued") == "draft"
+    # A locked client can still get drafts, never a direct issue — demote silently;
+    # callers that want to warn the user pre-check get_client_lock_status themselves.
+    if not is_draft:
+        from .client_service import get_client_lock_status
+        if get_client_lock_status(int(data["client_id"]))["locked"]:
+            is_draft = True
+            data = {**data, "status": "draft"}
     invoice_number = _next_draft_number(db) if is_draft else _next_invoice_number(db)
 
     inv_dtype = (data.get("discount_type") or "value").lower()
@@ -307,8 +314,12 @@ def update_invoice_status(invoice_id, status):
         return True, []
     prev_status = inv["status"]
 
-    # Draft → Issued: check stock first, then apply deductions + OB credit
+    # Draft → Issued: check client lock + stock first, then apply deductions + OB credit
     if prev_status == "draft" and status == "issued":
+        from .client_service import get_client_lock_status
+        lock = get_client_lock_status(inv["client_id"])
+        if lock["locked"]:
+            return False, [{"type": "locked", "reasons": lock["reasons"]}]
         stock_items = check_stock_for_issue(invoice_id)
         short = [s for s in stock_items if not s["sufficient"]]
         if short:

@@ -190,6 +190,67 @@
   <!-- Right: balance + summary + companies -->
   <div style="display:flex;flex-direction:column;gap:22px">
 
+    <!-- Invoice locks -->
+    <div class="card" {% if lock.locked %}style="border:1px solid var(--danger)"{% endif %}>
+      <div class="card-header">
+        <span class="card-title">Invoice Lock</span>
+        {% if lock.locked %}
+        <span class="badge" style="margin-left:auto;background:var(--danger-light);color:#991B1B;font-weight:700">🔒 LOCKED</span>
+        {% else %}
+        <span class="badge" style="margin-left:auto;background:var(--success-light);color:#065F46;font-weight:700">Unlocked</span>
+        {% endif %}
+      </div>
+      <div class="card-body">
+        {% if lock.locked %}
+        <p style="font-size:13px;color:var(--danger);margin:0 0 12px">
+          Drafts can be created, but invoices cannot be issued — {{ lock.reasons | join('; ') }}.
+        </p>
+        {% endif %}
+        <div class="info-list">
+          <div class="info-row">
+            <span class="info-label">Tally lock</span>
+            <span class="info-value" style="display:flex;align-items:center;gap:8px">
+              <span id="tallyLockState" style="font-weight:700;color:{{ 'var(--danger)' if lock.tally_lock else 'var(--text-muted)' }}">
+                {{ 'ON' if lock.tally_lock else 'off' }}
+              </span>
+              <button id="tallyLockBtn" class="btn btn-sm {{ 'btn-secondary' if lock.tally_lock else 'btn-danger' }}"
+                      onclick="toggleTallyLock({{ client.id }})">
+                {{ 'Unlock' if lock.tally_lock else 'Lock' }}
+              </button>
+            </span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Balance lock</span>
+            <span class="info-value">
+              {% if lock.balance_lock_enabled and lock.balance_lock_limit > 0 %}
+                {% if lock.balance_lock %}
+                <span style="color:var(--danger);font-weight:700">TRIGGERED</span>
+                {% else %}
+                <span style="color:var(--success);font-weight:600">armed</span>
+                {% endif %}
+                <span class="text-muted" style="font-size:12px">· limit {{ lock.balance_lock_limit|inr }}</span>
+              {% elif lock.balance_lock_enabled %}
+                <span class="text-muted">enabled, no limit set</span>
+              {% else %}
+                <span class="text-muted">off</span>
+              {% endif %}
+            </span>
+          </div>
+          {% if can_financials and lock.balance_lock_enabled and lock.balance_lock_limit > 0 %}
+          <div class="info-row">
+            <span class="info-label">Debt vs limit</span>
+            <span class="info-value" style="font-weight:600;color:{{ 'var(--danger)' if lock.balance_lock else 'var(--text-primary)' }}">
+              {{ lock.debt|inr }} / {{ lock.balance_lock_limit|inr }}
+            </span>
+          </div>
+          {% endif %}
+        </div>
+        <div style="margin-top:10px;font-size:11.5px;color:var(--text-muted)">
+          Configure locks in <a href="{{ url_for('clients.edit_client', client_id=client.id) }}" style="color:var(--accent)">client settings</a>.
+        </div>
+      </div>
+    </div>
+
     {% if can_financials %}
     <div class="card">
       <div class="card-header">
@@ -403,6 +464,20 @@ function showCompanyLedger(clientId, companyId, companyName) {
     .catch(() => {
       bodyEl.innerHTML = '<tr><td colspan="5" style="padding:20px;text-align:center;color:var(--danger)">Failed to load ledger.</td></tr>';
     });
+}
+
+async function toggleTallyLock(clientId) {
+  const btn = document.getElementById('tallyLockBtn');
+  btn.disabled = true;
+  try {
+    const res  = await fetch(`/clients/${clientId}/tally-lock`, { method: 'POST' });
+    const data = await res.json();
+    if (data.ok) { location.reload(); return; }
+    alert(data.error || 'Failed to toggle tally lock.');
+  } catch (e) {
+    alert('Error: ' + e);
+  }
+  btn.disabled = false;
 }
 
 async function recalculateBalance(clientId) {

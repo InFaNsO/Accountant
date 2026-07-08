@@ -42,6 +42,54 @@
       </div>
     </div>
 
+    <!-- Invoice Locks -->
+    <div class="card" style="margin-bottom:18px">
+      <div class="card-header">
+        <span class="card-title">Invoice Locks</span>
+        <span style="font-size:12px;color:var(--text-muted);margin-left:10px">While locked: drafts allowed, issuing blocked</span>
+      </div>
+      <div class="card-body">
+        <div style="display:flex;flex-direction:column;gap:16px">
+
+          <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer">
+            <input type="checkbox" name="tally_lock" style="margin-top:3px;width:16px;height:16px;accent-color:var(--danger)"
+                   {{ 'checked' if client.get('tally_lock') }}>
+            <span>
+              <span style="font-weight:600;font-size:13.5px">Tally lock</span>
+              <span style="display:block;font-size:12px;color:var(--text-muted)">
+                Manual lock — stays on until you switch it off here (or from the client page).
+              </span>
+            </span>
+          </label>
+
+          <div style="height:1px;background:var(--border)"></div>
+
+          <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer">
+            <input type="checkbox" id="balance_lock_enabled" name="balance_lock_enabled"
+                   style="margin-top:3px;width:16px;height:16px;accent-color:var(--danger)"
+                   onchange="document.getElementById('balanceLimitGroup').style.opacity = this.checked ? '1' : '.55'"
+                   {{ 'checked' if client.get('balance_lock_enabled') }}>
+            <span>
+              <span style="font-weight:600;font-size:13.5px">Balance lock</span>
+              <span style="display:block;font-size:12px;color:var(--text-muted)">
+                Locks automatically while outstanding debt is above the limit; unlocks on its own once it drops back under.
+              </span>
+            </span>
+          </label>
+
+          <div class="form-group" id="balanceLimitGroup"
+               style="max-width:280px;margin-left:26px;opacity:{{ '1' if client.get('balance_lock_enabled') else '.55' }}">
+            <label for="balance_lock_limit" style="font-size:13px">Maximum debt (₹)</label>
+            <input type="number" id="balance_lock_limit" name="balance_lock_limit"
+                   value="{{ '%.2f'|format(client.get('balance_lock_limit') or 0) }}"
+                   min="0" step="0.01" placeholder="e.g. 50000">
+            <span style="font-size:11.5px;color:var(--text-muted)">Used only while the balance lock is enabled.</span>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
     <!-- Company Details -->
     <div class="card" style="margin-bottom:18px">
       <div class="card-header">

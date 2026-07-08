@@ -382,6 +382,10 @@ def _create_schema(db):
         CREATE INDEX IF NOT EXISTS idx_pa_payment ON payment_allocations(payment_id);
         CREATE INDEX IF NOT EXISTS idx_pa_invoice ON payment_allocations(invoice_id);
     """)
+    # The migration below groups payments by company_id; on a fresh database that
+    # column doesn't exist yet (it's normally added with the column migrations at
+    # the bottom of this function). Idempotent, so the later call is a no-op.
+    _add_column(db, "payments", "company_id", "INTEGER")
     _migrate_payment_allocations(db)
 
     # ── Manual ledger entries ─────────────────────────────────
@@ -533,5 +537,12 @@ def _create_schema(db):
     # Palm purchases can be saved as a draft (no stock-in until activated). Existing
     # rows default to 'active' so historical purchases keep their applied stock.
     _add_column(db, "palm_purchases",          "status",             "TEXT DEFAULT 'active'")
+    # Invoice locks: while locked, drafts can be created but not issued.
+    # tally_lock is a manual toggle; the balance lock engages automatically while
+    # the client's outstanding debt exceeds balance_lock_limit (computed live,
+    # never stored, so it releases on its own once the balance drops back).
+    _add_column(db, "clients",                 "tally_lock",           "INTEGER DEFAULT 0")
+    _add_column(db, "clients",                 "balance_lock_enabled", "INTEGER DEFAULT 0")
+    _add_column(db, "clients",                 "balance_lock_limit",   "REAL DEFAULT 0")
 
     db.commit()

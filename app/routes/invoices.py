@@ -113,22 +113,27 @@ def list_invoices():
 @login_required
 @permission_required("invoices", "create")
 def new_invoice():
-    clients       = client_service.get_all_clients()
-    products      = _build_product_choices()
-    all_companies = client_service.get_all_companies_with_client()
+    clients        = client_service.get_all_clients()
+    products       = _build_product_choices()
+    all_companies  = client_service.get_all_companies_with_client()
+    locked_clients = client_service.get_locked_clients()
     if request.method == "POST":
         data = request.form.to_dict()
         items = _parse_items(request.form)
         if not data.get("client_id"):
             flash("Please select a client.", "error")
-            return render_template("invoices/form.html", invoice=data, items=[], clients=clients, products=products, all_companies=all_companies, action="new")
+            return render_template("invoices/form.html", invoice=data, items=[], clients=clients, products=products, all_companies=all_companies, locked_clients=locked_clients, action="new")
         if not items:
             flash("Add at least one line item.", "error")
-            return render_template("invoices/form.html", invoice=data, items=[], clients=clients, products=products, all_companies=all_companies, action="new")
+            return render_template("invoices/form.html", invoice=data, items=[], clients=clients, products=products, all_companies=all_companies, locked_clients=locked_clients, action="new")
+        lock = client_service.get_client_lock_status(int(data["client_id"]))
+        if lock["locked"] and data.get("status", "issued") != "draft":
+            flash("Client is locked (" + "; ".join(lock["reasons"]) + ") — "
+                  "invoice saved as a draft. Issue it once the lock clears.", "info")
         invoice_id = invoice_service.create_invoice(data, items)
         flash("Invoice created successfully.", "success")
         return redirect(url_for("invoices.detail", invoice_id=invoice_id))
-    return render_template("invoices/form.html", invoice={}, items=[], clients=clients, products=products, all_companies=all_companies, action="new")
+    return render_template("invoices/form.html", invoice={}, items=[], clients=clients, products=products, all_companies=all_companies, locked_clients=locked_clients, action="new")
 
 
 @bp.route("/<int:invoice_id>")
@@ -167,9 +172,13 @@ def detail(invoice_id):
                 ppc = 0
         item_ppc[it["id"]] = ppc
     prev_id, next_id = invoice_service.get_adjacent_invoices(invoice_id)
+    client_lock = (client_service.get_client_lock_status(invoice["client_id"])
+                   if invoice["status"] == "draft"
+                   else {"locked": False, "reasons": []})
     return render_template("invoices/detail.html", invoice=invoice, items=items,
                            payments=payments, stock_status=stock_status,
-                           item_ppc=item_ppc, prev_id=prev_id, next_id=next_id)
+                           item_ppc=item_ppc, prev_id=prev_id, next_id=next_id,
+                           client_lock=client_lock)
 
 
 @bp.route("/<int:invoice_id>/edit", methods=["GET", "POST"])
@@ -180,33 +189,38 @@ def edit_invoice(invoice_id):
     if not invoice:
         flash("Invoice not found.", "error")
         return redirect(url_for("invoices.list_invoices"))
-    clients       = client_service.get_all_clients()
-    products      = _build_product_choices()
-    all_companies = client_service.get_all_companies_with_client()
+    clients        = client_service.get_all_clients()
+    products       = _build_product_choices()
+    all_companies  = client_service.get_all_companies_with_client()
+    locked_clients = client_service.get_locked_clients()
     if request.method == "POST":
         data = request.form.to_dict()
         items = _parse_items(request.form)
         if not data.get("client_id"):
             flash("Please select a client.", "error")
             existing_items = invoice_service.get_invoice_items(invoice_id)
-            return render_template("invoices/form.html", invoice=data, items=existing_items, clients=clients, products=products, all_companies=all_companies, action="edit", invoice_id=invoice_id)
+            return render_template("invoices/form.html", invoice=data, items=existing_items, clients=clients, products=products, all_companies=all_companies, locked_clients=locked_clients, action="edit", invoice_id=invoice_id)
         if not items:
             flash("Add at least one line item.", "error")
             existing_items = invoice_service.get_invoice_items(invoice_id)
-            return render_template("invoices/form.html", invoice=data, items=existing_items, clients=clients, products=products, all_companies=all_companies, action="edit", invoice_id=invoice_id)
+            return render_template("invoices/form.html", invoice=data, items=existing_items, clients=clients, products=products, all_companies=all_companies, locked_clients=locked_clients, action="edit", invoice_id=invoice_id)
         ok, errors = invoice_service.update_invoice(invoice_id, data, items)
         if not ok:
             for e in errors:
-                flash(
-                    f"Saved as draft — cannot issue: insufficient stock for '{e['name']}': "
-                    f"need {e['required']:.0f}, have {e['available']:.0f} in warehouse.",
-                    "error",
-                )
+                if e.get("type") == "locked":
+                    flash("Saved as draft — cannot issue: client is locked ("
+                          + "; ".join(e["reasons"]) + ").", "error")
+                else:
+                    flash(
+                        f"Saved as draft — cannot issue: insufficient stock for '{e['name']}': "
+                        f"need {e['required']:.0f}, have {e['available']:.0f} in warehouse.",
+                        "error",
+                    )
         else:
             flash("Invoice updated.", "success")
         return redirect(url_for("invoices.detail", invoice_id=invoice_id))
     items = invoice_service.get_invoice_items(invoice_id)
-    return render_template("invoices/form.html", invoice=dict(invoice), items=[dict(i) for i in items], clients=clients, products=products, all_companies=all_companies, action="edit", invoice_id=invoice_id)
+    return render_template("invoices/form.html", invoice=dict(invoice), items=[dict(i) for i in items], clients=clients, products=products, all_companies=all_companies, locked_clients=locked_clients, action="edit", invoice_id=invoice_id)
 
 
 @bp.route("/<int:invoice_id>/status", methods=["POST"])
@@ -221,11 +235,15 @@ def update_status(invoice_id):
     ok, errors = invoice_service.update_invoice_status(invoice_id, status)
     if not ok:
         for e in errors:
-            flash(
-                f"Cannot issue — insufficient stock for '{e['name']}': "
-                f"need {e['required']:.0f}, have {e['available']:.0f} in warehouse.",
-                "error",
-            )
+            if e.get("type") == "locked":
+                flash("Cannot issue — client is locked ("
+                      + "; ".join(e["reasons"]) + ").", "error")
+            else:
+                flash(
+                    f"Cannot issue — insufficient stock for '{e['name']}': "
+                    f"need {e['required']:.0f}, have {e['available']:.0f} in warehouse.",
+                    "error",
+                )
     else:
         flash(f"Status updated to {status}.", "success")
     return redirect(url_for("invoices.detail", invoice_id=invoice_id))

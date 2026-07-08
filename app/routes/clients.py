@@ -14,7 +14,9 @@ bp = Blueprint("clients", __name__, url_prefix="/clients")
 def list_clients():
     clients = client_service.get_all_clients_with_companies()
     can_financials = current_user.has_permission("clients", "financials")
-    return render_template("clients/list.html", clients=clients, can_financials=can_financials)
+    locked_clients = client_service.get_locked_clients()
+    return render_template("clients/list.html", clients=clients, can_financials=can_financials,
+                           locked_clients=locked_clients)
 
 
 def _parse_companies(form):
@@ -76,9 +78,10 @@ def detail(client_id):
     else:
         companies = [dict(c) for c in companies_raw]
     product_breakdown = client_service.get_client_product_breakdown(client_id)
+    lock = client_service.get_client_lock_status(client_id)
     return render_template("clients/detail.html", client=client, invoices=invoices,
                            companies=companies, balance=balance, can_financials=can_financials,
-                           product_breakdown=product_breakdown)
+                           product_breakdown=product_breakdown, lock=lock)
 
 
 @bp.route("/<int:client_id>/edit", methods=["GET", "POST"])
@@ -108,6 +111,19 @@ def edit_client(client_id):
     companies = [dict(c) for c in client_service.get_companies(client_id)]
     return render_template("clients/form.html", client=dict(client), companies=companies,
                            action="edit", client_id=client_id)
+
+
+@bp.route("/<int:client_id>/tally-lock", methods=["POST"])
+@login_required
+@permission_required("clients", "edit")
+def toggle_tally_lock(client_id):
+    """Quick on/off for the manual tally lock from the client detail page."""
+    client = client_service.get_client(client_id)
+    if not client:
+        return jsonify({"error": "Client not found."}), 404
+    new_state = 0 if client["tally_lock"] else 1
+    client_service.set_lock_settings(client_id, tally_lock=new_state)
+    return jsonify({"ok": True, "tally_lock": bool(new_state)})
 
 
 @bp.route("/<int:client_id>/ledger")

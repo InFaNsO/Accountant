@@ -149,6 +149,9 @@ def update_client(
     opening_balance_amt: float = None,
     opening_balance_type: str = None,
     companies: list = None,
+    tally_lock: bool = None,
+    balance_lock_enabled: bool = None,
+    balance_lock_limit: float = None,
 ) -> str:
     """
     Update an existing client. ONLY call after explicit user confirmation.
@@ -157,8 +160,52 @@ def update_client(
     companies: optional list of company updates. Each dict should have:
       id (int, to update existing) or omit id (to add new), plus name, tax_id, opening_balance_amt, opening_balance_type.
       Pass None to skip company changes entirely.
+    Invoice locks (None = leave unchanged). While locked, drafts are allowed but
+    invoices cannot be issued:
+      tally_lock: manual lock on/off.
+      balance_lock_enabled + balance_lock_limit (₹): auto-locks while the client's
+      outstanding debt exceeds the limit; releases automatically once it drops back.
     """
     return _call("PUT", f"clients/{client_id}", body={k: v for k, v in locals().items() if k not in ("self", "client_id")})
+
+
+@mcp.tool()
+def get_client_lock_status(client_id: int) -> str:
+    """
+    Get a client's invoice-lock status: whether they are currently locked (and why),
+    the manual tally lock state, the balance lock settings (max debt limit), and
+    their outstanding debt. While locked, drafts are allowed but invoices cannot
+    be issued.
+    """
+    return _call("GET", f"clients/{client_id}/locks")
+
+
+@mcp.tool()
+def set_client_lock(
+    client_id: int,
+    tally_lock: bool = None,
+    balance_lock_enabled: bool = None,
+    balance_lock_limit: float = None,
+) -> str:
+    """
+    Enable/disable a client's invoice locks. ONLY call after explicit user confirmation.
+    Leave a parameter as None to keep it unchanged; at least one must be provided.
+
+    tally_lock: manual lock on/off — stays on until switched off.
+    balance_lock_enabled: auto-lock that engages while outstanding debt (issued
+      invoices only) exceeds balance_lock_limit and releases automatically once
+      it drops back under.
+    balance_lock_limit: max debt in ₹ for the balance lock (must be > 0 for the
+      balance lock to have any effect).
+
+    While locked, drafts can still be created but invoices cannot be issued.
+    Returns the updated lock status.
+    """
+    return _call("PUT", f"clients/{client_id}/locks", body={
+        "tally_lock": tally_lock,
+        "balance_lock_enabled": balance_lock_enabled,
+        "balance_lock_limit": balance_lock_limit,
+    })
 
 
 @mcp.tool()
@@ -281,6 +328,8 @@ def create_invoice(
     Deducts from warehouse stock automatically for catalog products.
     issue_date / due_date: YYYY-MM-DD format. Defaults to today.
     status: issued | sent | paid
+    If the client is locked (manual tally lock, or auto balance lock over their debt
+    limit), the invoice is saved as a DRAFT instead — the result message says so.
     """
     return _call("POST", "invoices", body={k: v for k, v in locals().items() if k != "self"})
 
@@ -290,7 +339,9 @@ def update_invoice_status(invoice_id: int, status: str) -> str:
     """
     Change the status of an invoice. ONLY call after explicit user confirmation.
     status: draft | issued | sent | partial | paid | cancelled
-    draft→issued: checks warehouse stock first — fails with error if any item is short.
+    draft→issued: blocked with an error if the client is locked (tally lock or
+    balance lock over debt limit), then checks warehouse stock — fails with error
+    if any item is short.
     Setting to 'cancelled' restores warehouse stock (only if invoice was previously issued, not draft).
     """
     return _call("PUT", f"invoices/{invoice_id}/status", body={"status": status})

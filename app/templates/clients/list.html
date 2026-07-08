@@ -54,6 +54,9 @@
               <div>
                 <a href="{{ url_for('clients.detail', client_id=c.id) }}"
                    style="font-weight:600;color:var(--accent);text-decoration:none;">{{ c.name }}</a>
+                {% if c.id in locked_clients %}
+                <span title="Invoice lock: {{ locked_clients[c.id] | join('; ') }} — drafts only" style="cursor:help">🔒</span>
+                {% endif %}
                 {% if c.companies %}
                 <div style="font-size:11px;color:var(--text-muted);margin-top:1px">{{ c.companies|length }} compan{{ 'y' if c.companies|length == 1 else 'ies' }}</div>
                 {% endif %}
