@@ -94,7 +94,6 @@
 <div class="card" style="margin-top:18px">
   <div class="card-header">
     <span class="card-title">My Sales Staff — {{ window_label }}</span>
-    <a href="{{ url_for('visits.map_page') }}" class="btn btn-secondary btn-sm" style="margin-left:auto">Visit Map</a>
   </div>
   {% if team %}
   <div class="table-wrap">
@@ -106,7 +105,6 @@
           <th style="text-align:right">Sales</th>
           <th style="text-align:right">Collected</th>
           <th style="text-align:right">Outstanding</th>
-          <th style="text-align:right">Visits</th>
         </tr>
       </thead>
       <tbody>
@@ -119,7 +117,6 @@
           <td style="text-align:right;font-weight:600">{{ m.sales|inr_compact }}</td>
           <td style="text-align:right;color:var(--success);font-weight:600">{{ m.collected|inr_compact }}</td>
           <td style="text-align:right;color:{{ 'var(--danger)' if m.outstanding > 0 else 'var(--text-muted)' }}">{{ m.outstanding|inr_compact }}</td>
-          <td style="text-align:right">{{ m.visits }}</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -130,7 +127,6 @@
           <td style="text-align:right">{{ team|sum(attribute='sales')|inr_compact }}</td>
           <td style="text-align:right;color:var(--success)">{{ team|sum(attribute='collected')|inr_compact }}</td>
           <td style="text-align:right">{{ team|sum(attribute='outstanding')|inr_compact }}</td>
-          <td style="text-align:right">{{ team|sum(attribute='visits') }}</td>
         </tr>
       </tfoot>
     </table>

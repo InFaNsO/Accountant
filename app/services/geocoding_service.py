@@ -1,6 +1,5 @@
-"""Ola Maps geocoding: resolves a place name/address to lat/lng.
-
-Used to auto-locate clients (city/state) for the visits map's coverage pins.
+"""Ola Maps geocoding: resolves a place name/address to lat/lng, plus
+boundary-polygon lookups (Nominatim + BharatMaps) for client operating regions.
 Fails soft — callers get (None, None) on any error so a geocoding outage
 never blocks saving a client.
 """

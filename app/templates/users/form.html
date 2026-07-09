@@ -163,7 +163,7 @@
     <div class="card-body">
       <p style="font-size:12.5px;color:var(--text-muted);margin:0 0 10px">
         Staff on this manager's team. The manager sees data for their own clients plus every client
-        managed by these staff members — including their sales, payments and visits.
+        managed by these staff members — including their sales and payments.
       </p>
       {% if team_candidates %}
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px">
@@ -290,7 +290,7 @@ function onRoleChange() {
       const rowAll = document.querySelector(`.row-all[data-module="${m}"]`);
       if (rowAll) rowAll.checked = false;
     });
-    ['clients', 'invoices', 'payments', 'visits'].forEach(m => {
+    ['clients', 'invoices', 'payments'].forEach(m => {
       const view = document.querySelector(`input[name="perm_${m}_view"]`);
       if (view) view.checked = true;
     });

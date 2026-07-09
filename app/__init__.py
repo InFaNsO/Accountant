@@ -149,7 +149,6 @@ def create_app():
         from .routes.api        import bp as api_bp
         from .routes.tallies    import bp as tallies_bp
         from .routes.mobile     import bp as mobile_bp
-        from .routes.visits     import bp as visits_bp
 
         app.register_blueprint(auth_bp)
         app.register_blueprint(users_bp)
@@ -165,7 +164,6 @@ def create_app():
         app.register_blueprint(api_bp)
         app.register_blueprint(tallies_bp)
         app.register_blueprint(mobile_bp)
-        app.register_blueprint(visits_bp)
 
         from .services.notification_service import init_firebase
         init_firebase()

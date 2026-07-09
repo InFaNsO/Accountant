@@ -136,15 +136,6 @@
       Palm Purchase
     </a>
     {% endif %}
-    {% if current_user.has_permission('visits', 'view') or current_user.has_permission('visits', 'create') %}
-    <a href="{{ url_for('visits.index') }}" class="nav-item {% if 'visits' in request.endpoint %}active{% endif %}">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/>
-        <circle cx="12" cy="10" r="3"/>
-      </svg>
-      Visits
-    </a>
-    {% endif %}
     {% if current_user.is_god() %}
     <a href="{{ url_for('users.list_users') }}" class="nav-item {% if 'users' in request.endpoint %}active{% endif %}">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

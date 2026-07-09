@@ -14,7 +14,6 @@ MODULES = [
     "production",
     "transit",
     "palm_purchase",
-    "visits",
 ]
 
 # Clients-only extra permissions, shown as sub-lines under the Clients row in the

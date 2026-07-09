@@ -1,6 +1,6 @@
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, abort
 from flask_login import login_required, current_user
-from ..services import client_service, visit_service, region_service
+from ..services import client_service, region_service
 from ..services.payment_service import recalculate_client_balance, reconcile_all_clients
 from ..services.auth_service import permission_required, get_scoped_client_ids, get_own_scoped_client_ids
 from ..database import get_db
@@ -107,15 +107,11 @@ def detail(client_id):
     can_locks = current_user.has_permission("clients", "locks_edit")
     # Edit ability implies seeing the lock card
     can_locks_view = can_locks or current_user.has_permission("clients", "locks_view")
-    if current_user.has_permission("visits", "view"):
-        visits = [dict(v) for v in visit_service.get_client_visits(client_id, limit=10)]
-    else:
-        visits = None
     rep_name = client_service.get_client_rep_name(client_id)
     return render_template("clients/detail.html", client=client, invoices=invoices,
                            companies=companies, balance=balance, can_financials=can_financials,
                            product_breakdown=product_breakdown, lock=lock, can_locks=can_locks,
-                           can_locks_view=can_locks_view, visits=visits, rep_name=rep_name,
+                           can_locks_view=can_locks_view, rep_name=rep_name,
                            ola_maps_api_key=os.environ.get("OLA_MAPS_API_KEY", ""))
 
 

@@ -3,9 +3,6 @@ team of sales reps and the clients they manage. All money figures are in ₹.
 """
 from ..database import get_db
 
-# UTC → IST for visit timestamps (visits store UTC; the business runs on IST)
-_IST = "'+5 hours', '+30 minutes'"
-
 
 def _in(ids):
     """Return a ('(?,?,…)', params) tuple for an IN clause; empty → matches none."""
@@ -111,7 +108,7 @@ def get_scoped_stats(client_ids, date_from=None, date_to=None):
 def get_team_breakdown(staff, date_from=None, date_to=None):
     """Per-staff-member figures for a manager's team. `staff` is a list of user
     rows/dicts (id, name). For each: clients managed, sales (invoiced) and
-    collected in the window over their clients, and visit count in the window."""
+    collected in the window over their clients."""
     db = get_db()
     windowed = bool(date_from and date_to)
     out = []
@@ -133,11 +130,6 @@ def get_team_breakdown(staff, date_from=None, date_to=None):
                 f"WHERE client_id IN {ph} AND payment_date BETWEEN ? AND ?",
                 (*cids, date_from, date_to),
             ).fetchone()["v"]
-            visits = db.execute(
-                f"SELECT COUNT(*) v FROM client_visits "
-                f"WHERE user_id=? AND date(checked_in_at, {_IST}) BETWEEN ? AND ?",
-                (uid, date_from, date_to),
-            ).fetchone()["v"]
         else:
             sales = db.execute(
                 f"SELECT COALESCE(SUM(total),0) v FROM invoices "
@@ -145,9 +137,6 @@ def get_team_breakdown(staff, date_from=None, date_to=None):
             ).fetchone()["v"]
             collected = db.execute(
                 f"SELECT COALESCE(SUM(amount),0) v FROM payments WHERE client_id IN {ph}", cids,
-            ).fetchone()["v"]
-            visits = db.execute(
-                "SELECT COUNT(*) v FROM client_visits WHERE user_id=?", (uid,),
             ).fetchone()["v"]
 
         outstanding = db.execute(
@@ -163,6 +152,5 @@ def get_team_breakdown(staff, date_from=None, date_to=None):
             "sales":        sales,
             "collected":    collected,
             "outstanding":  outstanding,
-            "visits":       visits,
         })
     return out
