@@ -2,14 +2,17 @@ import re
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, abort
 from flask_login import login_required, current_user
 from ..services import invoice_service, client_service, product_service
-from ..services.auth_service import permission_required, get_scoped_client_ids
+from ..services.auth_service import permission_required, get_scoped_client_ids, get_own_scoped_client_ids
 
 bp = Blueprint("invoices", __name__, url_prefix="/invoices")
 
 
 def _scope():
-    """Client ids the current user may see, or None for unrestricted."""
-    return get_scoped_client_ids(current_user)
+    """Client ids the current user may see, or None for unrestricted.
+    Sales managers get their team's clients; anyone else with clients
+    assigned directly to them (clients.sales_rep_id) gets just those."""
+    scope = get_scoped_client_ids(current_user)
+    return scope if scope is not None else get_own_scoped_client_ids(current_user)
 
 
 def _guard_invoice(invoice):

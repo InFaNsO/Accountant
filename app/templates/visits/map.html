@@ -7,7 +7,7 @@
 {% endblock %}
 
 {% block content %}
-<link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet/leaflet.css') }}">
+<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
 
 <!-- Filters -->
 <div class="card" style="margin-bottom:14px">
@@ -22,19 +22,43 @@
       </select>
     </div>
     <div>
+      <label style="font-size:11px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px">Period</label>
+      <select id="fWinSel" style="width:auto" onchange="winSelect(this.value)">
+        {% for val, lbl in [
+            ('today','Today'),('yesterday','Yesterday'),
+            ('this_week','This Week'),('last_week','Last Week'),
+            ('last_15','Last 15 Days'),('last_30','Last 30 Days'),
+            ('this_month','This Month'),
+            ('last_2_months','Last 2 Months'),('60_days','60 Days'),
+            ('90_days','90 Days'),('this_year','This Year'),
+            ('current_fy','Current FY'),('last_fy','Last FY'),
+            ('all','All Time'),('custom','Custom')
+        ] %}
+        <option value="{{ val }}"{% if val == 'this_week' %} selected{% endif %}>{{ lbl }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
       <label style="font-size:11px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px">From</label>
-      <input type="date" id="fFrom" style="width:auto" onchange="loadVisits()">
+      <input type="date" id="fFrom" style="width:auto" onchange="dateChange()">
     </div>
     <div>
       <label style="font-size:11px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px">To</label>
-      <input type="date" id="fTo" style="width:auto" onchange="loadVisits()">
+      <input type="date" id="fTo" style="width:auto" onchange="dateChange()">
     </div>
     <label style="display:flex;align-items:center;gap:6px;font-size:13px;padding-bottom:8px;cursor:pointer">
-      <input type="checkbox" id="fRoutes" checked onchange="renderMap()" style="width:auto"> Day routes
+      <input type="checkbox" id="fRoutes" checked onchange="renderMap()" style="width:auto"> Rep routes
     </label>
     <label style="display:flex;align-items:center;gap:6px;font-size:13px;padding-bottom:8px;cursor:pointer">
       <input type="checkbox" id="fClients" checked onchange="renderMap()" style="width:auto"> Client pins
     </label>
+    <div>
+      <label style="font-size:11px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px">Show area outline</label>
+      <div style="display:flex;gap:6px">
+        <input type="text" id="fArea" placeholder="e.g. Preet Vihar, New Delhi" style="width:220px" onkeydown="if(event.key==='Enter')showAreaBoundary()">
+        <button type="button" class="btn btn-secondary btn-sm" onclick="showAreaBoundary()">Show</button>
+      </div>
+    </div>
     <div id="visitCount" style="margin-left:auto;font-size:13px;color:var(--text-muted);padding-bottom:8px"></div>
   </div>
 </div>
@@ -43,11 +67,10 @@
 <div class="card" style="margin-bottom:14px">
   <div id="map" style="height:62vh;min-height:380px;border-radius:var(--radius);z-index:0"></div>
   <div style="display:flex;flex-wrap:wrap;gap:8px 18px;padding:10px 16px;font-size:12.5px;color:var(--text-muted)">
-    <span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#10B981"></span> Visited ≤ 30 days</span>
-    <span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#F59E0B"></span> Stale &gt; 30 days</span>
-    <span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#EF4444"></span> Never visited</span>
-    <span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#6366F1"></span> Visit check-in</span>
-    <span style="margin-left:auto">Tiles © OpenStreetMap contributors</span>
+    <span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#10B981"></span> Visited</span>
+    {% for u in staff %}
+    <span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:{{ ['#E2703A','#3B6FB5','#0C7A64','#B5485D','#7A5CB8','#C98F1B'][loop.index0 % 6] }}"></span> {{ u.name }}</span>
+    {% endfor %}
   </div>
 </div>
 
@@ -79,28 +102,126 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="{{ url_for('static', filename='vendor/leaflet/leaflet.js') }}"></script>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <script>
-const VISIT_COLOR = '#6366F1';
-const STATUS_COLORS = { recent: '#10B981', stale: '#F59E0B', never: '#EF4444' };
+const OLA_API_KEY = {{ ola_maps_api_key|tojson }};
+const VISITED_COLOR = '#10B981';
 const ROUTE_PALETTE = ['#E2703A','#3B6FB5','#0C7A64','#B5485D','#7A5CB8','#C98F1B'];
+const STAFF_IDS = {{ staff|map(attribute='id')|list|tojson }};
+const colorForUser = userId => ROUTE_PALETTE[Math.max(0, STAFF_IDS.indexOf(userId)) % ROUTE_PALETTE.length];
 
-let map, visitLayer, clientLayer, routeLayer;
+let map;
 let visits = [], clientsGeo = [];
+// Marker objects we create each render pass, tracked so we can .remove() them
+// before the next pass (MapLibre has no Leaflet-style LayerGroup.clearLayers()).
+let clientMarkers = [], visitMarkers = [], routeArrowMarkers = [];
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g,
   m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 const nice = s => esc(String(s || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()));
 
+// Bearing in degrees (0=north, clockwise) from point a to point b, both [lng,lat].
+function bearing(a, b) {
+  const toRad = d => d * Math.PI / 180, toDeg = r => r * 180 / Math.PI;
+  const lat1 = toRad(a[1]), lat2 = toRad(b[1]), dLon = toRad(b[0] - a[0]);
+  const y = Math.sin(dLon) * Math.cos(lat2);
+  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+
+// A small circular DOM marker mimicking Leaflet's circleMarker look.
+function dotElement(color, radius) {
+  const el = document.createElement('div');
+  el.style.width = (radius * 2) + 'px';
+  el.style.height = (radius * 2) + 'px';
+  el.style.borderRadius = '50%';
+  el.style.background = color;
+  el.style.border = '2px solid #fff';
+  el.style.boxShadow = '0 1px 3px rgba(0,0,0,.4)';
+  el.style.cursor = 'pointer';
+  return el;
+}
+
+// One rotated-triangle DOM marker pointing from a to b ([lng,lat] each), at their midpoint.
+function addRouteArrow(a, b, color) {
+  const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+  const angle = bearing(a, b);
+  const el = document.createElement('div');
+  el.style.width = '12px';
+  el.style.height = '12px';
+  el.innerHTML = `<div style="width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;` +
+                 `border-bottom:11px solid ${color};transform:rotate(${angle}deg);transform-origin:50% 65%;"></div>`;
+  const marker = new maplibregl.Marker({ element: el }).setLngLat(mid).addTo(map);
+  routeArrowMarkers.push(marker);
+}
+
+// 'YYYY-MM-DD' -> '6th July 26'. Parsed manually (not via Date()) to dodge
+// timezone-shift bugs with the space-separated timestamps the API returns.
+const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+function ordinalDate(ymd) {
+  const [y, m, d] = (ymd || '').split('-').map(Number);
+  if (!y || !m || !d) return esc(ymd || '');
+  const suffix = (d % 10 === 1 && d !== 11) ? 'st'
+               : (d % 10 === 2 && d !== 12) ? 'nd'
+               : (d % 10 === 3 && d !== 13) ? 'rd' : 'th';
+  return `${d}${suffix} ${MONTH_NAMES[m - 1]} ${String(y).slice(-2)}`;
+}
+
+function olaStyleUrl() {
+  const dark = document.body.classList.contains('dark');
+  return `https://api.olamaps.io/tiles/vector/v1/styles/${dark ? 'default-dark-standard' : 'default-light-standard'}/style.json`;
+}
+
 function initMap() {
-  map = L.map('map').setView([23.5, 78.9], 5);   // India
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19,
-    attribution: '&copy; OpenStreetMap contributors',
-  }).addTo(map);
-  visitLayer  = L.layerGroup().addTo(map);
-  clientLayer = L.layerGroup().addTo(map);
-  routeLayer  = L.layerGroup().addTo(map);
+  map = new maplibregl.Map({
+    container: 'map',
+    style: olaStyleUrl(),
+    center: [78.9, 23.5],   // India
+    zoom: 4,
+    transformRequest: (url) => {
+      if (url.startsWith('https://api.olamaps.io')) {
+        const sep = url.includes('?') ? '&' : '?';
+        return { url: `${url}${sep}api_key=${OLA_API_KEY}` };
+      }
+      return { url };
+    },
+  });
+  map.addControl(new maplibregl.NavigationControl(), 'top-left');
+}
+
+/* ── Area outline search ────────────────────────────────────── */
+function ensureAreaLayer() {
+  if (map.getSource('area-boundary')) return;
+  map.addSource('area-boundary', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  map.addLayer({ id: 'area-boundary-fill', type: 'fill', source: 'area-boundary',
+    paint: { 'fill-color': '#EC4899', 'fill-opacity': 0.15 } });
+  map.addLayer({ id: 'area-boundary-line', type: 'line', source: 'area-boundary',
+    paint: { 'line-color': '#EC4899', 'line-width': 3 } });
+}
+
+function boundsOfGeometry(geometry) {
+  const bounds = new maplibregl.LngLatBounds();
+  const rings = geometry.type === 'MultiPolygon' ? geometry.coordinates.flat() : geometry.coordinates;
+  rings.forEach(ring => ring.forEach(pt => bounds.extend(pt)));
+  return bounds;
+}
+
+function showAreaBoundary() {
+  const q = document.getElementById('fArea').value.trim();
+  if (!q) return;
+  fetch('{{ url_for("visits.api_boundary") }}?q=' + encodeURIComponent(q))
+    .then(r => r.json().then(d => ({ ok: r.ok, d })))
+    .then(({ ok, d }) => {
+      if (!ok) { alert(d.error || 'No boundary found for that place.'); return; }
+      ensureAreaLayer();
+      map.getSource('area-boundary').setData({
+        type: 'Feature',
+        properties: { name: d.name },
+        geometry: d.geometry,
+      });
+      map.fitBounds(boundsOfGeometry(d.geometry), { padding: 30, animate: false });
+    })
+    .catch(() => alert('Could not look up that area — try again.'));
 }
 
 /* ── Data loading ────────────────────────────────────────────── */
@@ -124,64 +245,109 @@ function loadClients() {
 }
 
 /* ── Rendering ───────────────────────────────────────────────── */
-function renderMap() {
-  visitLayer.clearLayers(); clientLayer.clearLayers(); routeLayer.clearLayers();
+function clearMarkers() {
+  clientMarkers.forEach(m => m.remove());
+  visitMarkers.forEach(m => m.remove());
+  routeArrowMarkers.forEach(m => m.remove());
+  clientMarkers = []; visitMarkers = []; routeArrowMarkers = [];
+  if (map.getLayer('route-lines')) map.removeLayer('route-lines');
+  if (map.getSource('route-lines')) map.removeSource('route-lines');
+}
 
-  // Client coverage pins
+function renderMap() {
+  clearMarkers();
+
+  // Client coverage pins — visited clients only (stale/never-visited dropped)
   if (document.getElementById('fClients').checked) {
     clientsGeo.forEach(c => {
       if (c.latitude == null || c.longitude == null) return;
-      L.circleMarker([c.latitude, c.longitude], {
-        radius: 7, weight: 2, color: '#fff',
-        fillColor: STATUS_COLORS[c.status] || '#999', fillOpacity: 0.95,
-      }).bindPopup(
+      if (c.status !== 'recent') return;
+      const popup = new maplibregl.Popup({ offset: 10 }).setHTML(
         '<b>' + esc(c.name) + '</b><br>' +
         esc([c.city, c.state].filter(Boolean).join(', ')) + '<br>' +
-        (c.last_visit
-          ? 'Last visit: ' + esc(c.last_visit) + ' (' + c.days_since + ' days ago)'
-          : 'Never visited')
-      ).addTo(clientLayer);
+        'Last visit: ' + esc(c.last_visit) + ' (' + c.days_since + ' days ago)'
+      );
+      const marker = new maplibregl.Marker({ element: dotElement(VISITED_COLOR, 7) })
+        .setLngLat([c.longitude, c.latitude])
+        .setPopup(popup)
+        .addTo(map);
+      clientMarkers.push(marker);
     });
   }
 
-  // Visit pins
-  const bounds = [];
+  // Visit pins — one color per sales rep, matching their route line
+  const bounds = new maplibregl.LngLatBounds();
+  let hasPoints = false;
   visits.forEach(v => {
-    bounds.push([v.latitude, v.longitude]);
-    L.circleMarker([v.latitude, v.longitude], {
-      radius: 6, weight: 2, color: '#fff',
-      fillColor: VISIT_COLOR, fillOpacity: 0.95,
-    }).bindPopup(
-      '<b>' + esc(v.client_name || v.prospect_name || 'Unknown') + '</b>' +
+    bounds.extend([v.longitude, v.latitude]);
+    hasPoints = true;
+    const clientLabel = v.client_name || v.prospect_name || 'Unknown';
+    const when = ordinalDate(v.visit_date_ist);
+    const el = dotElement(colorForUser(v.user_id), 6);
+    const popup = new maplibregl.Popup({ offset: 9 }).setHTML(
+      '<b>' + esc(clientLabel) + '</b>' +
       (v.client_id ? '' : ' <i>(prospect)</i>') + '<br>' +
-      esc(v.user_name) + ' · ' + esc(v.checked_in_ist) + '<br>' +
+      esc(v.user_name) + ' · ' + when + '<br>' +
       nice(v.purpose) + (v.outcome ? ' → ' + nice(v.outcome) : '') +
       (v.notes ? '<br><i>' + esc(v.notes) + '</i>' : '')
-    ).addTo(visitLayer);
+    );
+    // Hover tooltip (lightweight) + click popup (full detail)
+    let hoverPopup = null;
+    el.addEventListener('mouseenter', () => {
+      hoverPopup = new maplibregl.Popup({ offset: 9, closeButton: false, closeOnClick: false })
+        .setLngLat([v.longitude, v.latitude])
+        .setHTML(when + ' — ' + esc(clientLabel))
+        .addTo(map);
+    });
+    el.addEventListener('mouseleave', () => { if (hoverPopup) { hoverPopup.remove(); hoverPopup = null; } });
+    const marker = new maplibregl.Marker({ element: el })
+      .setLngLat([v.longitude, v.latitude])
+      .setPopup(popup)
+      .addTo(map);
+    visitMarkers.push(marker);
   });
 
-  // Day routes: one polyline per staff member per IST day, in check-in order
+  // Rep routes: one polyline per staff member connecting every stop in the
+  // selected period, in visit order (spans multiple days, not just same-day stops).
   if (document.getElementById('fRoutes').checked) {
     const groups = {};
-    visits.forEach(v => {
-      const key = v.user_id + '|' + v.visit_date_ist;
-      (groups[key] = groups[key] || []).push(v);
-    });
-    Object.entries(groups).forEach(([key, g]) => {
+    visits.forEach(v => (groups[v.user_id] = groups[v.user_id] || []).push(v));
+    const features = [];
+    Object.entries(groups).forEach(([userId, g]) => {
       if (g.length < 2) return;
       g.sort((a, b) => a.checked_in_ist.localeCompare(b.checked_in_ist));
-      const userId = parseInt(key.split('|')[0], 10);
-      L.polyline(g.map(v => [v.latitude, v.longitude]), {
-        color: ROUTE_PALETTE[userId % ROUTE_PALETTE.length],
-        weight: 3, dashArray: '7 5', opacity: 0.8,
-      }).bindPopup(esc(g[0].user_name) + ' — ' + esc(g[0].visit_date_ist) +
-                   ' (' + g.length + ' stops)')
-        .addTo(routeLayer);
+      const color = colorForUser(parseInt(userId, 10));
+      const points = g.map(v => [v.longitude, v.latitude]);
+      features.push({
+        type: 'Feature',
+        properties: {
+          color,
+          label: esc(g[0].user_name) + ' — ' + ordinalDate(g[0].visit_date_ist) +
+                 ' to ' + ordinalDate(g[g.length - 1].visit_date_ist) + ' (' + g.length + ' stops)',
+        },
+        geometry: { type: 'LineString', coordinates: points },
+      });
+      for (let i = 0; i < points.length - 1; i++) {
+        addRouteArrow(points[i], points[i + 1], color);
+      }
     });
+    if (features.length) {
+      map.addSource('route-lines', { type: 'geojson', data: { type: 'FeatureCollection', features } });
+      map.addLayer({
+        id: 'route-lines', type: 'line', source: 'route-lines',
+        paint: { 'line-color': ['get', 'color'], 'line-width': 3, 'line-dasharray': [2, 1.5], 'line-opacity': 0.85 },
+      });
+      map.on('click', 'route-lines', (e) => {
+        new maplibregl.Popup({ offset: 6 })
+          .setLngLat(e.lngLat)
+          .setHTML(e.features[0].properties.label)
+          .addTo(map);
+      });
+    }
   }
 
   document.getElementById('visitCount').textContent = visits.length + ' visit' + (visits.length === 1 ? '' : 's');
-  if (bounds.length) map.fitBounds(bounds, { padding: [40, 40], maxZoom: 13 });
+  if (hasPoints) map.fitBounds(bounds, { padding: 40, maxZoom: 13, animate: false });
 }
 
 function renderList() {
@@ -203,15 +369,70 @@ function renderList() {
     </tr>`).join('');
 }
 
-/* ── Init: default to the last 7 days ─────────────────────────── */
-(function () {
-  const today = new Date();
-  const weekAgo = new Date(today); weekAgo.setDate(today.getDate() - 6);
-  document.getElementById('fTo').value   = today.toISOString().slice(0, 10);
-  document.getElementById('fFrom').value = weekAgo.toISOString().slice(0, 10);
-  initMap();
-  loadClients();
+/* ── Period dropdown — same presets/logic as the dashboard chart ─ */
+function _winDates(w) {
+  const t = new Date(); t.setHours(0, 0, 0, 0);
+  const fmt = d => d.toISOString().slice(0, 10);
+  const add = (d, n) => { const r = new Date(d); r.setDate(r.getDate() + n); return r; };
+  const dow = t.getDay() === 0 ? 6 : t.getDay() - 1;  // Mon=0
+  const y = t.getFullYear(), mo = t.getMonth();        // mo: 0-based
+  const cfy  = mo >= 3 ? `${y}-04-01`   : `${y - 1}-04-01`;
+  const lfyS = mo >= 3 ? `${y - 1}-04-01` : `${y - 2}-04-01`;
+  const lfyE = mo >= 3 ? `${y}-03-31`   : `${y - 1}-03-31`;
+  switch (w) {
+    case 'all':           return ['', ''];
+    case 'today':         return [fmt(t), fmt(t)];
+    case 'yesterday':     { const d = add(t, -1); return [fmt(d), fmt(d)]; }
+    case 'this_week':     return [fmt(add(t, -dow)), fmt(t)];
+    case 'last_week':     return [fmt(add(t, -dow - 7)), fmt(add(t, -dow - 1))];
+    case 'last_15':       return [fmt(add(t, -14)), fmt(t)];
+    case 'last_30':       return [fmt(add(t, -29)), fmt(t)];
+    case 'this_month':    return [fmt(new Date(y, mo, 1)), fmt(t)];
+    case 'last_2_months': return [fmt(add(t, -60)), fmt(t)];
+    case '60_days':       return [fmt(add(t, -59)), fmt(t)];
+    case '90_days':       return [fmt(add(t, -89)), fmt(t)];
+    case 'this_year':     return [`${y}-01-01`, fmt(t)];
+    case 'current_fy':    return [cfy, fmt(t)];
+    case 'last_fy':       return [lfyS, lfyE];
+    default:              return ['', ''];
+  }
+}
+
+function winSelect(w) {
+  if (w === 'custom') return;   // user will set dates manually
+  const [df, dt] = _winDates(w);
+  document.getElementById('fFrom').value = df;
+  document.getElementById('fTo').value   = dt;
   loadVisits();
+}
+
+function dateChange() {
+  document.getElementById('fWinSel').value = 'custom';
+  loadVisits();
+}
+
+/* ── Init: default to This Week (matches the dropdown's default) ─ */
+(function () {
+  const [df, dt] = _winDates('this_week');
+  document.getElementById('fFrom').value = df;
+  document.getElementById('fTo').value   = dt;
+  initMap();
+  let ready = false;
+  const markReady = () => {
+    if (ready) return;
+    ready = true;
+    loadClients();
+    loadVisits();
+  };
+  map.on('load', markReady);
+  // 'load' waits for a first paint, which can hang indefinitely in some
+  // environments even though the style/sources are already usable — poll
+  // as a backstop so the map isn't stuck showing nothing.
+  (function pollReady(attempt) {
+    if (ready) return;
+    if (map.isStyleLoaded() || map.areTilesLoaded() || attempt > 15) { markReady(); return; }
+    setTimeout(() => pollReady(attempt + 1), 200);
+  })(0);
 })();
 </script>
 {% endblock %}

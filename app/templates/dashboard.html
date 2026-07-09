@@ -461,13 +461,15 @@
 <!-- Empty state -->
 {% if not show_any_stat and not show_chart and not show_invoices
    and ('production_due' not in dash_sections or not pos_due_soon)
-   and not show_low and not show_prod and not show_transit %}
+   and not show_low and not show_prod and not show_transit and not show_region_map %}
 <div class="card" style="max-width:480px;margin:60px auto;text-align:center;padding:48px 40px">
   <div style="font-size:48px;margin-bottom:16px">📊</div>
   <h2 style="font-size:18px;font-weight:700;margin-bottom:10px">No dashboard sections enabled</h2>
   <p style="color:var(--text-muted);font-size:14px">Contact your administrator to enable dashboard sections for your account.</p>
 </div>
 {% endif %}
+
+{% include "_region_coverage_map.html" %}
 
 {% endblock %}
 

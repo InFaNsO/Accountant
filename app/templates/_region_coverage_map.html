@@ -1,0 +1,190 @@
+{% if show_region_map %}
+<!-- ── Client coverage map (consolidated regions, one colour per client) ── -->
+<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
+<div class="card" style="margin-top:18px">
+  <div class="card-header">
+    <span class="card-title">Client Coverage Map</span>
+    <span class="badge" id="rcmCount" style="margin-left:auto">0</span>
+  </div>
+  <div class="card-body">
+    <div id="rcmMap" style="height:440px;border-radius:var(--radius);background:var(--bg-subtle,rgba(0,0,0,.03))"></div>
+    <div id="rcmEmpty" style="display:none;padding:20px;text-align:center;font-size:13px;color:var(--text-muted)">
+      No client operating regions defined yet.
+    </div>
+    <div id="rcmLegend" style="display:flex;flex-wrap:wrap;gap:6px 14px;padding:12px 4px 2px;font-size:12.5px"></div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
+<script>
+(function () {
+  const OLA_KEY = {{ ola_maps_api_key|tojson }};
+  // 12 well-separated hues; adjacent (touching/overlapping) client shapes are
+  // greedy-coloured to differ, so neighbours never share a colour.
+  const PALETTE = ['#E2703A','#3B6FB5','#0C7A64','#B5485D','#7A5CB8','#C98F1B',
+                   '#2E9E88','#C9455C','#4C6EF5','#E8590C','#0CA678','#AE3EC9'];
+  const esc = s => String(s ?? '').replace(/[&<>"']/g,
+    m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+
+  let map;
+
+  function toMultiPolygon(geoms) {
+    const polys = [];
+    geoms.forEach(g => {
+      if (!g) return;
+      if (g.type === 'Polygon') polys.push(g.coordinates);
+      else if (g.type === 'MultiPolygon') g.coordinates.forEach(c => polys.push(c));
+    });
+    return { type: 'MultiPolygon', coordinates: polys };
+  }
+
+  // Dissolve one client's regions into a single outline; fall back to a plain
+  // MultiPolygon (undissolved but still one styled feature) if union chokes.
+  function mergeGeoms(geoms) {
+    try {
+      let merged = turf.feature(geoms[0]);
+      for (let i = 1; i < geoms.length; i++) {
+        const u = turf.union(merged, turf.feature(geoms[i]));
+        if (u) merged = u;
+      }
+      return merged.geometry;
+    } catch (e) {
+      return toMultiPolygon(geoms);
+    }
+  }
+
+  function assignColors(shapes) {
+    // adjacency by intersection
+    const adj = shapes.map(() => new Set());
+    for (let i = 0; i < shapes.length; i++) {
+      for (let j = i + 1; j < shapes.length; j++) {
+        let touch = false;
+        try { touch = turf.booleanIntersects(shapes[i].feature, shapes[j].feature); }
+        catch (e) { touch = false; }
+        if (touch) { adj[i].add(j); adj[j].add(i); }
+      }
+    }
+    // Prefer a spread-out colour per client (index-based) for visual variety,
+    // then bump to the next free one if a neighbour already took it — so
+    // adjacent shapes are always different, but distant ones still vary too.
+    const colorIdx = new Array(shapes.length).fill(-1);
+    for (let i = 0; i < shapes.length; i++) {
+      const used = new Set();
+      adj[i].forEach(n => { if (colorIdx[n] >= 0) used.add(colorIdx[n]); });
+      let c = i % PALETTE.length, tries = 0;
+      while (used.has(c) && tries < PALETTE.length) { c = (c + 1) % PALETTE.length; tries++; }
+      colorIdx[i] = c;
+    }
+    return colorIdx;
+  }
+
+  function boundsOf(features) {
+    const b = new maplibregl.LngLatBounds();
+    features.forEach(f => {
+      const rings = f.geometry.type === 'MultiPolygon'
+        ? f.geometry.coordinates.flat() : f.geometry.coordinates;
+      rings.forEach(ring => ring.forEach(pt => b.extend(pt)));
+    });
+    return b;
+  }
+
+  function render(clients) {
+    const shapes = clients
+      .filter(c => c.geometries && c.geometries.length)
+      .map(c => ({ client_id: c.client_id, name: c.name,
+                   feature: turf.feature(mergeGeoms(c.geometries)) }))
+      .filter(s => s.feature && s.feature.geometry);
+
+    document.getElementById('rcmCount').textContent = shapes.length;
+    const legend = document.getElementById('rcmLegend');
+    if (!shapes.length) {
+      document.getElementById('rcmMap').style.display = 'none';
+      document.getElementById('rcmEmpty').style.display = '';
+      legend.innerHTML = '';
+      return;
+    }
+
+    const colorIdx = assignColors(shapes);
+    const features = shapes.map((s, i) => {
+      s.feature.properties = { name: s.name, color: PALETTE[colorIdx[i] % PALETTE.length] };
+      return s.feature;
+    });
+
+    // Legend renders immediately, independent of the map — even if the tile
+    // style is still loading, the colour key is available right away.
+    legend.innerHTML = shapes.map((s, i) => `
+      <span style="display:flex;align-items:center;gap:6px;max-width:220px">
+        <span style="width:11px;height:11px;border-radius:3px;flex-shrink:0;background:${PALETTE[colorIdx[i] % PALETTE.length]}"></span>
+        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(s.name)}">${esc(s.name)}</span>
+      </span>`).join('');
+
+    drawOnMap({ type: 'FeatureCollection', features });
+  }
+
+  // Adding sources/layers requires the style to be fully loaded — the ready
+  // poll can fire a touch early, so defer to the next 'idle' if it isn't yet.
+  function drawOnMap(data, attempt) {
+    attempt = attempt || 0;
+    if (!map.isStyleLoaded() && attempt < 20) {
+      map.once('idle', () => drawOnMap(data, attempt + 1));
+      return;
+    }
+    if (map.getSource('rcm-regions')) {
+      map.getSource('rcm-regions').setData(data);
+    } else {
+      map.addSource('rcm-regions', { type: 'geojson', data });
+      map.addLayer({ id: 'rcm-fill', type: 'fill', source: 'rcm-regions',
+        paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.4 } });
+      map.addLayer({ id: 'rcm-line', type: 'line', source: 'rcm-regions',
+        paint: { 'line-color': ['get', 'color'], 'line-width': 1.5 } });
+      map.on('click', 'rcm-fill', (e) => {
+        new maplibregl.Popup({ offset: 6 }).setLngLat(e.lngLat)
+          .setHTML('<b>' + esc(e.features[0].properties.name) + '</b>').addTo(map);
+      });
+      map.on('mouseenter', 'rcm-fill', () => { map.getCanvas().style.cursor = 'pointer'; });
+      map.on('mouseleave', 'rcm-fill', () => { map.getCanvas().style.cursor = ''; });
+    }
+    map.fitBounds(boundsOf(data.features), { padding: 30, animate: false });
+  }
+
+  function loadData() {
+    fetch('/clients/regions/all')
+      .then(r => r.json())
+      .then(render)
+      .catch((e) => {
+        console.error('RCM render failed:', e);
+        document.getElementById('rcmMap').style.display = 'none';
+        document.getElementById('rcmEmpty').textContent = 'Could not load coverage data.';
+        document.getElementById('rcmEmpty').style.display = '';
+      });
+  }
+
+  map = new maplibregl.Map({
+    container: 'rcmMap',
+    style: `https://api.olamaps.io/tiles/vector/v1/styles/${document.body.classList.contains('dark') ? 'default-dark-standard' : 'default-light-standard'}/style.json`,
+    center: [78.9, 23.5],
+    zoom: 3.5,
+    transformRequest: (url) => {
+      if (url.startsWith('https://api.olamaps.io')) {
+        const sep = url.includes('?') ? '&' : '?';
+        return { url: `${url}${sep}api_key=${OLA_KEY}` };
+      }
+      return { url };
+    },
+  });
+  map.addControl(new maplibregl.NavigationControl(), 'top-left');
+
+  // 'load' can hang waiting for a first paint in some environments; poll the
+  // style/tiles readiness as a backstop so the data still renders.
+  let ready = false;
+  const go = () => { if (ready) return; ready = true; loadData(); };
+  map.on('load', go);
+  (function poll(n) {
+    if (ready) return;
+    if (map.isStyleLoaded() || map.areTilesLoaded() || n > 15) { go(); return; }
+    setTimeout(() => poll(n + 1), 200);
+  })(0);
+})();
+</script>
+{% endif %}

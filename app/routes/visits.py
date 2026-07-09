@@ -1,6 +1,6 @@
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
 from flask_login import login_required, current_user
-from ..services import visit_service
+from ..services import visit_service, geocoding_service
 from ..services.auth_service import (
     permission_required, get_all_users, get_team_user_ids, get_scoped_client_ids,
 )
@@ -87,6 +87,7 @@ def check_out(visit_id):
 @login_required
 @permission_required("visits", "view")
 def map_page():
+    import os
     team_ids, _ = _team_scope()
     if team_ids is not None:
         # Sales manager: only their own team appears in the staff filter.
@@ -94,7 +95,8 @@ def map_page():
                  if u["is_active"] and u["id"] in team_ids]
     else:
         staff = [dict(u) for u in get_all_users() if u["is_active"]]
-    return render_template("visits/map.html", staff=staff)
+    return render_template("visits/map.html", staff=staff,
+                           ola_maps_api_key=os.environ.get("OLA_MAPS_API_KEY", ""))
 
 
 @bp.route("/api/visits")
@@ -119,3 +121,16 @@ def api_visits():
 def api_clients_geo():
     _, client_ids = _team_scope()
     return jsonify(visit_service.get_clients_geo(client_ids=client_ids))
+
+
+@bp.route("/api/boundary")
+@login_required
+@permission_required("visits", "view")
+def api_boundary():
+    """Locality/administrative boundary outline for a place name, e.g. 'Preet
+    Vihar, New Delhi'. Used to draw an area outline on the map."""
+    query = request.args.get("q", "")
+    boundary = geocoding_service.get_area_boundary(query)
+    if not boundary:
+        return jsonify({"error": "No boundary found for that place."}), 404
+    return jsonify(boundary)

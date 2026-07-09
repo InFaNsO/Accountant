@@ -461,44 +461,55 @@ def get_payment_allocations(payment_id):
     ).fetchall()
 
 
-# ── Dashboard stats (unchanged) ───────────────────────────────────────────────
+# ── Dashboard stats ────────────────────────────────────────────────────────────
 
-def get_dashboard_stats(date_from=None, date_to=None):
+def get_dashboard_stats(date_from=None, date_to=None, client_ids=None):
+    """client_ids: None = unrestricted (admin/office view). An iterable (incl.
+    empty) scopes every figure to just those clients — used for individual
+    sales-rep dashboards so a rep only sees their own clients' numbers."""
     db = get_db()
     windowed = bool(date_from and date_to)
+    scoped = client_ids is not None
+    ph, cids = ("(NULL)", []) if scoped and not client_ids else \
+               ("(" + ",".join("?" * len(client_ids)) + ")", list(client_ids)) if scoped else \
+               ("", [])
+    client_clause = f" AND client_id IN {ph}" if scoped else ""
 
     # ── Revenue: payments received in the window (or all-time) ──────────────
     if windowed:
         total_revenue = db.execute(
-            "SELECT COALESCE(SUM(amount),0) AS v FROM payments WHERE payment_date BETWEEN ? AND ?",
-            (date_from, date_to),
+            f"SELECT COALESCE(SUM(amount),0) AS v FROM payments "
+            f"WHERE payment_date BETWEEN ? AND ?{client_clause}",
+            (date_from, date_to, *cids),
         ).fetchone()["v"]
         total_invoiced = db.execute(
-            "SELECT COALESCE(SUM(total),0) AS v FROM invoices "
-            "WHERE issue_date BETWEEN ? AND ? AND status != 'cancelled'",
-            (date_from, date_to),
+            f"SELECT COALESCE(SUM(total),0) AS v FROM invoices "
+            f"WHERE issue_date BETWEEN ? AND ? AND status != 'cancelled'{client_clause}",
+            (date_from, date_to, *cids),
         ).fetchone()["v"]
         invoice_count = db.execute(
-            "SELECT COUNT(*) AS v FROM invoices "
-            "WHERE issue_date BETWEEN ? AND ? AND status != 'cancelled'",
-            (date_from, date_to),
+            f"SELECT COUNT(*) AS v FROM invoices "
+            f"WHERE issue_date BETWEEN ? AND ? AND status != 'cancelled'{client_clause}",
+            (date_from, date_to, *cids),
         ).fetchone()["v"]
         total_tax = db.execute(
-            "SELECT COALESCE(SUM(tax_total),0) AS v FROM invoices "
-            "WHERE issue_date BETWEEN ? AND ? AND status != 'cancelled'",
-            (date_from, date_to),
+            f"SELECT COALESCE(SUM(tax_total),0) AS v FROM invoices "
+            f"WHERE issue_date BETWEEN ? AND ? AND status != 'cancelled'{client_clause}",
+            (date_from, date_to, *cids),
         ).fetchone()["v"]
         payment_count = db.execute(
-            "SELECT COUNT(*) AS v FROM payments WHERE payment_date BETWEEN ? AND ?",
-            (date_from, date_to),
+            f"SELECT COUNT(*) AS v FROM payments WHERE payment_date BETWEEN ? AND ?{client_clause}",
+            (date_from, date_to, *cids),
         ).fetchone()["v"]
         unique_payers = db.execute(
-            "SELECT COUNT(DISTINCT client_id) AS v FROM payments WHERE payment_date BETWEEN ? AND ?",
-            (date_from, date_to),
+            f"SELECT COUNT(DISTINCT client_id) AS v FROM payments "
+            f"WHERE payment_date BETWEEN ? AND ?{client_clause}",
+            (date_from, date_to, *cids),
         ).fetchone()["v"]
     else:
         total_revenue  = db.execute(
-            "SELECT COALESCE(SUM(amount),0) AS v FROM payments"
+            f"SELECT COALESCE(SUM(amount),0) AS v FROM payments WHERE 1=1{client_clause}",
+            cids,
         ).fetchone()["v"]
         total_invoiced = None
         invoice_count  = None
@@ -508,57 +519,65 @@ def get_dashboard_stats(date_from=None, date_to=None):
 
     # ── Always-current stats ─────────────────────────────────────────────────
     outstanding = db.execute(
-        "SELECT COALESCE(SUM(total - amount_paid),0) AS v "
-        "FROM invoices WHERE status NOT IN ('paid','cancelled')"
+        f"SELECT COALESCE(SUM(total - amount_paid),0) AS v "
+        f"FROM invoices WHERE status NOT IN ('paid','cancelled'){client_clause}",
+        cids,
     ).fetchone()["v"]
 
     overdue = db.execute(
-        "SELECT COUNT(*) AS v FROM invoices "
-        "WHERE status NOT IN ('paid','cancelled') AND due_date < date('now')"
+        f"SELECT COUNT(*) AS v FROM invoices "
+        f"WHERE status NOT IN ('paid','cancelled') AND due_date < date('now'){client_clause}",
+        cids,
     ).fetchone()["v"]
 
-    total_clients = db.execute("SELECT COUNT(*) AS v FROM clients").fetchone()["v"]
+    total_clients = (len(client_ids) if scoped else
+                      db.execute("SELECT COUNT(*) AS v FROM clients").fetchone()["v"])
 
     # ── Daily sales and revenue for chart ───────────────────────────────────
     if windowed:
         daily_sales = db.execute(
-            "SELECT issue_date AS day, SUM(total) AS total "
-            "FROM invoices WHERE issue_date BETWEEN ? AND ? AND status != 'cancelled' "
-            "GROUP BY day ORDER BY day",
-            (date_from, date_to),
+            f"SELECT issue_date AS day, SUM(total) AS total "
+            f"FROM invoices WHERE issue_date BETWEEN ? AND ? AND status != 'cancelled'{client_clause} "
+            f"GROUP BY day ORDER BY day",
+            (date_from, date_to, *cids),
         ).fetchall()
         daily_revenue = db.execute(
-            "SELECT payment_date AS day, SUM(amount) AS total "
-            "FROM payments WHERE payment_date BETWEEN ? AND ? "
-            "GROUP BY day ORDER BY day",
-            (date_from, date_to),
+            f"SELECT payment_date AS day, SUM(amount) AS total "
+            f"FROM payments WHERE payment_date BETWEEN ? AND ?{client_clause} "
+            f"GROUP BY day ORDER BY day",
+            (date_from, date_to, *cids),
         ).fetchall()
     else:
         daily_sales = db.execute(
-            "SELECT issue_date AS day, SUM(total) AS total "
-            "FROM invoices WHERE status != 'cancelled' "
-            "GROUP BY day ORDER BY day"
+            f"SELECT issue_date AS day, SUM(total) AS total "
+            f"FROM invoices WHERE status != 'cancelled'{client_clause} "
+            f"GROUP BY day ORDER BY day",
+            cids,
         ).fetchall()
         daily_revenue = db.execute(
-            "SELECT payment_date AS day, SUM(amount) AS total "
-            "FROM payments "
-            "GROUP BY day ORDER BY day"
+            f"SELECT payment_date AS day, SUM(amount) AS total "
+            f"FROM payments WHERE 1=1{client_clause} "
+            f"GROUP BY day ORDER BY day",
+            cids,
         ).fetchall()
 
     # ── Recent / windowed invoices ───────────────────────────────────────────
+    i_client_clause = f" AND i.client_id IN {ph}" if scoped else ""
     if windowed:
         recent_invoices = db.execute(
-            "SELECT i.*, c.name AS client_name FROM invoices i "
-            "JOIN clients c ON i.client_id = c.id "
-            "WHERE i.issue_date BETWEEN ? AND ? "
-            "ORDER BY i.issue_date DESC, i.id DESC LIMIT 10",
-            (date_from, date_to),
+            f"SELECT i.*, c.name AS client_name FROM invoices i "
+            f"JOIN clients c ON i.client_id = c.id "
+            f"WHERE i.issue_date BETWEEN ? AND ?{i_client_clause} "
+            f"ORDER BY i.issue_date DESC, i.id DESC LIMIT 10",
+            (date_from, date_to, *cids),
         ).fetchall()
     else:
         recent_invoices = db.execute(
-            "SELECT i.*, c.name AS client_name FROM invoices i "
-            "JOIN clients c ON i.client_id = c.id "
-            "ORDER BY i.created_at DESC LIMIT 5"
+            f"SELECT i.*, c.name AS client_name FROM invoices i "
+            f"JOIN clients c ON i.client_id = c.id "
+            f"WHERE 1=1{i_client_clause} "
+            f"ORDER BY i.created_at DESC LIMIT 5",
+            cids,
         ).fetchall()
 
     # Merge daily sales and revenue by day

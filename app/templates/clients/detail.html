@@ -40,32 +40,28 @@
   .np-prod-table td { padding:7px 12px; font-size:13px; border-top:1px solid var(--border); }
   .np-prod-table td:first-child { padding-left:30px; font-weight:600; }
   .np-prod-table td.num { text-align:right; font-weight:600; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  #regionSearch { width:100%; }
+  .region-item { display:flex; align-items:center; gap:8px; padding:8px 10px; border:1px solid var(--border); border-radius:var(--radius-sm); font-size:13px; }
+  .region-item .region-swatch { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
+  .region-item .region-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .region-item .region-type { font-size:11px; color:var(--text-muted); text-transform:capitalize; }
+  .region-search-row { display:flex; align-items:center; gap:8px; padding:9px 12px; cursor:pointer; font-size:13px; }
+  .region-search-row:hover { background:var(--bg-subtle, rgba(0,0,0,.03)); }
+  .region-search-row:not(:last-child) { border-bottom:1px solid var(--border); }
+  .region-pin-row { display:flex; align-items:center; gap:8px; padding:9px 12px; cursor:pointer; font-size:13px; }
+  .region-pin-row:hover { background:var(--bg-subtle, rgba(0,0,0,.03)); }
+  .region-pin-row:not(:last-child) { border-bottom:1px solid var(--border); }
+  .region-pin-swatch { width:12px; height:12px; border-radius:3px; flex-shrink:0; }
+  #regionMap.pin-drop-active .maplibregl-canvas { cursor:crosshair; }
+  @media (max-width: 720px) {
+    .region-layout { grid-template-columns:1fr !important; }
+  }
 </style>
+<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
 <div class="detail-grid">
   <!-- Left: info + invoices -->
   <div style="display:flex;flex-direction:column;gap:22px">
 
-    <div class="card">
-      <div class="card-header"><span class="card-title">Contact Details</span></div>
-      <div class="card-body">
-        <div class="info-list">
-          {% if client.company %}<div class="info-row"><span class="info-label">Company</span><span class="info-value fw-700">{{ client.company }}</span></div>{% endif %}
-          {% if client.email %}<div class="info-row"><span class="info-label">Email</span><span class="info-value"><a href="mailto:{{ client.email }}" style="color:var(--accent)">{{ client.email }}</a></span></div>{% endif %}
-          {% if client.phone %}<div class="info-row"><span class="info-label">Phone</span><span class="info-value">{{ client.phone }}</span></div>{% endif %}
-          <div class="info-row"><span class="info-label">Sales Rep</span>
-            <span class="info-value">
-              {% if rep_name %}{{ rep_name }}{% else %}<span class="text-muted">Handled directly</span>{% endif %}
-              {% if current_user.has_permission('clients', 'edit') %}
-              <a href="{{ url_for('clients.assignments') }}" style="font-size:11.5px;color:var(--accent);margin-left:8px">change</a>
-              {% endif %}
-            </span>
-          </div>
-          {% if client.address or client.city %}<div class="info-row"><span class="info-label">Address</span><span class="info-value">{{ [client.address, client.city, client.country]|select|join(', ') }}</span></div>{% endif %}
-          {% if client.tax_id %}<div class="info-row"><span class="info-label">Tax ID</span><span class="info-value font-mono">{{ client.tax_id }}</span></div>{% endif %}
-          {% if client.notes %}<div class="info-row"><span class="info-label">Notes</span><span class="info-value text-muted">{{ client.notes }}</span></div>{% endif %}
-        </div>
-      </div>
-    </div>
 
     <div class="card">
       <div class="card-header"><span class="card-title">Invoices ({{ invoices|length }})</span></div>
@@ -389,7 +385,15 @@
     <div class="card">
       <div class="card-header">
         <span class="card-title">Recent Visits ({{ visits|length }})</span>
-        <a href="{{ url_for('visits.map_page') }}" class="btn btn-secondary btn-sm" style="margin-left:auto">Map</a>
+        <span style="margin-left:auto;display:flex;align-items:center;gap:10px">
+          <span style="font-size:12px;color:var(--text-muted)">
+            Sales Rep: <b style="color:var(--text-primary)">{{ rep_name or 'None' }}</b>
+            {% if current_user.has_permission('clients', 'edit') %}
+            <a href="{{ url_for('clients.assignments') }}" style="color:var(--accent);margin-left:4px">change</a>
+            {% endif %}
+          </span>
+          <a href="{{ url_for('visits.map_page') }}" class="btn btn-secondary btn-sm">Map</a>
+        </span>
       </div>
       {% if visits %}
       <div class="card-body" style="display:flex;flex-direction:column;gap:2px">
@@ -416,6 +420,67 @@
     </div>
     {% endif %}
 
+  </div>
+</div>
+
+<!-- Regions (operating areas) -->
+<div class="card" style="margin-top:22px">
+  <div class="card-header">
+    <span class="card-title">Regions</span>
+  </div>
+  <div class="card-body">
+    {% if current_user.has_permission('clients', 'edit') %}
+    <div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:14px;flex-wrap:wrap">
+      <div style="position:relative;flex:1;min-width:220px;max-width:420px">
+        <input type="text" id="regionSearch" placeholder="Search a city, town, or state to add…"
+               autocomplete="off" oninput="onRegionSearchInput()">
+        <div id="regionSearchResults" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:20;
+             margin-top:4px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);
+             max-height:280px;overflow-y:auto;box-shadow:0 8px 24px rgba(0,0,0,.18)"></div>
+      </div>
+      <button type="button" id="pinDropBtn" class="btn btn-secondary btn-sm" onclick="togglePinDrop()">📍 Drop Pin</button>
+      <button type="button" id="brushBtn" class="btn btn-secondary btn-sm" onclick="toggleDrawMode('brush')">🖌 Brush</button>
+      <button type="button" id="eraseBtn" class="btn btn-secondary btn-sm" onclick="toggleDrawMode('erase')">🧹 Erase</button>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="startNewCustomArea()" title="Start a new blank custom area">+ New Area</button>
+    </div>
+    <div id="regionPinHint" style="display:none;font-size:12px;color:var(--text-muted);margin:-8px 0 12px">
+      Click anywhere on the map to see boundary options for that point.
+    </div>
+    <div id="regionPinPanel" style="display:none;margin-bottom:14px;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden"></div>
+    <div id="regionDrawBar" style="display:none;align-items:center;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--text-muted);margin:-8px 0 12px;padding:8px 12px;background:var(--bg-subtle,rgba(0,0,0,.03));border-radius:var(--radius-sm)">
+      <span style="display:flex;align-items:center;gap:6px">
+        Editing:
+        <b id="drawTargetName" style="color:var(--text-primary)">New area</b>
+        <button type="button" id="drawDeselectBtn" class="btn btn-ghost btn-sm" style="padding:1px 6px;display:none"
+                onclick="deselectRegion()" title="Deselect — brush will start a new area">✕</button>
+      </span>
+      <span id="regionDrawHint" style="flex-basis:100%;order:9"></span>
+      <label style="display:flex;align-items:center;gap:6px">
+        Brush size
+        <input type="range" id="brushSize" min="1" max="15" value="3" step="0.5" style="width:110px" oninput="onBrushSizeChange()">
+        <span id="brushSizeLabel">3 km</span>
+      </label>
+      <button type="button" id="saveCustomBtn" class="btn btn-primary btn-sm" onclick="saveCustomRegion()">💾 Save</button>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="clearCustomRegion()">Clear</button>
+    </div>
+    {% endif %}
+    <div style="display:grid;grid-template-columns:1fr 280px;gap:14px" class="region-layout">
+      <div id="regionMap" style="height:380px;border-radius:var(--radius);background:var(--bg-subtle,rgba(0,0,0,.03))"></div>
+      <div style="display:flex;flex-direction:column;gap:16px;max-height:380px;overflow-y:auto">
+        <div>
+          <div style="display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">
+            Regions <span class="badge" id="regionCount">0</span>
+          </div>
+          <div id="regionList" style="display:flex;flex-direction:column;gap:6px"></div>
+        </div>
+        <div>
+          <div style="display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">
+            Custom Areas <span class="badge" id="customAreaCount">0</span>
+          </div>
+          <div id="customAreaList" style="display:flex;flex-direction:column;gap:6px"></div>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -611,5 +676,608 @@ async function deleteCompany(clientId, companyId, name) {
   if (data.error) { alert(data.error); return; }
   location.reload();
 }
+</script>
+
+<!-- ── Regions (operating areas) ─────────────────────────────────────────── -->
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
+<script>
+const REGION_CLIENT_ID = {{ client.id }};
+const OLA_API_KEY = {{ ola_maps_api_key|tojson }};
+const CAN_EDIT_REGIONS = {{ 'true' if current_user.has_permission('clients', 'edit') else 'false' }};
+const REGION_PALETTE = ['#E2703A','#3B6FB5','#0C7A64','#B5485D','#7A5CB8','#C98F1B','#2E9E88','#C9455C'];
+const regionColor = i => REGION_PALETTE[i % REGION_PALETTE.length];
+// Distinct from REGION_PALETTE so "already added" vs "pin-drop candidate" never look alike.
+const PIN_PALETTE = ['#EF4444','#3B82F6','#10B981','#F59E0B','#8B5CF6','#EC4899','#06B6D4'];
+const pinColor = i => PIN_PALETTE[i % PIN_PALETTE.length];
+
+let regionMap, regionMapReady = false;
+let regions = [];
+let searchDebounce = null;
+let pinDropMode = false, pinMarker = null, pinCandidates = [];
+let hiddenCandidateIds = new Set();
+const DRAW_COLOR = '#14B8A6';
+let drawMode = null;       // 'brush' | 'erase' | null
+let isDrawing = false;
+let brushRadiusKm = 3;
+let customShape = null;    // GeoJSON geometry (Polygon|MultiPolygon) currently on the canvas, or null
+let activeBoundaryId = null;   // boundary_id of the region (named OR custom) currently selected
+                                // for editing — brush extends it, erase reduces it. null means
+                                // either nothing is selected, or a brand new custom area is being drawn.
+let customShapeDirty = false;   // true once brush/erase touches customShape, until it's saved —
+                                 // guards against a reload (e.g. from erasing a different region
+                                 // mid-session) silently discarding unsaved custom-shape edits
+let lastStampLngLat = null;
+let lastHoverLngLat = null;
+
+const regEsc = s => String(s ?? '').replace(/[&<>"']/g,
+  m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+
+function initRegionMap() {
+  regionMap = new maplibregl.Map({
+    container: 'regionMap',
+    style: `https://api.olamaps.io/tiles/vector/v1/styles/${document.body.classList.contains('dark') ? 'default-dark-standard' : 'default-light-standard'}/style.json`,
+    center: [78.9, 23.5],
+    zoom: 3.5,
+    transformRequest: (url) => {
+      if (url.startsWith('https://api.olamaps.io')) {
+        const sep = url.includes('?') ? '&' : '?';
+        return { url: `${url}${sep}api_key=${OLA_API_KEY}` };
+      }
+      return { url };
+    },
+  });
+  regionMap.addControl(new maplibregl.NavigationControl(), 'top-left');
+  const markReady = () => {
+    if (regionMapReady) return;
+    regionMapReady = true;
+    loadRegions();   // re-fetch fresh (not just render whatever `regions` holds already —
+  };                 // avoids any ordering race with the eager loadRegions() call below)
+  regionMap.on('load', markReady);
+  // 'load' waits for a first paint, which can hang indefinitely in some
+  // environments even though the style/sources are already usable — poll
+  // as a backstop so the map isn't stuck showing nothing.
+  (function pollReady(attempt) {
+    if (regionMapReady) return;
+    if (regionMap.isStyleLoaded() || regionMap.areTilesLoaded() || attempt > 15) { markReady(); return; }
+    setTimeout(() => pollReady(attempt + 1), 200);
+  })(0);
+
+  // Single click handler: clicking a candidate polygon adds it; clicking
+  // anywhere else while pin-drop mode is on drops a new pin and re-queries.
+  regionMap.on('click', (e) => {
+    const hits = regionMap.getLayer('pin-candidates-fill')
+      ? regionMap.queryRenderedFeatures(e.point, { layers: ['pin-candidates-fill'] })
+      : [];
+    if (hits.length) {
+      selectPinCandidate(hits[0].properties.boundary_id);
+      return;
+    }
+    if (pinDropMode) queryPinCandidates(e.lngLat);
+  });
+
+  // Brush/erase: drag to paint. dragPan is disabled while a draw mode is
+  // active (see toggleDrawMode) so a drag always draws, never pans.
+  regionMap.on('mousedown', (e) => {
+    if (!drawMode) return;
+    isDrawing = true;
+    lastStampLngLat = null;
+    stampAt(e.lngLat);
+  });
+  regionMap.on('mousemove', (e) => {
+    if (!drawMode) return;
+    showBrushCursor(e.lngLat);
+    if (isDrawing) stampAt(e.lngLat);
+  });
+  const stopDrawing = () => {
+    isDrawing = false;
+    lastStampLngLat = null;
+  };
+  regionMap.on('mouseup', stopDrawing);
+  regionMap.getCanvasContainer().addEventListener('mouseleave', () => {
+    stopDrawing();
+    hideBrushCursor();
+  });
+}
+
+/* ── Interaction modes: pin-drop / brush / erase are mutually exclusive ── */
+function setInteractionMode(mode) {   // 'pin' | 'brush' | 'erase' | null
+  pinDropMode = mode === 'pin';
+  drawMode = (mode === 'brush' || mode === 'erase') ? mode : null;
+
+  const pinBtn = document.getElementById('pinDropBtn');
+  pinBtn.classList.toggle('btn-primary', pinDropMode);
+  pinBtn.classList.toggle('btn-secondary', !pinDropMode);
+  document.getElementById('regionPinHint').style.display = pinDropMode ? '' : 'none';
+  if (!pinDropMode) clearPinCandidates();
+
+  const brushBtn = document.getElementById('brushBtn');
+  brushBtn.classList.toggle('btn-primary', drawMode === 'brush');
+  brushBtn.classList.toggle('btn-secondary', drawMode !== 'brush');
+  const eraseBtn = document.getElementById('eraseBtn');
+  eraseBtn.classList.toggle('btn-primary', drawMode === 'erase');
+  eraseBtn.classList.toggle('btn-secondary', drawMode !== 'erase');
+  document.getElementById('regionDrawBar').style.display = drawMode ? 'flex' : 'none';
+  regionMap.dragPan[drawMode ? 'disable' : 'enable']();
+  if (drawMode) updateDrawBarLabel();
+
+  document.getElementById('regionMap').classList.toggle('pin-drop-active', pinDropMode || !!drawMode);
+}
+
+function togglePinDrop() { setInteractionMode(pinDropMode ? null : 'pin'); }
+function toggleDrawMode(mode) {
+  setInteractionMode(drawMode === mode ? null : mode);
+  if (!drawMode) hideBrushCursor();
+}
+
+function onBrushSizeChange() {
+  brushRadiusKm = parseFloat(document.getElementById('brushSize').value);
+  document.getElementById('brushSizeLabel').textContent = brushRadiusKm + ' km';
+  if (drawMode && lastHoverLngLat) showBrushCursor(lastHoverLngLat);
+}
+
+/* ── Brush cursor preview — shows the exact brush footprint before you
+   click, so you know what a stamp will cover. Outline only, no fill, so
+   it never gets mistaken for actual painted area. ── */
+function showBrushCursor(lngLat) {
+  lastHoverLngLat = lngLat;
+  const circle = turf.circle([lngLat.lng, lngLat.lat], brushRadiusKm, { units: 'kilometers', steps: 48 });
+  const data = { type: 'FeatureCollection', features: [circle] };
+  if (regionMap.getSource('brush-cursor')) {
+    regionMap.getSource('brush-cursor').setData(data);
+  } else {
+    regionMap.addSource('brush-cursor', { type: 'geojson', data });
+    regionMap.addLayer({ id: 'brush-cursor-line', type: 'line', source: 'brush-cursor',
+      paint: {
+        'line-color': drawMode === 'erase' ? '#EF4444' : DRAW_COLOR,
+        'line-width': 2, 'line-dasharray': [2, 1.5],
+      } });
+  }
+  // Erase uses red to warn "this will remove", brush stays teal — update on mode change too.
+  if (regionMap.getLayer('brush-cursor-line')) {
+    regionMap.setPaintProperty('brush-cursor-line', 'line-color', drawMode === 'erase' ? '#EF4444' : DRAW_COLOR);
+  }
+}
+
+function hideBrushCursor() {
+  lastHoverLngLat = null;
+  if (regionMap.getLayer('brush-cursor-line')) regionMap.removeLayer('brush-cursor-line');
+  if (regionMap.getSource('brush-cursor')) regionMap.removeSource('brush-cursor');
+}
+
+/* ── Brush/erase drawing ──────────────────────────────────────────
+   Both tools operate ONLY on the working shape (customShape) — nothing else
+   on the map is touched. What the working shape *is* depends entirely on
+   selection: select a region/area first (activeBoundaryId set) and the
+   working shape is a copy of its geometry, so brush extends it and erase
+   reduces it; with nothing selected, brush starts a fresh shape and erase
+   only carves into that not-yet-saved shape. Nothing persists until Save. */
+function stampAt(lngLat) {
+  if (lastStampLngLat) {
+    const moved = turf.distance(
+      [lastStampLngLat.lng, lastStampLngLat.lat], [lngLat.lng, lngLat.lat], { units: 'kilometers' },
+    );
+    if (moved < brushRadiusKm * 0.3) return;   // throttle — don't stamp every pixel of the drag
+  }
+  lastStampLngLat = lngLat;
+  const circle = turf.circle([lngLat.lng, lngLat.lat], brushRadiusKm, { units: 'kilometers', steps: 32 });
+  try {
+    if (drawMode === 'brush') {
+      customShape = customShape ? turf.union(turf.feature(customShape), circle).geometry : circle.geometry;
+      customShapeDirty = true;
+      renderCustomShape();
+    } else if (drawMode === 'erase' && customShape) {
+      const result = turf.difference(turf.feature(customShape), circle);
+      customShape = result ? result.geometry : null;
+      customShapeDirty = true;
+      renderCustomShape();
+    }
+  } catch (e) {
+    console.error('Draw operation failed:', e);
+  }
+}
+
+function renderCustomShape() {
+  const data = customShape
+    ? { type: 'FeatureCollection', features: [{ type: 'Feature', properties: {}, geometry: customShape }] }
+    : { type: 'FeatureCollection', features: [] };
+  if (regionMap.getSource('custom-draw')) {
+    regionMap.getSource('custom-draw').setData(data);
+  } else {
+    regionMap.addSource('custom-draw', { type: 'geojson', data });
+    regionMap.addLayer({ id: 'custom-draw-fill', type: 'fill', source: 'custom-draw',
+      paint: { 'fill-color': DRAW_COLOR, 'fill-opacity': 0.35 } });
+    regionMap.addLayer({ id: 'custom-draw-line', type: 'line', source: 'custom-draw',
+      paint: { 'line-color': DRAW_COLOR, 'line-width': 2.5 } });
+  }
+}
+
+async function saveCustomRegion() {
+  const active = activeBoundaryId ? regions.find(r => r.boundary_id === activeBoundaryId) : null;
+
+  // Editing a selected region (named place OR custom area) that's been fully
+  // erased away: saving an empty shape means "delete this region".
+  if (active && !customShape) {
+    if (!confirm(`"${active.name}" has been erased completely. Remove it?`)) return;
+    const res = await fetch(`/clients/${REGION_CLIENT_ID}/regions/${active.link_id}/delete`, { method: 'POST' });
+    const data = await res.json();
+    if (data.error) { alert(data.error); return; }
+    activeBoundaryId = null; customShape = null; customShapeDirty = false;
+    loadRegions();
+    return;
+  }
+  if (!customShape) { alert('Select a region to edit, or brush to paint a new area first.'); return; }
+
+  // Editing a selected NAMED place: persist the reshaped geometry via the
+  // trim endpoint, which saves it as this client's own override rather than
+  // touching the shared boundary other clients also use.
+  if (active && active.source !== 'custom') {
+    const res = await fetch(`/clients/${REGION_CLIENT_ID}/regions/${active.link_id}/trim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ geometry: customShape }),
+    });
+    const data = await res.json();
+    if (data.error) { alert(data.error); return; }
+    customShapeDirty = false;
+    loadRegions();
+    return;
+  }
+
+  // New, or an existing custom area.
+  let name;
+  if (active) {
+    name = active.name;
+  } else {
+    const suggested = 'Custom Area ' + (regions.filter(r => r.source === 'custom').length + 1);
+    name = prompt('Name this area:', suggested);
+    if (name === null) return;   // cancelled
+    name = name.trim() || suggested;
+  }
+  const res = await fetch(`/clients/${REGION_CLIENT_ID}/regions/custom`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ geometry: customShape, name, boundary_id: activeBoundaryId }),
+  });
+  const data = await res.json();
+  if (data.error) { alert(data.error); return; }
+  activeBoundaryId = data.boundary_id;   // keep editing the same area after saving
+  customShapeDirty = false;
+  loadRegions();
+}
+
+function clearCustomRegion() {
+  // Discards unsaved edits — reverts to the active region's last-saved shape,
+  // or to blank if nothing is selected (a brand new, never-saved area).
+  const active = activeBoundaryId ? regions.find(r => r.boundary_id === activeBoundaryId) : null;
+  customShape = active ? active.geometry : null;
+  customShapeDirty = false;
+  renderCustomShape();
+}
+
+function startNewCustomArea() {
+  deselectRegion();
+  if (!drawMode) setInteractionMode('brush');
+}
+
+function deselectRegion() {
+  activeBoundaryId = null;
+  customShape = null;
+  customShapeDirty = false;
+  renderCustomShape();
+  renderRegions({ skipFit: true });
+}
+
+function selectRegion(boundaryId) {
+  // Works for any region — named place or custom area. Extending a named
+  // place's shape never touches the shared boundary (see trim_region on the
+  // backend): it's saved as this client's own override, same mechanism
+  // erase already used to shrink one.
+  activeBoundaryId = (activeBoundaryId === boundaryId) ? null : boundaryId;
+  customShapeDirty = false;
+  const region = activeBoundaryId ? regions.find(r => r.boundary_id === activeBoundaryId) : null;
+  customShape = region ? region.geometry : null;
+  renderCustomShape();
+  renderRegions({ skipFit: true });   // refreshes the active-highlight in both lists
+  if (activeBoundaryId && !drawMode) setInteractionMode('brush');
+}
+
+function updateDrawBarLabel() {
+  const targetName = document.getElementById('drawTargetName');
+  const deselectBtn = document.getElementById('drawDeselectBtn');
+  const hint = document.getElementById('regionDrawHint');
+  const saveBtn = document.getElementById('saveCustomBtn');
+  if (!targetName || !hint || !saveBtn) return;   // draw controls only exist for editors
+  const active = activeBoundaryId ? regions.find(r => r.boundary_id === activeBoundaryId) : null;
+  if (active) {
+    targetName.textContent = active.name;
+    deselectBtn.style.display = '';
+    hint.textContent = 'Brush extends this region · erase reduces it. Nothing else on the map is affected.';
+    saveBtn.textContent = '💾 Update';
+  } else {
+    targetName.textContent = 'New area';
+    deselectBtn.style.display = 'none';
+    hint.textContent = 'Nothing selected — brush paints a brand new area. Select a region from the list first to edit it instead.';
+    saveBtn.textContent = '💾 Save';
+  }
+}
+
+async function renameCustomArea(linkId) {
+  const region = regions.find(r => r.link_id === linkId);
+  const name = prompt('Rename this area:', region ? region.name : '');
+  if (name === null) return;
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  const res = await fetch(`/clients/${REGION_CLIENT_ID}/regions/${linkId}/rename`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: trimmed }),
+  });
+  const data = await res.json();
+  if (data.error) { alert(data.error); return; }
+  loadRegions();
+}
+
+function clearPinCandidates() {
+  pinCandidates = [];
+  hiddenCandidateIds = new Set();
+  if (pinMarker) { pinMarker.remove(); pinMarker = null; }
+  if (regionMap.getLayer('pin-candidates-fill')) regionMap.removeLayer('pin-candidates-fill');
+  if (regionMap.getLayer('pin-candidates-line')) regionMap.removeLayer('pin-candidates-line');
+  if (regionMap.getSource('pin-candidates')) regionMap.removeSource('pin-candidates');
+  document.getElementById('regionPinPanel').style.display = 'none';
+}
+
+function queryPinCandidates(lngLat) {
+  clearPinCandidates();
+  pinMarker = new maplibregl.Marker({ color: '#111827' }).setLngLat(lngLat).addTo(regionMap);
+  const panel = document.getElementById('regionPinPanel');
+  panel.style.display = '';
+  panel.innerHTML = '<div style="padding:12px;font-size:13px;color:var(--text-muted)">Looking up boundaries…</div>';
+
+  fetch(`/clients/regions/reverse?lat=${lngLat.lat}&lon=${lngLat.lng}`)
+    .then(r => r.json())
+    .then(candidates => {
+      pinCandidates = candidates;
+      if (!candidates.length) {
+        panel.innerHTML = '<div style="padding:12px;font-size:13px;color:var(--text-muted)">No boundary data found for that point.</div>';
+        return;
+      }
+      renderPinCandidates();
+    })
+    .catch(() => {
+      panel.innerHTML = '<div style="padding:12px;font-size:13px;color:var(--danger)">Lookup failed — try again.</div>';
+    });
+}
+
+function pinCandidateFeatures() {
+  return pinCandidates
+    .map((c, i) => ({
+      type: 'Feature',
+      properties: { boundary_id: c.boundary_id, name: c.name, color: pinColor(i) },
+      geometry: c.geometry,
+    }))
+    .filter((f, i) => !hiddenCandidateIds.has(pinCandidates[i].boundary_id));
+}
+
+function renderPinCandidates() {
+  const data = { type: 'FeatureCollection', features: pinCandidateFeatures() };
+  regionMap.addSource('pin-candidates', { type: 'geojson', data });
+  regionMap.addLayer({ id: 'pin-candidates-fill', type: 'fill', source: 'pin-candidates',
+    paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.28 } });
+  regionMap.addLayer({ id: 'pin-candidates-line', type: 'line', source: 'pin-candidates',
+    paint: { 'line-color': ['get', 'color'], 'line-width': 2.5 } });
+  renderPinPanel();
+}
+
+function renderPinPanel() {
+  document.getElementById('regionPinPanel').innerHTML = pinCandidates.map((c, i) => {
+    const hidden = hiddenCandidateIds.has(c.boundary_id);
+    return `
+    <div class="region-pin-row" style="${hidden ? 'opacity:.5' : ''}" onclick="selectPinCandidate(${c.boundary_id})">
+      <button type="button" class="btn btn-ghost btn-sm" style="padding:2px 6px"
+              onclick="event.stopPropagation(); toggleCandidateVisibility(${c.boundary_id})"
+              title="${hidden ? 'Show' : 'Hide'} this boundary on the map">${hidden ? '🙈' : '👁'}</button>
+      <span class="region-pin-swatch" style="background:${pinColor(i)}"></span>
+      <span class="region-name" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${regEsc(c.name)}">${regEsc(c.name)}</span>
+      <span class="region-type">${regEsc(c.area_type || '')}</span>
+      <span style="font-size:11px;color:var(--text-muted);text-transform:uppercase">${regEsc(c.source)}</span>
+    </div>`;
+  }).join('');
+}
+
+function toggleCandidateVisibility(boundaryId) {
+  if (hiddenCandidateIds.has(boundaryId)) hiddenCandidateIds.delete(boundaryId);
+  else hiddenCandidateIds.add(boundaryId);
+  regionMap.getSource('pin-candidates').setData({ type: 'FeatureCollection', features: pinCandidateFeatures() });
+  renderPinPanel();
+}
+
+async function selectPinCandidate(boundaryId) {
+  const res = await fetch(`/clients/${REGION_CLIENT_ID}/regions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ boundary_id: boundaryId }),
+  });
+  const data = await res.json();
+  if (data.error) { alert(data.error); return; }
+  clearPinCandidates();
+  loadRegions();
+}
+
+function regionBounds(features) {
+  const bounds = new maplibregl.LngLatBounds();
+  features.forEach(f => {
+    const rings = f.geometry.type === 'MultiPolygon' ? f.geometry.coordinates.flat() : f.geometry.coordinates;
+    rings.forEach(ring => ring.forEach(pt => bounds.extend(pt)));
+  });
+  return bounds;
+}
+
+function renderRegions(opts) {
+  opts = opts || {};
+  if (!regionMapReady) return;
+
+  // Pick up the active custom area's saved shape so re-entering draw mode
+  // continues editing it instead of starting from a blank canvas — but not
+  // while there are unsaved in-progress edits to it (customShapeDirty):
+  // this render pass can be triggered mid-session by erasing a *different*
+  // region (which reloads from the server), and that must not clobber a
+  // custom shape the user hasn't saved yet.
+  if (!customShapeDirty) {
+    const active = activeBoundaryId ? regions.find(r => r.boundary_id === activeBoundaryId) : null;
+    customShape = active ? active.geometry : null;
+  }
+
+  const visible = regions.filter(r => r.geometry);
+
+  const features = visible.map((r, i) => ({
+    type: 'Feature',
+    properties: { name: r.name, color: regionColor(i) },
+    geometry: r.geometry,
+  }));
+  const data = { type: 'FeatureCollection', features };
+  if (regionMap.getSource('client-regions')) {
+    regionMap.getSource('client-regions').setData(data);
+  } else {
+    regionMap.addSource('client-regions', { type: 'geojson', data });
+    regionMap.addLayer({ id: 'client-regions-fill', type: 'fill', source: 'client-regions',
+      paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.18 } });
+    regionMap.addLayer({ id: 'client-regions-line', type: 'line', source: 'client-regions',
+      paint: { 'line-color': ['get', 'color'], 'line-width': 2.5 } });
+    regionMap.on('click', 'client-regions-fill', (e) => {
+      new maplibregl.Popup({ offset: 6 }).setLngLat(e.lngLat)
+        .setHTML('<b>' + regEsc(e.features[0].properties.name) + '</b>').addTo(regionMap);
+    });
+  }
+  if (features.length && !opts.skipFit) {
+    regionMap.fitBounds(regionBounds(features), { padding: 30, animate: false });
+  }
+
+  // Named places and hand-drawn custom areas get their own lists, but share
+  // one color sequence (via `visible`'s index) so a region's swatch always
+  // matches its outline on the map, whichever list it's showing in. Both
+  // lists are selectable the same way — brush/erase then edit whichever
+  // region is active, named place or custom area alike.
+  const namedRegions = visible.filter(r => r.source !== 'custom');
+  const list = document.getElementById('regionList');
+  document.getElementById('regionCount').textContent = namedRegions.length;
+  if (!namedRegions.length) {
+    list.innerHTML = '<div style="font-size:13px;color:var(--text-muted);padding:8px">No regions added yet.</div>';
+  } else {
+    list.innerHTML = namedRegions.map(r => {
+      const active = r.boundary_id === activeBoundaryId;
+      return `
+      <div class="region-item" style="${active ? 'border-color:var(--accent)' : ''}">
+        <span class="region-swatch" style="background:${regionColor(visible.indexOf(r))}"></span>
+        ${selectableNameSpan(r, active)}
+        <span class="region-type">${regEsc(r.area_type || '')}</span>
+        ${CAN_EDIT_REGIONS ? `<button class="btn btn-ghost btn-sm" onclick="removeRegion(${r.link_id})" title="Remove">✕</button>` : ''}
+      </div>`;
+    }).join('');
+  }
+
+  renderCustomAreaList(visible);
+  updateDrawBarLabel();
+}
+
+function selectableNameSpan(r, active) {
+  if (!CAN_EDIT_REGIONS) {
+    return `<span class="region-name" title="${regEsc(r.name)}">${regEsc(r.name)}</span>`;
+  }
+  const label = active ? 'stop editing' : 'select — then Brush/Erase to reshape it';
+  return `<span class="region-name" style="cursor:pointer;${active ? 'font-weight:700' : ''}"
+            title="Click to ${label}" onclick="selectRegion(${r.boundary_id})">${regEsc(r.name)}</span>`;
+}
+
+function renderCustomAreaList(visible) {
+  visible = visible || regions.filter(r => r.geometry);
+  const customAreas = visible.filter(r => r.source === 'custom');
+  document.getElementById('customAreaCount').textContent = customAreas.length;
+  const list = document.getElementById('customAreaList');
+  if (!customAreas.length) {
+    list.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:6px 0">No custom areas yet — use Brush to paint one.</div>';
+    return;
+  }
+  list.innerHTML = customAreas.map(r => {
+    const active = r.boundary_id === activeBoundaryId;
+    return `
+    <div class="region-item" style="${active ? 'border-color:var(--accent)' : ''}">
+      <span class="region-swatch" style="background:${regionColor(visible.indexOf(r))}"></span>
+      ${selectableNameSpan(r, active)}
+      ${CAN_EDIT_REGIONS ? `
+      <button class="btn btn-ghost btn-sm" onclick="renameCustomArea(${r.link_id})" title="Rename">✏️</button>
+      <button class="btn btn-ghost btn-sm" onclick="removeRegion(${r.link_id})" title="Remove">✕</button>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function loadRegions() {
+  fetch(`/clients/${REGION_CLIENT_ID}/regions`)
+    .then(r => r.json())
+    .then(d => { regions = d; renderRegions(); })
+    .catch(e => console.error('Failed to load regions:', e));
+}
+
+async function removeRegion(linkId) {
+  const removed = regions.find(r => r.link_id === linkId);
+  const res = await fetch(`/clients/${REGION_CLIENT_ID}/regions/${linkId}/delete`, { method: 'POST' });
+  const data = await res.json();
+  if (data.error) { alert(data.error); return; }
+  if (removed && removed.boundary_id === activeBoundaryId) {
+    activeBoundaryId = null;
+    customShape = null;
+    customShapeDirty = false;
+  }
+  loadRegions();
+}
+
+function onRegionSearchInput() {
+  clearTimeout(searchDebounce);
+  const q = document.getElementById('regionSearch').value.trim();
+  const box = document.getElementById('regionSearchResults');
+  if (!q) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  searchDebounce = setTimeout(() => {
+    fetch(`/clients/regions/search?q=${encodeURIComponent(q)}`)
+      .then(r => r.json())
+      .then(candidates => {
+        if (!candidates.length) {
+          box.innerHTML = '<div class="region-search-row" style="color:var(--text-muted);cursor:default">No matches.</div>';
+          box.style.display = '';
+          return;
+        }
+        box.innerHTML = candidates.map(c => `
+          <div class="region-search-row" onclick='addRegionFromSearch(${JSON.stringify(c).replace(/'/g, "&#39;")})'>
+            <div style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${regEsc(c.name)}</div>
+            <div style="font-size:11px;color:var(--text-muted);text-transform:capitalize;flex-shrink:0">${regEsc(c.type)}</div>
+          </div>`).join('');
+        box.style.display = '';
+      })
+      .catch(() => { box.style.display = 'none'; });
+  }, 300);
+}
+
+async function addRegionFromSearch(candidate) {
+  const box = document.getElementById('regionSearchResults');
+  box.style.display = 'none';
+  document.getElementById('regionSearch').value = '';
+  const res = await fetch(`/clients/${REGION_CLIENT_ID}/regions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ osm_type: candidate.osm_type, osm_id: candidate.osm_id, name: candidate.name }),
+  });
+  const data = await res.json();
+  if (data.error) { alert(data.error); return; }
+  loadRegions();
+}
+
+document.addEventListener('click', (e) => {
+  const box = document.getElementById('regionSearchResults');
+  const input = document.getElementById('regionSearch');
+  if (box && !box.contains(e.target) && e.target !== input) box.style.display = 'none';
+});
+
+initRegionMap();
+loadRegions();
 </script>
 {% endblock %}

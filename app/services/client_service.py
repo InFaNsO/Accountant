@@ -1,4 +1,5 @@
 from ..database import get_db
+from . import geocoding_service
 
 
 def get_all_clients():
@@ -125,16 +126,21 @@ def create_client(data, companies=None, include_locks=True):
     include_locks=False ignores lock fields (caller lacks the clients.locks permission)."""
     db = get_db()
     tally_lock, bl_enabled, bl_limit = _parse_lock_fields(data) if include_locks else (0, 0, 0.0)
+    city  = (data.get("city") or "").strip() or None
+    state = (data.get("state") or "").strip() or None
+    lat, lng = geocoding_service.forward_geocode(", ".join(filter(None, [city, state, "India"])))
     cur = db.execute(
-        """INSERT INTO clients (name, phone, notes, city, state, opening_balance, payment_terms,
+        """INSERT INTO clients (name, phone, notes, city, state, latitude, longitude,
+                                opening_balance, payment_terms,
                                 tally_lock, balance_lock_enabled, balance_lock_limit)
-           VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)""",
         (
             data["name"],
             data.get("phone"),
             data.get("notes"),
-            (data.get("city") or "").strip() or None,
-            (data.get("state") or "").strip() or None,
+            city,
+            state,
+            lat, lng,
             int(data.get("payment_terms") or 30),
             tally_lock, bl_enabled, bl_limit,
         ),
@@ -182,17 +188,28 @@ def update_client(client_id, data, companies=None, include_locks=True):
     include_locks=False leaves lock settings untouched (caller lacks the
     clients.locks permission, so the form didn't render the lock fields)."""
     db = get_db()
+    city  = (data.get("city") or "").strip() or None
+    state = (data.get("state") or "").strip() or None
+    existing = db.execute(
+        "SELECT city, state, latitude, longitude FROM clients WHERE id=?", (client_id,)
+    ).fetchone()
+    if existing and (city, state) != (existing["city"], existing["state"]):
+        lat, lng = geocoding_service.forward_geocode(", ".join(filter(None, [city, state, "India"])))
+    else:
+        lat = existing["latitude"] if existing else None
+        lng = existing["longitude"] if existing else None
     db.execute(
         """UPDATE clients
-           SET name=?, phone=?, notes=?, city=?, state=?,
+           SET name=?, phone=?, notes=?, city=?, state=?, latitude=?, longitude=?,
                payment_terms=?, updated_at=CURRENT_TIMESTAMP
            WHERE id=?""",
         (
             data["name"],
             data.get("phone"),
             data.get("notes"),
-            (data.get("city") or "").strip() or None,
-            (data.get("state") or "").strip() or None,
+            city,
+            state,
+            lat, lng,
             int(data.get("payment_terms") or 30),
             client_id,
         ),

@@ -4,7 +4,7 @@ from ..services.payment_service import get_dashboard_stats
 from ..services.product_service import get_stock_alerts
 from ..services.transit_service import get_dispatches_due_soon
 from ..services import sales_service
-from ..services.auth_service import get_scoped_client_ids, get_manager_staff
+from ..services.auth_service import get_scoped_client_ids, get_manager_staff, get_own_scoped_client_ids
 from datetime import date, timedelta
 
 bp = Blueprint("dashboard", __name__)
@@ -73,6 +73,7 @@ def resolve_window(window, custom_from="", custom_to=""):
 @bp.route("/")
 @login_required
 def index():
+    import os
     window      = request.args.get("window", "last_30")
     custom_from = request.args.get("from", "")
     custom_to   = request.args.get("to", "")
@@ -81,7 +82,14 @@ def index():
     date_from = d_from.isoformat() if d_from else None
     date_to   = d_to.isoformat()   if d_to   else None
 
+    # The coverage map is client data, so it always requires clients:view;
+    # the data behind it is further user-scoped by clients.regions_all.
+    can_view_clients = current_user.has_permission("clients", "view")
+    ola_key = os.environ.get("OLA_MAPS_API_KEY", "")
+
     # ── Sales-manager dashboard: scoped to their team's clients ─────────────
+    # (fixed layout — no per-section toggles — so the map shows whenever they
+    # can view clients, which sales managers do by default.)
     if getattr(current_user, "role", None) == "sales":
         client_ids = get_scoped_client_ids(current_user)
         staff      = [dict(u) for u in get_manager_staff(current_user.id)]
@@ -97,10 +105,19 @@ def index():
             date_to=date_to or "",
             custom_from=custom_from,
             custom_to=custom_to,
+            show_region_map=can_view_clients,
+            ola_maps_api_key=ola_key,
         )
 
+    # ── Any user with clients assigned to them (clients.sales_rep_id) sees a
+    # dashboard scoped to just those clients; no assignment = company-wide data.
+    own_client_ids = get_own_scoped_client_ids(current_user)
+
     dash_sections = current_user.get_dashboard_sections()
-    stats         = get_dashboard_stats(date_from=date_from, date_to=date_to)
+    # Regular dashboard: the map is a toggleable dashboard section (still
+    # requires clients:view so the card never appears without loadable data).
+    show_region_map = ("coverage_map" in dash_sections) and can_view_clients
+    stats         = get_dashboard_stats(date_from=date_from, date_to=date_to, client_ids=own_client_ids)
     alerts        = get_stock_alerts()
     dispatches_due_soon  = get_dispatches_due_soon(days=14)
 
@@ -116,4 +133,6 @@ def index():
         date_to=date_to or "",
         custom_from=custom_from,
         custom_to=custom_to,
+        show_region_map=show_region_map,
+        ola_maps_api_key=ola_key,
     )

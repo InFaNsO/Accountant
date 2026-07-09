@@ -501,6 +501,33 @@ def _create_schema(db):
         CREATE INDEX IF NOT EXISTS idx_visits_client    ON client_visits(client_id);
     """)
 
+    # ── Client operating regions (cached boundary polygons) ────
+    # area_boundaries caches one resolved polygon per real-world place,
+    # shared across every client that selects it (source_ref is the
+    # dedupe key: 'nominatim:<osm_type>:<osm_id>' or 'bharatmaps:<layer>:<name>').
+    # client_regions just links a client to boundaries they operate in.
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS area_boundaries (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_ref TEXT NOT NULL UNIQUE,
+            name       TEXT NOT NULL,
+            area_type  TEXT,
+            geometry   TEXT NOT NULL,
+            source     TEXT NOT NULL,
+            fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS client_regions (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id   INTEGER NOT NULL,
+            boundary_id INTEGER NOT NULL,
+            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(client_id, boundary_id),
+            FOREIGN KEY (client_id)   REFERENCES clients(id) ON DELETE CASCADE,
+            FOREIGN KEY (boundary_id) REFERENCES area_boundaries(id) ON DELETE CASCADE
+        );
+    """)
+
     # ── Mobile push notifications ─────────────────────────────
     db.executescript("""
         CREATE TABLE IF NOT EXISTS device_tokens (
@@ -581,5 +608,11 @@ def _create_schema(db):
     _add_column(db, "clients",                 "sales_rep_id",         "INTEGER")
     # Sales-manager hierarchy: staff members point at their manager (role='sales').
     _add_column(db, "users",                   "manager_id",           "INTEGER")
+    # Per-client trim of a shared boundary (e.g. the erase tool cutting into
+    # a named region). NULL = use area_boundaries.geometry as-is. Keeping
+    # this on the link row (not the shared boundary) means erasing part of
+    # "Mumbai Suburban" for one client never touches the cached shape other
+    # clients who also picked "Mumbai Suburban" are using.
+    _add_column(db, "client_regions",          "geometry_override",    "TEXT")
 
     db.commit()

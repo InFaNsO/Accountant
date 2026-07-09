@@ -43,6 +43,7 @@ DASHBOARD_SECTIONS = [
     ("low_stock",        "Low Stock Alerts"),
     ("in_production",    "In Production"),
     ("in_transit",       "In Transit"),
+    ("coverage_map",     "Client Coverage Map"),
 ]
 _ALL_DASH_KEYS = {k for k, _ in DASHBOARD_SECTIONS}
 
@@ -54,6 +55,7 @@ class User(UserMixin):
         self.email         = row["email"]
         self.password_hash = row["password_hash"]
         self.role          = row["role"]
+        self.manager_id    = row["manager_id"]
         self._is_active    = bool(row["is_active"])
 
     @property
@@ -320,6 +322,22 @@ def get_scoped_client_ids(user):
         f"SELECT id FROM clients WHERE sales_rep_id IN ({ph})", team
     ).fetchall()
     return {r["id"] for r in rows}
+
+
+def get_own_scoped_client_ids(user):
+    """Set of client ids assigned to this user (clients.sales_rep_id), or None
+    for unrestricted. Any user with at least one client assigned to them gets
+    a dashboard scoped to just those clients; a user with none assigned sees
+    company-wide data. God is never scoped, even if somehow assigned a client.
+    Sales managers (role='sales') get the wider team view via
+    get_scoped_client_ids() instead, on a separate dashboard branch."""
+    if user.is_god():
+        return None
+    rows = get_db().execute(
+        "SELECT id FROM clients WHERE sales_rep_id=?", (user.id,)
+    ).fetchall()
+    ids = {r["id"] for r in rows}
+    return ids or None
 
 
 def set_manager_staff(manager_id, staff_ids):
