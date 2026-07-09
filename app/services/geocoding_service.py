@@ -106,7 +106,10 @@ def get_area_boundary(query):
 
 def search_places(query, limit=8):
     """Live search-as-you-type candidates for the client-region picker.
-    Lightweight — no polygon fetched yet, just enough to list & disambiguate.
+    Requests boundary polygons in the same call (no extra request) and only
+    returns candidates that actually have one — picking a result always
+    succeeds in adding a region, instead of silently failing for places
+    Nominatim only has a point for (roads, POIs, etc.).
     Returns [{"osm_type", "osm_id", "name", "type", "lat", "lon"}, ...]."""
     query = (query or "").strip()
     if not query:
@@ -114,7 +117,8 @@ def search_places(query, limit=8):
     try:
         resp = requests.get(
             _NOMINATIM_URL,
-            params={"q": query, "format": "json", "addressdetails": 1, "limit": limit},
+            params={"q": query, "format": "json", "addressdetails": 1, "limit": limit,
+                    "polygon_geojson": 1, "polygon_threshold": _SIMPLIFY_DEGREES},
             headers=_UA, timeout=_TIMEOUT,
         )
         resp.raise_for_status()
@@ -124,6 +128,8 @@ def search_places(query, limit=8):
     out = []
     for r in results:
         if r.get("class") not in _PLACE_CLASSES:
+            continue
+        if r.get("geojson", {}).get("type") not in _POLYGON_TYPES:
             continue
         try:
             out.append({
