@@ -1385,6 +1385,36 @@ def get_client_product_breakdown(
 
 
 @mcp.tool()
+def clients_by_region(place: str) -> dict:
+    """Which client(s) operate in a given city/state (or any place). Geocodes
+    the place name (Ola Maps) then checks it against every client's saved
+    operating regions (the areas drawn on their client page's Regions map)
+    for a point-in-region match.
+
+    Args:
+      place: free text, e.g. "Ahmedabad, Gujarat" or "Preet Vihar, New Delhi".
+
+    Returns: resolved_lat/resolved_lon (null if the place couldn't be
+    geocoded — see the `note` field for why), clients (each with client_id,
+    client_name, matched_regions — the specific saved area(s) whose outline
+    contains the point, with name + area_type), and count.
+    """
+    return _call("GET", "clients/by-region", params={"place": place})
+
+
+@mcp.tool()
+def get_client_regions(client_id: int) -> dict:
+    """Every operating region saved for one client, by name — the reverse of
+    clients_by_region. Use this to answer "where does client X operate?".
+
+    Returns: client_id, client_name, regions (each with link_id, name,
+    area_type, source — "nominatim"/"bharatmaps" for a named place, "custom"
+    for a hand-drawn area), and count. Omits boundary geometry (map-only data).
+    """
+    return _call("GET", f"clients/{client_id}/regions")
+
+
+@mcp.tool()
 def get_category_products(category_id: int, include_inactive: bool = False) -> dict:
     """All products in a category with nested sub-products. Each product/sub-product
     reports box size and bucket quantities (warehouse / production / transit) plus

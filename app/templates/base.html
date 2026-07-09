@@ -12,15 +12,20 @@
     input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
     input[type=number] { -moz-appearance: textfield; appearance: textfield; }
   </style>
-  <!-- Apply theme & stock unit preference before first paint to avoid flash -->
+  <!-- Apply stock unit preference before first paint to avoid flash. (Theme
+       can't be applied here — document.body doesn't exist yet inside <head>,
+       so that has to wait until <body> opens, just below.) -->
   <script>
-    if(localStorage.getItem('theme')==='dark') document.body.classList.add('dark');
     if(localStorage.getItem('stockUnit')!=='pcs') document.documentElement.classList.add('show-boxes');
   </script>
 </head>
 <body>
-<!-- Apply collapsed-sidebar preference before the sidebar paints to avoid flash -->
-<script>if(localStorage.getItem('sidebarCollapsed')==='1')document.body.classList.add('sidebar-collapsed');</script>
+<!-- Apply theme & collapsed-sidebar preference before the rest of the page
+     (including any map that reads document.body.classList at init) paints -->
+<script>
+  if(localStorage.getItem('theme')==='dark') document.body.classList.add('dark');
+  if(localStorage.getItem('sidebarCollapsed')==='1') document.body.classList.add('sidebar-collapsed');
+</script>
 
 <div id="sidebarOverlay" onclick="closeSidebar()"></div>
 

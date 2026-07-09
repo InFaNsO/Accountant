@@ -65,6 +65,7 @@ function filterTable(q, tableId) {
 function toggleDark() {
   const isDark = document.body.classList.toggle('dark');
   localStorage.setItem('theme', isDark ? 'dark' : 'light');
+  window.dispatchEvent(new CustomEvent('ledger:theme-changed', { detail: { dark: isDark } }));
 }
 
 // Auto-dismiss flash messages after 4s

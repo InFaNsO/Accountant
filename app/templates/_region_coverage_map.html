@@ -1,10 +1,58 @@
 {% if show_region_map %}
 <!-- ── Client coverage map (consolidated regions, one colour per client) ── -->
 <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
-<div class="card" style="margin-top:18px">
+<style>
+  /* MapLibre popups default to a white box + black text — force them onto
+     the app's theme variables so they stay readable in dark mode too. */
+  #rcmMap .maplibregl-popup-content {
+    background: var(--surface);
+    color: var(--text-primary);
+    box-shadow: var(--shadow-md);
+    border: 1px solid var(--border);
+    font-size: 12.5px;
+  }
+  #rcmMap .maplibregl-popup-anchor-bottom .maplibregl-popup-tip { border-top-color: var(--surface); }
+  #rcmMap .maplibregl-popup-anchor-top .maplibregl-popup-tip { border-bottom-color: var(--surface); }
+  #rcmMap .maplibregl-popup-anchor-left .maplibregl-popup-tip { border-right-color: var(--surface); }
+  #rcmMap .maplibregl-popup-anchor-right .maplibregl-popup-tip { border-left-color: var(--surface); }
+  #rcmMap .maplibregl-popup-close-button { color: var(--text-primary); }
+  .rcm-client-link { cursor: pointer; color: inherit; text-decoration: none; }
+  .rcm-client-link:hover { text-decoration: underline; color: var(--accent); }
+
+  /* Full-screen expand: the card pops out to a near-viewport-filling popup,
+     everything inside (map, empty-state, legend) reflows to fill it. */
+  #rcmBackdrop {
+    display: none; position: fixed; inset: 0; z-index: 9998;
+    background: rgba(0,0,0,.55);
+  }
+  #rcmBackdrop.active { display: block; }
+  #rcmCard.map-fullscreen {
+    position: fixed; inset: 3vh; z-index: 9999; margin: 0;
+    display: flex; flex-direction: column;
+    box-shadow: 0 20px 60px rgba(0,0,0,.45);
+  }
+  #rcmCard.map-fullscreen .card-body {
+    flex: 1; display: flex; flex-direction: column; overflow: auto;
+  }
+  #rcmCard.map-fullscreen #rcmMap { flex: 1; height: auto !important; }
+  body.map-fullscreen-active { overflow: hidden; }
+  .map-expand-btn {
+    display: flex; align-items: center; justify-content: center;
+    width: 26px; height: 26px; border-radius: var(--radius-sm);
+    color: var(--text-muted); background: transparent; border: none; cursor: pointer;
+  }
+  .map-expand-btn:hover { background: var(--bg); color: var(--text-primary); }
+</style>
+<div id="rcmBackdrop" onclick="toggleRcmFullscreen()"></div>
+<div class="card" id="rcmCard" style="margin-top:18px">
   <div class="card-header">
     <span class="card-title">Client Coverage Map</span>
     <span class="badge" id="rcmCount" style="margin-left:auto">0</span>
+    <button type="button" class="map-expand-btn" onclick="toggleRcmFullscreen()" title="Full screen" id="rcmExpandBtn">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+      </svg>
+    </button>
   </div>
   <div class="card-body">
     <div id="rcmMap" style="height:440px;border-radius:var(--radius);background:var(--bg-subtle,rgba(0,0,0,.03))"></div>
@@ -26,8 +74,23 @@
                    '#2E9E88','#C9455C','#4C6EF5','#E8590C','#0CA678','#AE3EC9'];
   const esc = s => String(s ?? '').replace(/[&<>"']/g,
     m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  const clientLinkHtml = p =>
+    `<a href="/clients/${encodeURIComponent(p.client_id)}" class="rcm-client-link" style="font-weight:700">${esc(p.name)}</a>`;
 
   let map;
+  let lastData = null;      // last-rendered FeatureCollection, redrawn after a theme-driven restyle
+  let handlersBound = false; // layer click/hover handlers are bound once, ever — setStyle() wipes
+                              // the layer but not map-level delegated listeners, so re-adding them
+                              // on every restyle would stack duplicate popups
+  let forceRebuild = false; // set right before map.setStyle(): MapLibre keeps the OLD style (and
+                             // its sources) alive until the new style's fetch finishes, so
+                             // getSource() keeps returning the soon-to-vanish old source for a
+                             // while — this flag stops drawOnMap from being fooled into "reusing"
+                             // it via setData() instead of re-adding fresh once the swap lands
+  const olaStyleUrl = dark =>
+    `https://api.olamaps.io/tiles/vector/v1/styles/${dark ? 'default-dark-standard' : 'default-light-standard'}/style.json`;
+  // Reused across hover events so we never stack popups.
+  const hoverPopup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 6 });
 
   function toMultiPolygon(geoms) {
     const polys = [];
@@ -107,7 +170,18 @@
 
     const colorIdx = assignColors(shapes);
     const features = shapes.map((s, i) => {
-      s.feature.properties = { name: s.name, color: PALETTE[colorIdx[i] % PALETTE.length] };
+      let center = null;
+      try { center = turf.centerOfMass(s.feature).geometry.coordinates; }
+      catch (e) {
+        try { center = turf.centroid(s.feature).geometry.coordinates; } catch (e2) { center = null; }
+      }
+      s.feature.properties = {
+        client_id: s.client_id,
+        name: s.name,
+        color: PALETTE[colorIdx[i] % PALETTE.length],
+        centerLng: center ? center[0] : null,
+        centerLat: center ? center[1] : null,
+      };
       return s.feature;
     });
 
@@ -116,36 +190,60 @@
     legend.innerHTML = shapes.map((s, i) => `
       <span style="display:flex;align-items:center;gap:6px;max-width:220px">
         <span style="width:11px;height:11px;border-radius:3px;flex-shrink:0;background:${PALETTE[colorIdx[i] % PALETTE.length]}"></span>
-        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(s.name)}">${esc(s.name)}</span>
+        <a href="/clients/${s.client_id}" class="rcm-client-link" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(s.name)}">${esc(s.name)}</a>
       </span>`).join('');
 
-    drawOnMap({ type: 'FeatureCollection', features });
+    lastData = { type: 'FeatureCollection', features };
+    drawOnMap(lastData);
   }
 
-  // Adding sources/layers requires the style to be fully loaded — the ready
-  // poll can fire a touch early, so defer to the next 'idle' if it isn't yet.
-  function drawOnMap(data, attempt) {
+  // Try the source/layer additions optimistically — they usually succeed even
+  // before the style reports fully loaded. Only if they actually throw (style
+  // genuinely not ready) do we retry on the next idle.
+  function drawOnMap(data, attempt, opts) {
     attempt = attempt || 0;
-    if (!map.isStyleLoaded() && attempt < 20) {
-      map.once('idle', () => drawOnMap(data, attempt + 1));
-      return;
+    opts = opts || {};
+    try {
+      if (!forceRebuild && map.getSource('rcm-regions')) {
+        map.getSource('rcm-regions').setData(data);
+      } else {
+        map.addSource('rcm-regions', { type: 'geojson', data });
+        map.addLayer({ id: 'rcm-fill', type: 'fill', source: 'rcm-regions',
+          paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.4 } });
+        map.addLayer({ id: 'rcm-line', type: 'line', source: 'rcm-regions',
+          paint: { 'line-color': ['get', 'color'], 'line-width': 1.5 } });
+        forceRebuild = false;
+      }
+      // Bound once, ever — a restyle removes the layer but map-level
+      // delegated listeners (keyed by layer id) survive it, so re-adding
+      // them here on every redraw would stack duplicate popups.
+      if (!handlersBound) {
+        handlersBound = true;
+        map.on('click', 'rcm-fill', (e) => {
+          new maplibregl.Popup({ offset: 6 }).setLngLat(e.lngLat)
+            .setHTML(clientLinkHtml(e.features[0].properties)).addTo(map);
+        });
+        // Hover: a transient popup with the client name, anchored at the area's
+        // centre (not the cursor) so it labels the whole region it belongs to.
+        map.on('mousemove', 'rcm-fill', (e) => {
+          map.getCanvas().style.cursor = 'pointer';
+          const p = e.features[0].properties;
+          const at = (p.centerLng != null && p.centerLat != null) ? [p.centerLng, p.centerLat] : e.lngLat;
+          hoverPopup.setLngLat(at).setHTML(clientLinkHtml(p)).addTo(map);
+        });
+        map.on('mouseleave', 'rcm-fill', () => {
+          map.getCanvas().style.cursor = '';
+          hoverPopup.remove();
+        });
+      }
+      if (!opts.skipFit) map.fitBounds(boundsOf(data.features), { padding: 30, animate: false });
+    } catch (e) {
+      // 'idle' has proven unreliable as a retry trigger in some environments
+      // (can simply never fire) — a plain poll is the resilient option here,
+      // same as the initial-load readiness check just below.
+      if (attempt < 30) { setTimeout(() => drawOnMap(data, attempt + 1, opts), 200); return; }
+      console.error('RCM drawOnMap failed after retries:', e);
     }
-    if (map.getSource('rcm-regions')) {
-      map.getSource('rcm-regions').setData(data);
-    } else {
-      map.addSource('rcm-regions', { type: 'geojson', data });
-      map.addLayer({ id: 'rcm-fill', type: 'fill', source: 'rcm-regions',
-        paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.4 } });
-      map.addLayer({ id: 'rcm-line', type: 'line', source: 'rcm-regions',
-        paint: { 'line-color': ['get', 'color'], 'line-width': 1.5 } });
-      map.on('click', 'rcm-fill', (e) => {
-        new maplibregl.Popup({ offset: 6 }).setLngLat(e.lngLat)
-          .setHTML('<b>' + esc(e.features[0].properties.name) + '</b>').addTo(map);
-      });
-      map.on('mouseenter', 'rcm-fill', () => { map.getCanvas().style.cursor = 'pointer'; });
-      map.on('mouseleave', 'rcm-fill', () => { map.getCanvas().style.cursor = ''; });
-    }
-    map.fitBounds(boundsOf(data.features), { padding: 30, animate: false });
   }
 
   function loadData() {
@@ -162,7 +260,7 @@
 
   map = new maplibregl.Map({
     container: 'rcmMap',
-    style: `https://api.olamaps.io/tiles/vector/v1/styles/${document.body.classList.contains('dark') ? 'default-dark-standard' : 'default-light-standard'}/style.json`,
+    style: olaStyleUrl(document.body.classList.contains('dark')),
     center: [78.9, 23.5],
     zoom: 3.5,
     transformRequest: (url) => {
@@ -185,6 +283,35 @@
     if (map.isStyleLoaded() || map.areTilesLoaded() || n > 15) { go(); return; }
     setTimeout(() => poll(n + 1), 200);
   })(0);
+
+  // The base map style (light/dark) doesn't follow prefers-color-scheme —
+  // it's swapped explicitly whenever the site-wide theme toggle fires, then
+  // our layer is redrawn (setStyle wipes custom sources/layers).
+  window.addEventListener('ledger:theme-changed', (e) => {
+    forceRebuild = true;
+    map.setStyle(olaStyleUrl(e.detail.dark));
+    if (lastData) drawOnMap(lastData, 0, { skipFit: true });
+  });
+
+  const EXPAND_ICON = '<path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>';
+  const COLLAPSE_ICON = '<path d="M9 3v3a2 2 0 0 1-2 2H4m16 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M4 15h3a2 2 0 0 1 2 2v3"/>';
+  // Exposed globally — called from the button's inline onclick, but stays a
+  // closure over `map` so it can trigger the resize MapLibre needs after its
+  // container's size changes outside its own control.
+  window.toggleRcmFullscreen = function () {
+    const isFull = document.getElementById('rcmCard').classList.toggle('map-fullscreen');
+    document.getElementById('rcmBackdrop').classList.toggle('active', isFull);
+    document.body.classList.toggle('map-fullscreen-active', isFull);
+    const btn = document.getElementById('rcmExpandBtn');
+    btn.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${isFull ? COLLAPSE_ICON : EXPAND_ICON}</svg>`;
+    btn.title = isFull ? 'Exit full screen' : 'Full screen';
+    setTimeout(() => map.resize(), 50);
+  };
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && document.getElementById('rcmCard').classList.contains('map-fullscreen')) {
+      window.toggleRcmFullscreen();
+    }
+  });
 })();
 </script>
 {% endif %}

@@ -183,6 +183,78 @@ def get_client_region_shapes(client_ids=None):
     return list(by_client.values())
 
 
+def _point_in_ring(lon, lat, ring):
+    """Ray-casting point-in-polygon test against one linear ring of
+    [lon, lat] pairs (GeoJSON coordinate order)."""
+    inside = False
+    n = len(ring)
+    j = n - 1
+    for i in range(n):
+        xi, yi = ring[i][0], ring[i][1]
+        xj, yj = ring[j][0], ring[j][1]
+        if ((yi > lat) != (yj > lat)) and \
+           (lon < (xj - xi) * (lat - yi) / ((yj - yi) or 1e-12) + xi):
+            inside = not inside
+        j = i
+    return inside
+
+
+def _point_in_polygon_coords(lon, lat, poly_coords):
+    """GeoJSON Polygon coordinates: [exterior_ring, hole_ring, ...]."""
+    if not poly_coords or not _point_in_ring(lon, lat, poly_coords[0]):
+        return False
+    return not any(_point_in_ring(lon, lat, hole) for hole in poly_coords[1:])
+
+
+def _point_in_geometry(lon, lat, geometry):
+    """Same rough-accuracy philosophy as the rest of the region feature
+    (see geocoding_service's simplification note) — plain ray-casting, no
+    geometry library needed for these boundary sizes."""
+    if not geometry:
+        return False
+    gtype = geometry.get("type")
+    coords = geometry.get("coordinates")
+    if gtype == "Polygon":
+        return _point_in_polygon_coords(lon, lat, coords)
+    if gtype == "MultiPolygon":
+        return any(_point_in_polygon_coords(lon, lat, poly) for poly in coords)
+    return False
+
+
+def find_clients_covering_point(lat, lon):
+    """Every client with a saved operating region that contains this point,
+    each with the specific matched region(s)' name/area_type (checks each
+    region individually rather than the dashboard map's per-client merged
+    shape, so the result can say exactly which saved area matched)."""
+    rows = get_db().execute(
+        """SELECT cr.client_id, c.name AS client_name, ab.name AS region_name,
+                  ab.area_type, COALESCE(cr.geometry_override, ab.geometry) AS geometry
+           FROM client_regions cr
+           JOIN area_boundaries ab ON ab.id = cr.boundary_id
+           JOIN clients c ON c.id = cr.client_id"""
+    ).fetchall()
+    by_client = {}
+    for r in rows:
+        if not _point_in_geometry(lon, lat, json.loads(r["geometry"])):
+            continue
+        entry = by_client.setdefault(r["client_id"], {
+            "client_id": r["client_id"], "client_name": r["client_name"], "matched_regions": [],
+        })
+        entry["matched_regions"].append({"name": r["region_name"], "area_type": r["area_type"]})
+    return list(by_client.values())
+
+
+def find_clients_by_place(query):
+    """City/state (or any place name) -> clients whose saved operating
+    regions cover that point. Geocodes via Ola Maps (same resolver used for
+    client addresses). Returns (clients, lat, lon); lat/lon are None if the
+    place couldn't be geocoded (no API key, no match, or an API error)."""
+    lat, lon = geocoding_service.forward_geocode(query)
+    if lat is None or lon is None:
+        return [], None, None
+    return find_clients_covering_point(lat, lon), lat, lon
+
+
 def rename_region(client_id, link_id, name):
     """Rename a custom area. Restricted to custom ones — a named place's
     `name` lives on the shared area_boundaries row, so renaming it would

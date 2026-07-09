@@ -4343,6 +4343,65 @@ def client_product_breakdown(client_id):
     }})
 
 
+@bp.route("/clients/by-region")
+@require_auth
+def clients_by_region():
+    """Which client(s) operate in a given city/state (or any place name).
+    Geocodes the place (Ola Maps) then point-in-polygon tests it against
+    every client's saved operating regions (drawn on their client page).
+
+    Query params: place (required) — free text, e.g. "Ahmedabad, Gujarat".
+    """
+    from ..services import region_service
+
+    place = (request.args.get("place") or "").strip()
+    if not place:
+        return jsonify({"error": "Query parameter 'place' is required"}), 400
+
+    clients, lat, lon = region_service.find_clients_by_place(place)
+    if lat is None:
+        return jsonify({"result": {
+            "place": place, "resolved_lat": None, "resolved_lon": None,
+            "clients": [], "count": 0,
+            "note": "Could not geocode that place — check OLA_MAPS_API_KEY, or try a more specific name.",
+        }})
+    return jsonify({"result": {
+        "place": place, "resolved_lat": lat, "resolved_lon": lon,
+        "clients": clients, "count": len(clients),
+    }})
+
+
+@bp.route("/clients/<int:client_id>/regions")
+@require_auth
+def client_regions(client_id):
+    """Every operating region saved for one client, by name — the reverse of
+    /clients/by-region. Omits full boundary geometry (only the map needs
+    that); returns just what's useful to read: name, area_type, source
+    (a named place vs. a hand-drawn custom area), and when it was added.
+    """
+    from ..services import region_service
+
+    db = get_db()
+    client = db.execute("SELECT id, name FROM clients WHERE id=?", (client_id,)).fetchone()
+    if not client:
+        return jsonify({"error": f"Client ID {client_id} not found."}), 404
+
+    regions = region_service.get_client_regions(client_id)
+    items = [{
+        "link_id":     r["link_id"],
+        "name":        r["name"],
+        "area_type":   r["area_type"],
+        "source":      r["source"],  # e.g. "nominatim" | "bharatmaps" | "custom"
+    } for r in regions]
+
+    return jsonify({"result": {
+        "client_id":   client["id"],
+        "client_name": client["name"],
+        "regions":     items,
+        "count":       len(items),
+    }})
+
+
 @bp.route("/categories/<int:category_id>/products")
 @require_auth
 def category_products(category_id):

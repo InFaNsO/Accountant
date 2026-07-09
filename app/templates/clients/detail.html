@@ -58,6 +58,48 @@
   }
 </style>
 <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
+<style>
+  /* MapLibre popups default to a white box + black text — force them onto
+     the app's theme variables so they stay readable in dark mode too. */
+  #regionMap .maplibregl-popup-content {
+    background: var(--surface);
+    color: var(--text-primary);
+    box-shadow: var(--shadow-md);
+    border: 1px solid var(--border);
+    font-size: 12.5px;
+  }
+  #regionMap .maplibregl-popup-anchor-bottom .maplibregl-popup-tip { border-top-color: var(--surface); }
+  #regionMap .maplibregl-popup-anchor-top .maplibregl-popup-tip { border-bottom-color: var(--surface); }
+  #regionMap .maplibregl-popup-anchor-left .maplibregl-popup-tip { border-right-color: var(--surface); }
+  #regionMap .maplibregl-popup-anchor-right .maplibregl-popup-tip { border-left-color: var(--surface); }
+  #regionMap .maplibregl-popup-close-button { color: var(--text-primary); }
+
+  /* Full-screen expand: the card pops out to a near-viewport-filling popup,
+     the map/list grid grows to fill it. */
+  #regionsBackdrop {
+    display: none; position: fixed; inset: 0; z-index: 9998;
+    background: rgba(0,0,0,.55);
+  }
+  #regionsBackdrop.active { display: block; }
+  #regionsCard.map-fullscreen {
+    position: fixed; inset: 3vh; z-index: 9999; margin: 0;
+    display: flex; flex-direction: column;
+    box-shadow: 0 20px 60px rgba(0,0,0,.45);
+  }
+  #regionsCard.map-fullscreen .card-body {
+    flex: 1; display: flex; flex-direction: column; overflow: auto;
+  }
+  #regionsCard.map-fullscreen .region-layout { flex: 1; min-height: 0; }
+  #regionsCard.map-fullscreen #regionMap { height: 100% !important; }
+  #regionsCard.map-fullscreen .region-layout > div:last-child { max-height: none !important; }
+  body.map-fullscreen-active { overflow: hidden; }
+  .map-expand-btn {
+    display: flex; align-items: center; justify-content: center;
+    width: 26px; height: 26px; border-radius: var(--radius-sm);
+    color: var(--text-muted); background: transparent; border: none; cursor: pointer;
+  }
+  .map-expand-btn:hover { background: var(--bg); color: var(--text-primary); }
+</style>
 <div class="detail-grid">
   <!-- Left: info + invoices -->
   <div style="display:flex;flex-direction:column;gap:22px">
@@ -393,9 +435,15 @@
 </div>
 
 <!-- Regions (operating areas) -->
-<div class="card" style="margin-top:22px">
+<div id="regionsBackdrop" onclick="toggleRegionsFullscreen()"></div>
+<div class="card" id="regionsCard" style="margin-top:22px">
   <div class="card-header">
     <span class="card-title">Regions</span>
+    <button type="button" class="map-expand-btn" style="margin-left:auto" onclick="toggleRegionsFullscreen()" title="Full screen" id="regionsExpandBtn">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+      </svg>
+    </button>
   </div>
   <div class="card-body">
     {% if current_user.has_permission('clients', 'edit') %}
@@ -661,6 +709,16 @@ const PIN_PALETTE = ['#EF4444','#3B82F6','#10B981','#F59E0B','#8B5CF6','#EC4899'
 const pinColor = i => PIN_PALETTE[i % PIN_PALETTE.length];
 
 let regionMap, regionMapReady = false;
+// Set both right before regionMap.setStyle(): MapLibre keeps the OLD style
+// (and its sources) alive until the new style's fetch finishes, so
+// getSource() keeps returning the soon-to-vanish old source for a while —
+// these stop renderRegions()/renderCustomShape() from being fooled into
+// "reusing" it via setData() instead of re-adding fresh once the swap lands.
+// Separate flags because the two functions run back-to-back in the same
+// redraw pass — sharing one would let the first call's success reset it
+// before the second call (for a different source) ever runs.
+let regionForceRebuild = false;
+let customForceRebuild = false;
 let regions = [];
 let searchDebounce = null;
 let pinDropMode = false, pinMarker = null, pinCandidates = [];
@@ -681,11 +739,16 @@ let lastHoverLngLat = null;
 
 const regEsc = s => String(s ?? '').replace(/[&<>"']/g,
   m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const olaStyleUrl = dark =>
+  `https://api.olamaps.io/tiles/vector/v1/styles/${dark ? 'default-dark-standard' : 'default-light-standard'}/style.json`;
+let regionHandlersBound = false;  // client-regions-fill click handler is bound once, ever —
+                                   // setStyle() wipes the layer but not map-level delegated
+                                   // listeners, so re-adding it on every restyle would stack popups
 
 function initRegionMap() {
   regionMap = new maplibregl.Map({
     container: 'regionMap',
-    style: `https://api.olamaps.io/tiles/vector/v1/styles/${document.body.classList.contains('dark') ? 'default-dark-standard' : 'default-light-standard'}/style.json`,
+    style: olaStyleUrl(document.body.classList.contains('dark')),
     center: [78.9, 23.5],
     zoom: 3.5,
     transformRequest: (url) => {
@@ -747,6 +810,35 @@ function initRegionMap() {
     stopDrawing();
     hideBrushCursor();
   });
+
+  // The base map style (light/dark) doesn't follow prefers-color-scheme —
+  // it's swapped explicitly whenever the site-wide theme toggle fires, then
+  // everything on the map is redrawn (setStyle wipes custom sources/layers).
+  window.addEventListener('ledger:theme-changed', (e) => {
+    regionForceRebuild = true;
+    customForceRebuild = true;
+    regionMap.setStyle(olaStyleUrl(e.detail.dark));
+    retryOnRegionMapIdle(() => {
+      renderRegions({ skipFit: true });
+      renderCustomShape();
+      if (pinCandidates.length) renderPinCandidates();
+    });
+  });
+}
+
+// Source/layer additions can throw if attempted before a just-swapped style
+// finishes loading. Neither isStyleLoaded() nor the 'idle' event have proven
+// reliable triggers for retrying in every environment (isStyleLoaded() can
+// stay false indefinitely even once addLayer works; 'idle' can simply never
+// fire) — a plain poll is the resilient option, same as the initial-load
+// readiness check in initRegionMap().
+function retryOnRegionMapIdle(fn, attempt) {
+  attempt = attempt || 0;
+  try { fn(); }
+  catch (e) {
+    if (attempt < 30) { setTimeout(() => retryOnRegionMapIdle(fn, attempt + 1), 200); return; }
+    console.error('Region map restyle redraw failed after retries:', e);
+  }
 }
 
 /* ── Interaction modes: pin-drop / brush / erase are mutually exclusive ── */
@@ -850,7 +942,7 @@ function renderCustomShape() {
   const data = customShape
     ? { type: 'FeatureCollection', features: [{ type: 'Feature', properties: {}, geometry: customShape }] }
     : { type: 'FeatureCollection', features: [] };
-  if (regionMap.getSource('custom-draw')) {
+  if (!customForceRebuild && regionMap.getSource('custom-draw')) {
     regionMap.getSource('custom-draw').setData(data);
   } else {
     regionMap.addSource('custom-draw', { type: 'geojson', data });
@@ -858,6 +950,7 @@ function renderCustomShape() {
       paint: { 'fill-color': DRAW_COLOR, 'fill-opacity': 0.35 } });
     regionMap.addLayer({ id: 'custom-draw-line', type: 'line', source: 'custom-draw',
       paint: { 'line-color': DRAW_COLOR, 'line-width': 2.5 } });
+    customForceRebuild = false;
   }
 }
 
@@ -1106,7 +1199,7 @@ function renderRegions(opts) {
     geometry: r.geometry,
   }));
   const data = { type: 'FeatureCollection', features };
-  if (regionMap.getSource('client-regions')) {
+  if (!regionForceRebuild && regionMap.getSource('client-regions')) {
     regionMap.getSource('client-regions').setData(data);
   } else {
     regionMap.addSource('client-regions', { type: 'geojson', data });
@@ -1114,6 +1207,10 @@ function renderRegions(opts) {
       paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.18 } });
     regionMap.addLayer({ id: 'client-regions-line', type: 'line', source: 'client-regions',
       paint: { 'line-color': ['get', 'color'], 'line-width': 2.5 } });
+    regionForceRebuild = false;
+  }
+  if (!regionHandlersBound) {
+    regionHandlersBound = true;
     regionMap.on('click', 'client-regions-fill', (e) => {
       new maplibregl.Popup({ offset: 6 }).setLngLat(e.lngLat)
         .setHTML('<b>' + regEsc(e.features[0].properties.name) + '</b>').addTo(regionMap);
@@ -1244,6 +1341,23 @@ document.addEventListener('click', (e) => {
   const box = document.getElementById('regionSearchResults');
   const input = document.getElementById('regionSearch');
   if (box && !box.contains(e.target) && e.target !== input) box.style.display = 'none';
+});
+
+const REGIONS_EXPAND_ICON = '<path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>';
+const REGIONS_COLLAPSE_ICON = '<path d="M9 3v3a2 2 0 0 1-2 2H4m16 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M4 15h3a2 2 0 0 1 2 2v3"/>';
+function toggleRegionsFullscreen() {
+  const isFull = document.getElementById('regionsCard').classList.toggle('map-fullscreen');
+  document.getElementById('regionsBackdrop').classList.toggle('active', isFull);
+  document.body.classList.toggle('map-fullscreen-active', isFull);
+  const btn = document.getElementById('regionsExpandBtn');
+  btn.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${isFull ? REGIONS_COLLAPSE_ICON : REGIONS_EXPAND_ICON}</svg>`;
+  btn.title = isFull ? 'Exit full screen' : 'Full screen';
+  setTimeout(() => regionMap.resize(), 50);
+}
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && document.getElementById('regionsCard').classList.contains('map-fullscreen')) {
+    toggleRegionsFullscreen();
+  }
 });
 
 initRegionMap();
