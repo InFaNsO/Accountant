@@ -4,6 +4,20 @@ from ..services import client_service, region_service
 from ..services.payment_service import recalculate_client_balance, reconcile_all_clients
 from ..services.auth_service import permission_required, get_scoped_client_ids, get_own_scoped_client_ids
 from ..database import get_db
+from .dashboard import resolve_window, WINDOW_LABELS
+
+# Default date window for the invoices & payments sections on the client page.
+CLIENT_SECTION_DEFAULT_WINDOW = "last_30"
+
+
+def _section_range(default=CLIENT_SECTION_DEFAULT_WINDOW):
+    """Resolve the (window, date_from, date_to, label) for a client-page
+    invoices/payments section from the request's window/from/to args."""
+    window = request.args.get("window", default)
+    d_from, d_to = resolve_window(window, request.args.get("from", ""), request.args.get("to", ""))
+    date_from = d_from.isoformat() if d_from else None
+    date_to   = d_to.isoformat()   if d_to   else None
+    return window, date_from, date_to, WINDOW_LABELS.get(window, "Custom Range")
 
 bp = Blueprint("clients", __name__, url_prefix="/clients")
 
@@ -91,8 +105,16 @@ def detail(client_id):
     if not client:
         flash("Client not found.", "error")
         return redirect(url_for("clients.list_clients"))
-    invoices = client_service.get_client_invoices(client_id)
     can_financials = current_user.has_permission("clients", "financials")
+    # The invoices & payments sections default to the Last-30-Days window and
+    # reload independently via /invoices-partial and /payments-partial. The
+    # right-side Summary card keeps its all-time counts, so keep a full list too.
+    window, sec_from, sec_to, window_label = _section_range()
+    all_invoices = client_service.get_client_invoices(client_id)
+    invoices = client_service.get_client_invoices(client_id, sec_from, sec_to)
+    if can_financials:
+        client_service.default_single_company_payments(client_id)
+    payments = client_service.get_client_payments(client_id, sec_from, sec_to) if can_financials else []
     balance = client_service.get_client_balance(client_id) if can_financials else None
     companies_raw = client_service.get_companies(client_id)
     if can_financials:
@@ -109,10 +131,60 @@ def detail(client_id):
     can_locks_view = can_locks or current_user.has_permission("clients", "locks_view")
     rep_name = client_service.get_client_rep_name(client_id)
     return render_template("clients/detail.html", client=client, invoices=invoices,
+                           all_invoices=all_invoices, payments=payments,
+                           section_window=window, section_from=sec_from or "",
+                           section_to=sec_to or "", section_window_label=window_label,
                            companies=companies, balance=balance, can_financials=can_financials,
                            product_breakdown=product_breakdown, lock=lock, can_locks=can_locks,
                            can_locks_view=can_locks_view, rep_name=rep_name,
                            ola_maps_api_key=os.environ.get("OLA_MAPS_API_KEY", ""))
+
+
+@bp.route("/<int:client_id>/invoices-partial")
+@login_required
+@permission_required("clients", "view")
+def invoices_partial(client_id):
+    """Rendered invoices table for the client page, filtered to a date window.
+    Fetched by the section's range picker to reload just that card."""
+    _guard_client(client_id)
+    _window, date_from, date_to, window_label = _section_range()
+    invoices = client_service.get_client_invoices(client_id, date_from, date_to)
+    can_financials = current_user.has_permission("clients", "financials")
+    return render_template("clients/_invoices_table.html", invoices=invoices,
+                           can_financials=can_financials, window_label=window_label)
+
+
+@bp.route("/<int:client_id>/payments-partial")
+@login_required
+@permission_required("clients", "financials")
+def payments_partial(client_id):
+    """Rendered payments table for the client page, filtered to a date window."""
+    _guard_client(client_id)
+    _window, date_from, date_to, window_label = _section_range()
+    client_service.default_single_company_payments(client_id)
+    payments = client_service.get_client_payments(client_id, date_from, date_to)
+    companies = [dict(c) for c in client_service.get_companies(client_id)]
+    return render_template("clients/_payments_table.html", payments=payments,
+                           companies=companies, client_id=client_id,
+                           window_label=window_label)
+
+
+@bp.route("/<int:client_id>/payments/<int:payment_id>/company", methods=["POST"])
+@login_required
+@permission_required("clients", "financials")
+def assign_payment_company(client_id, payment_id):
+    """Assign a company to a payment (from the payments-section dropdown), then
+    return every company's freshly-recomputed balance so the client page's
+    Companies card can update live without a reload."""
+    _guard_client(client_id)
+    data = request.get_json(silent=True) or {}
+    if not client_service.set_payment_company(client_id, payment_id, data.get("company_id")):
+        return jsonify({"error": "Invalid payment or company."}), 400
+    companies = [
+        {"id": c["id"], "balance": client_service.get_company_balance(c["id"], client_id)}
+        for c in client_service.get_companies(client_id)
+    ]
+    return jsonify({"ok": True, "companies": companies})
 
 
 @bp.route("/<int:client_id>/edit", methods=["GET", "POST"])

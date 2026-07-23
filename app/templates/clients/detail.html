@@ -55,7 +55,41 @@
   #regionMap.pin-drop-active .maplibregl-canvas { cursor:crosshair; }
   @media (max-width: 720px) {
     .region-layout { grid-template-columns:1fr !important; }
+    /* Let the picker share the row and shrink so it never stacks */
+    .range-picker input[type=date] { flex:1 1 0; width:auto; }
+    .range-picker select { max-width:120px; }
+    .pay-co-select { min-width:86px; max-width:118px; font-size:12px; padding:4px; }
   }
+  /* Invoices / Payments sections — scroll after ~5 rows, sticky header */
+  .tbl-scroll { max-height:320px; overflow-y:auto; scrollbar-width:thin; scrollbar-color:var(--border) transparent; }
+  .tbl-scroll::-webkit-scrollbar { width:4px; }
+  .tbl-scroll::-webkit-scrollbar-thumb { background:var(--border); border-radius:99px; }
+  .tbl-scroll thead th { position:sticky; top:0; z-index:1; }
+  .section-summary {
+    display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+    padding:8px 16px; border-bottom:1px solid var(--border);
+    font-size:12.5px; color:var(--text-muted);
+  }
+  .section-summary-amt { font-weight:700; color:var(--text-primary); }
+  .section-summary-win { margin-left:auto; font-size:11.5px; text-transform:uppercase; letter-spacing:.04em; }
+  /* Per-section date-range picker in the card header — stays on one line */
+  .range-picker { display:flex; gap:5px; align-items:center; flex-wrap:nowrap; margin-left:auto; min-width:0; }
+  .range-picker select, .range-picker input[type=date] {
+    font-size:12px; padding:4px 6px; border:1px solid var(--border);
+    border-radius:var(--radius-sm); background:var(--surface); color:var(--text-primary);
+    min-width:0;
+  }
+  .range-picker select { cursor:pointer; width:auto; max-width:132px; flex:0 1 auto; }
+  .range-picker input[type=date] { width:122px; flex:0 1 122px; }
+  .range-picker .rp-dash { color:var(--text-muted); flex-shrink:0; }
+  .range-picker .btn { flex:0 0 auto; white-space:nowrap; }
+  /* Payment → company assign / re-assign dropdown */
+  .pay-co-select {
+    width:auto; min-width:96px; max-width:140px; font-size:12.5px;
+    padding:4px 6px; border:1px solid var(--border); border-radius:var(--radius-sm);
+    background:var(--surface); color:var(--text-primary); cursor:pointer;
+  }
+  .pay-co-select.unassigned { border-color:var(--warning); }
 </style>
 <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
 <style>
@@ -100,61 +134,58 @@
   }
   .map-expand-btn:hover { background: var(--bg); color: var(--text-primary); }
 </style>
+{% set RANGE_PRESETS = [
+    ('today','Today'),('yesterday','Yesterday'),
+    ('this_week','This Week'),('last_week','Last Week'),
+    ('last_15','Last 15 Days'),('last_30','Last 30 Days'),
+    ('this_month','This Month'),
+    ('last_2_months','Last 2 Months'),('60_days','60 Days'),
+    ('90_days','90 Days'),('this_year','This Year'),
+    ('current_fy','Current FY'),('last_fy','Last FY'),
+    ('all','All Time'),('custom','Custom')
+] %}
+{% macro range_picker(kind, client_id, window, date_from, date_to) %}
+<form class="range-picker" onsubmit="event.preventDefault();clientSectionFetch('{{ kind }}',{{ client_id }})">
+  <select id="{{ kind }}-win" onchange="clientSectionPreset('{{ kind }}',{{ client_id }})">
+    {% for val, lbl in RANGE_PRESETS %}
+    <option value="{{ val }}"{% if window == val %} selected{% endif %}>{{ lbl }}</option>
+    {% endfor %}
+  </select>
+  <input type="date" id="{{ kind }}-from" value="{{ date_from }}" onchange="clientSectionDate('{{ kind }}')">
+  <span class="rp-dash">—</span>
+  <input type="date" id="{{ kind }}-to" value="{{ date_to }}" onchange="clientSectionDate('{{ kind }}')">
+  <button type="submit" class="btn btn-primary btn-sm">Apply</button>
+</form>
+{% endmacro %}
 <div class="detail-grid">
   <!-- Left: info + invoices -->
   <div style="display:flex;flex-direction:column;gap:22px">
 
 
     <div class="card">
-      <div class="card-header"><span class="card-title">Invoices ({{ invoices|length }})</span></div>
-      {% if invoices %}
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Invoice</th>
-              <th class="col-mobile-hide">Date</th>
-              <th class="col-mobile-hide">Due</th>
-              <th>Total</th>
-              {% if can_financials %}<th class="col-mobile-hide">Paid</th><th>Status</th>{% endif %}
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for inv in invoices %}
-            {% if can_financials %}
-              {% set _paid = inv.status == 'paid' or inv.amount_paid >= inv.total and inv.total > 0 %}
-              {% set _overdue = inv.due_date and inv.due_date < today and inv.status not in ('paid','cancelled') %}
-              {% set _pct_unpaid = ((inv.total - inv.amount_paid) / inv.total) if inv.total > 0 else 0 %}
-              {% if inv.status == 'cancelled' %}{% set _rc = '' %}
-              {% elif _paid %}{% set _rc = 'var(--success)' %}
-              {% elif _overdue %}{% set _rc = '#b91c1c' %}
-              {% elif _pct_unpaid > 0.5 %}{% set _rc = 'var(--danger)' %}
-              {% else %}{% set _rc = 'var(--warning)' %}{% endif %}
-            {% else %}
-              {% set _rc = '' %}
-            {% endif %}
-            <tr{% if _rc %} style="border-left:4px solid {{ _rc }}"{% endif %}>
-              <td><a href="{{ url_for('invoices.detail', invoice_id=inv.id) }}" style="font-weight:600;color:var(--accent);text-decoration:none">{{ inv.invoice_number }}</a></td>
-              <td class="muted col-mobile-hide">{{ inv.issue_date }}</td>
-              <td class="muted col-mobile-hide">{{ inv.due_date or '—' }}</td>
-              <td class="fw-700">{{ inv.total|inr }}</td>
-              {% if can_financials %}
-              <td class="col-mobile-hide">{{ inv.amount_paid|inr }}</td>
-              <td><span class="badge badge-{{ inv.status }}">{{ inv.status }}</span></td>
-              {% endif %}
-              <td><a href="{{ url_for('invoices.detail', invoice_id=inv.id) }}" class="btn btn-ghost btn-sm">View</a></td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
+      <div class="card-header">
+        <span class="card-title">Invoices</span>
+        {{ range_picker('invoices', client.id, section_window, section_from, section_to) }}
       </div>
-      {% else %}
-      <div class="empty-state" style="padding:30px">
-        <p>No invoices for this client yet.</p>
+      <div id="invoices-section">
+        {% set window_label = section_window_label %}
+        {% include "clients/_invoices_table.html" with context %}
       </div>
-      {% endif %}
     </div>
+
+    {% if can_financials %}
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Payments</span>
+        {{ range_picker('payments', client.id, section_window, section_from, section_to) }}
+      </div>
+      <div id="payments-section">
+        {% set window_label = section_window_label %}
+        {% set client_id = client.id %}
+        {% include "clients/_payments_table.html" with context %}
+      </div>
+    </div>
+    {% endif %}
 
     <!-- Products purchased in the recent window -->
     <div class="card">
@@ -335,10 +366,10 @@
               {% endif %}
             </span>
           </div>
-          <div class="info-row"><span class="info-label">Invoices</span><span class="info-value fw-700">{{ invoices|length }}</span></div>
+          <div class="info-row"><span class="info-label">Invoices</span><span class="info-value fw-700">{{ all_invoices|length }}</span></div>
           {% if can_financials %}
-          <div class="info-row"><span class="info-label">Paid</span><span class="info-value" style="color:var(--success)">{{ invoices|selectattr('status','eq','paid')|list|length }}</span></div>
-          <div class="info-row"><span class="info-label">Pending</span><span class="info-value" style="color:var(--warning)">{{ invoices|selectattr('status','in',['sent','issued','partial'])|list|length }}</span></div>
+          <div class="info-row"><span class="info-label">Paid</span><span class="info-value" style="color:var(--success)">{{ all_invoices|selectattr('status','eq','paid')|list|length }}</span></div>
+          <div class="info-row"><span class="info-label">Pending</span><span class="info-value" style="color:var(--warning)">{{ all_invoices|selectattr('status','in',['sent','issued','partial'])|list|length }}</span></div>
           <div class="info-row">
             <span class="info-label">Current Balance</span>
             <span class="info-value fw-700" style="color:{% if balance < 0 %}var(--danger){% elif balance > 0 %}var(--success){% else %}var(--text-muted){% endif %}">
@@ -402,20 +433,14 @@
               <td style="font-weight:600;font-size:13px">{{ co.name }}</td>
               {% if can_financials %}
               {% set bal = co.balance %}
+              {% set _col = 'var(--danger)' if bal < 0 else 'var(--success)' if bal > 0 else 'var(--warning)' %}
+              {% set _lbl = 'outstanding' if bal < 0 else 'credit' if bal > 0 else 'settled' %}
               <td style="text-align:right">
                 <span onclick="showCompanyLedger({{ client.id }}, {{ co.id }}, {{ co.name|tojson|forceescape }})"
                       style="cursor:pointer;text-decoration:underline dotted"
                       title="Click to view company ledger">
-                  {% if bal < 0 %}
-                    <span style="color:var(--danger);font-weight:700">{{ bal|inr }}</span>
-                    <div style="font-size:11px;color:var(--text-muted)">outstanding</div>
-                  {% elif bal > 0 %}
-                    <span style="color:var(--success);font-weight:700">{{ bal|inr }}</span>
-                    <div style="font-size:11px;color:var(--text-muted)">credit</div>
-                  {% else %}
-                    <span style="color:var(--warning);font-weight:700">{{ bal|inr }}</span>
-                    <div style="font-size:11px;color:var(--text-muted)">settled</div>
-                  {% endif %}
+                  <span id="co-bal-amt-{{ co.id }}" style="color:{{ _col }};font-weight:700">{{ bal|inr }}</span>
+                  <div id="co-bal-lbl-{{ co.id }}" style="font-size:11px;color:var(--text-muted)">{{ _lbl }}</div>
                 </span>
               </td>
               {% endif %}
@@ -538,60 +563,18 @@
 
 {% block scripts %}
 <script>
-// ── Company ledger (opens the shared modal with company-filtered data) ──────────
+// ── Company ledger — opens the shared modal scoped to one company. Delegates to
+// the shared window/reload logic in base.html so the period picker works and it
+// defaults to the last 30 days like every other ledger view. ─────────────────
 function showCompanyLedger(clientId, companyId, companyName) {
+  _ledgerClientId  = clientId;
+  _ledgerCompanyId = companyId;
   document.getElementById('ledgerModalTitle').textContent = companyName;
   document.getElementById('ledgerFinalBal').textContent   = '';
   document.getElementById('ledgerEmpty').style.display    = 'none';
   document.getElementById('ledgerEntryForm').style.display = 'none';
   document.getElementById('ledgerModal').style.display    = 'flex';
-  try { document.getElementById('lwSel').value  = 'all'; } catch(e) {}
-  try { document.getElementById('lwFrom').value = '';    } catch(e) {}
-  try { document.getElementById('lwTo').value   = '';    } catch(e) {}
-
-  const bodyEl = document.getElementById('ledgerBody');
-  bodyEl.innerHTML = '<tr><td colspan="5" style="padding:30px;text-align:center;color:var(--text-muted)">Loading…</td></tr>';
-
-  fetch(`/clients/${clientId}/ledger?company_id=${companyId}`)
-    .then(r => r.json())
-    .then(data => {
-      const entries = data.entries || [];
-      const bal     = data.final_balance || 0;
-      const balEl   = document.getElementById('ledgerFinalBal');
-      balEl.textContent = formatINR(bal);
-      balEl.style.color = bal < 0 ? 'var(--danger)' : bal > 0 ? 'var(--success)' : 'var(--warning)';
-
-      if (!entries.length) {
-        bodyEl.innerHTML = '';
-        document.getElementById('ledgerEmpty').style.display = '';
-        return;
-      }
-      document.getElementById('ledgerEmpty').style.display = 'none';
-
-      const badge = t => {
-        const map = {
-          opening: 'rgba(99,102,241,.15)|#6366f1|opening',
-          invoice: 'rgba(239,68,68,.12)|var(--danger)|invoice',
-          payment: 'rgba(16,185,129,.12)|var(--success)|payment',
-        };
-        const [bg, color, label] = (map[t] || map.payment).split('|');
-        return `<span style="font-size:10px;background:${bg};color:${color};padding:2px 6px;border-radius:3px;margin-left:6px">${label}</span>`;
-      };
-
-      bodyEl.innerHTML = entries.map(e => {
-        const rc = e.running < 0 ? 'var(--danger)' : e.running > 0 ? 'var(--success)' : 'var(--warning)';
-        return `<tr style="border-bottom:1px solid var(--border)">
-          <td style="padding:10px 16px;color:var(--text-muted);font-family:monospace;font-size:12px">${e.date || '—'}</td>
-          <td style="padding:10px 16px">${e.label}${badge(e.type)}</td>
-          <td style="padding:10px 16px;text-align:right;color:var(--danger);font-weight:${e.debit?600:400}">${e.debit ? formatINR(e.debit) : '—'}</td>
-          <td style="padding:10px 16px;text-align:right;color:var(--success);font-weight:${e.credit?600:400}">${e.credit ? formatINR(e.credit) : '—'}</td>
-          <td style="padding:10px 16px;text-align:right;font-weight:700;color:${rc}">${formatINR(e.running)}</td>
-        </tr>`;
-      }).join('');
-    })
-    .catch(() => {
-      bodyEl.innerHTML = '<tr><td colspan="5" style="padding:20px;text-align:center;color:var(--danger)">Failed to load ledger.</td></tr>';
-    });
+  setLedgerWindow('last_30');   // default view: last 30 days (sets picker + reloads)
 }
 
 async function toggleTallyLock(clientId) {
@@ -1362,5 +1345,103 @@ document.addEventListener('keydown', (e) => {
 
 initRegionMap();
 loadRegions();
+</script>
+
+<!-- ── Invoices / Payments per-section date-range reload ─────────────────── -->
+<script>
+// Resolve a preset window key to [from, to] date strings (mirrors the
+// dashboard's picker so the options behave identically).
+function _winDates(w) {
+  const t = new Date(); t.setHours(0,0,0,0);
+  const fmt = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  const add = (d,n) => { const r=new Date(d); r.setDate(r.getDate()+n); return r; };
+  const dow = t.getDay()===0 ? 6 : t.getDay()-1;   // Mon=0
+  const y=t.getFullYear(), mo=t.getMonth();          // mo: 0-based
+  const cfy  = mo>=3 ? `${y}-04-01`   : `${y-1}-04-01`;
+  const lfyS = mo>=3 ? `${y-1}-04-01` : `${y-2}-04-01`;
+  const lfyE = mo>=3 ? `${y}-03-31`   : `${y-1}-03-31`;
+  switch(w) {
+    case 'all':           return ['',''];
+    case 'today':         return [fmt(t),fmt(t)];
+    case 'yesterday':     { const d=add(t,-1); return [fmt(d),fmt(d)]; }
+    case 'this_week':     return [fmt(add(t,-dow)),fmt(t)];
+    case 'last_week':     return [fmt(add(t,-dow-7)),fmt(add(t,-dow-1))];
+    case 'last_15':       return [fmt(add(t,-14)),fmt(t)];
+    case 'last_30':       return [fmt(add(t,-29)),fmt(t)];
+    case 'this_month':    return [fmt(new Date(y,mo,1)),fmt(t)];
+    case 'last_2_months': return [fmt(add(t,-60)),fmt(t)];
+    case '60_days':       return [fmt(add(t,-59)),fmt(t)];
+    case '90_days':       return [fmt(add(t,-89)),fmt(t)];
+    case 'this_year':     return [`${y}-01-01`,fmt(t)];
+    case 'current_fy':    return [cfy,fmt(t)];
+    case 'last_fy':       return [lfyS,lfyE];
+    default:              return ['',''];   // custom
+  }
+}
+
+// Fetch the rendered partial for one section (kind='invoices'|'payments')
+// and swap just that card's body.
+function clientSectionFetch(kind, clientId) {
+  const sel  = document.getElementById(kind+'-win');
+  const from = document.getElementById(kind+'-from');
+  const to   = document.getElementById(kind+'-to');
+  const box  = document.getElementById(kind+'-section');
+  if (!box) return;
+  const q = new URLSearchParams({ window: sel.value, from: from.value, to: to.value });
+  box.style.opacity = '.45';
+  fetch(`/clients/${clientId}/${kind}-partial?` + q.toString())
+    .then(r => { if (!r.ok) throw new Error(r.status); return r.text(); })
+    .then(html => { box.innerHTML = html; box.style.opacity = ''; })
+    .catch(() => {
+      box.style.opacity = '';
+      box.innerHTML = '<div class="empty-state" style="padding:24px"><p style="color:var(--danger)">Failed to load — please retry.</p></div>';
+    });
+}
+
+// Preset dropdown changed → fill the date inputs and reload immediately
+// (custom keeps whatever dates are in the inputs).
+function clientSectionPreset(kind, clientId) {
+  const sel = document.getElementById(kind+'-win');
+  if (sel.value !== 'custom') {
+    const [df, dt] = _winDates(sel.value);
+    document.getElementById(kind+'-from').value = df;
+    document.getElementById(kind+'-to').value   = dt;
+  }
+  clientSectionFetch(kind, clientId);
+}
+
+// Manually editing a date switches the dropdown to Custom; the reload waits
+// for the Apply button (so half-typed dates don't fire a fetch).
+function clientSectionDate(kind) {
+  document.getElementById(kind+'-win').value = 'custom';
+}
+
+// Assign a company to an unassigned payment, then reload the payments section
+// so the row shows the company as text.
+function assignPaymentCompany(clientId, paymentId, sel) {
+  const companyId = sel.value;   // '' clears the assignment
+  sel.disabled = true;
+  fetch(`/clients/${clientId}/payments/${paymentId}/company`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ company_id: companyId }),
+  })
+    .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(data => { updateCompanyBalances(data.companies); clientSectionFetch('payments', clientId); })
+    .catch(() => { sel.disabled = false; alert('Failed to assign company — please retry.'); });
+}
+
+// Live-update the Companies card balances after a payment is (re)assigned,
+// so each company's outstanding/credit figure reflects the change immediately.
+function _coBalColor(b) { return b < 0 ? 'var(--danger)' : b > 0 ? 'var(--success)' : 'var(--warning)'; }
+function _coBalLabel(b) { return b < 0 ? 'outstanding'   : b > 0 ? 'credit'        : 'settled'; }
+function updateCompanyBalances(companies) {
+  (companies || []).forEach(co => {
+    const amt = document.getElementById('co-bal-amt-' + co.id);
+    const lbl = document.getElementById('co-bal-lbl-' + co.id);
+    if (amt) { amt.textContent = formatINR(co.balance); amt.style.color = _coBalColor(co.balance); }
+    if (lbl) { lbl.textContent = _coBalLabel(co.balance); }
+  });
+}
 </script>
 {% endblock %}

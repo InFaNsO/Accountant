@@ -275,6 +275,7 @@ document.querySelectorAll('.nav-item').forEach(function(el) {
           <option value="this_week">This Week</option>
           <option value="last_week">Last Week</option>
           <option value="last_15">Last 15 Days</option>
+          <option value="last_30">Last 30 Days</option>
           <option value="this_month">This Month</option>
           <option value="last_2_months">Last 2 Months</option>
           <option value="60_days">60 Days</option>
@@ -371,6 +372,7 @@ function _windowDates(w) {
       return [_fmt(s), _fmt(e)];
     }
     case 'last_15':       return [_fmt(_addD(today,-14)), _fmt(today)];
+    case 'last_30':       return [_fmt(_addD(today,-29)), _fmt(today)];
     case 'this_month': {
       const s = new Date(y, today.getMonth(), 1);
       return [_fmt(s), _fmt(today)];
@@ -387,9 +389,10 @@ function _windowDates(w) {
 
 /* ── Ledger state ────────────────────────────────────────────── */
 let _ledgerClientId  = null;
+let _ledgerCompanyId = null;   // set for a company-scoped ledger, null for client-wide
 let _ledgerDateFrom  = null;
 let _ledgerDateTo    = null;
-let _ledgerWindow    = 'all';
+let _ledgerWindow    = 'last_30';
 
 /* ── Window selection ────────────────────────────────────────── */
 function setLedgerWindow(w) {
@@ -461,8 +464,10 @@ function _reloadLedger() {
   document.getElementById('ledgerBody').innerHTML =
     '<tr><td colspan="5" style="padding:30px;text-align:center;color:var(--text-muted)">Loading…</td></tr>';
   let url = '/clients/' + _ledgerClientId + '/ledger';
-  if (_ledgerDateFrom && _ledgerDateTo)
-    url += '?from=' + _ledgerDateFrom + '&to=' + _ledgerDateTo;
+  const params = [];
+  if (_ledgerCompanyId) params.push('company_id=' + _ledgerCompanyId);
+  if (_ledgerDateFrom && _ledgerDateTo) params.push('from=' + _ledgerDateFrom, 'to=' + _ledgerDateTo);
+  if (params.length) url += '?' + params.join('&');
   fetch(url)
     .then(r => r.json())
     .then(_renderLedger)
@@ -513,20 +518,14 @@ function _renderLedger(data) {
 
 /* ── Public opener ───────────────────────────────────────────── */
 window.showClientLedger = function(clientId, name) {
-  _ledgerClientId = clientId;
-  _ledgerDateFrom = null;
-  _ledgerDateTo   = null;
-  _ledgerWindow   = 'all';
-  // Reset picker UI
-  document.getElementById('lwSel').value  = 'all';
-  document.getElementById('lwFrom').value = '';
-  document.getElementById('lwTo').value   = '';
+  _ledgerClientId  = clientId;
+  _ledgerCompanyId = null;
   document.getElementById('ledgerModalTitle').textContent = name || 'Client';
   document.getElementById('ledgerFinalBal').textContent   = '';
   document.getElementById('ledgerEmpty').style.display    = 'none';
   document.getElementById('ledgerEntryForm').style.display = 'none';
   document.getElementById('ledgerModal').style.display    = 'flex';
-  _reloadLedger();
+  setLedgerWindow('last_30');   // default view: last 30 days (sets picker + reloads)
 };
 </script>
 

@@ -22,7 +22,14 @@ def list_payments():
     scope = _scope()
     if scope is not None:
         payments = [p for p in payments if p["client_id"] in scope]
-    return render_template("payments/list.html", payments=payments)
+    # Per-client company lists, so each row's Company cell can offer the same
+    # assign / re-assign dropdown as the client page's payments section.
+    companies_by_client = {}
+    for co in client_service.get_all_companies_with_client():
+        companies_by_client.setdefault(co["client_id"], []).append({"id": co["id"], "name": co["name"]})
+    can_assign = current_user.has_permission("clients", "financials")
+    return render_template("payments/list.html", payments=payments,
+                           companies_by_client=companies_by_client, can_assign=can_assign)
 
 
 @bp.route("/new", methods=["GET", "POST"])
@@ -76,6 +83,55 @@ def new_payment():
 
     return render_template("payments/form.html",
                            clients=clients, invoices=invoices, all_companies=all_companies, prefill=prefill)
+
+
+@bp.route("/<int:payment_id>")
+@login_required
+@permission_required("payments", "view")
+def detail(payment_id):
+    p = payment_service.get_payment(payment_id)
+    if not p:
+        flash("Payment not found.", "error")
+        return redirect(url_for("payments.list_payments"))
+    scope = _scope()
+    if scope is not None and p["client_id"] not in scope:
+        abort(403)
+    allocations = payment_service.get_payment_allocations(payment_id)
+    companies   = client_service.get_companies(p["client_id"])
+    company_name = next((c["name"] for c in companies if c["id"] == p["company_id"]), None)
+    can_edit   = current_user.has_permission("payments", "edit")
+    can_delete = current_user.has_permission("payments", "delete")
+    return render_template("payments/detail.html", p=p, allocations=allocations,
+                           company_name=company_name, can_edit=can_edit, can_delete=can_delete)
+
+
+@bp.route("/<int:payment_id>/edit", methods=["GET", "POST"])
+@login_required
+@permission_required("payments", "edit")
+def edit_payment(payment_id):
+    p = payment_service.get_payment(payment_id)
+    if not p:
+        flash("Payment not found.", "error")
+        return redirect(url_for("payments.list_payments"))
+    scope = _scope()
+    if scope is not None and p["client_id"] not in scope:
+        abort(403)
+    companies = client_service.get_companies(p["client_id"])
+
+    if request.method == "POST":
+        data = request.form.to_dict()
+        if not data.get("amount") or not data.get("payment_date"):
+            flash("Amount and payment date are required.", "error")
+            return render_template("payments/edit.html", p={**dict(p), **data}, companies=companies)
+        try:
+            payment_service.update_payment(payment_id, data)
+            flash("Payment updated.", "success")
+        except Exception as e:
+            flash(f"Error updating payment: {e}", "error")
+            return render_template("payments/edit.html", p={**dict(p), **data}, companies=companies)
+        return redirect(url_for("payments.detail", payment_id=payment_id))
+
+    return render_template("payments/edit.html", p=dict(p), companies=companies)
 
 
 @bp.route("/<int:payment_id>/toggle-opening-balance", methods=["POST"])

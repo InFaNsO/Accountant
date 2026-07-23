@@ -23,46 +23,49 @@
     <table id="paymentTable">
       <thead>
         <tr>
+          <th>#</th>
           <th>Date</th>
+          <th>Details</th>
           <th>Client</th>
-          <th>Invoice</th>
-          <th class="col-mobile-hide">Method</th>
-          <th class="col-mobile-hide">Reference</th>
+          <th>Company</th>
+          <th class="col-mobile-hide">Applied to</th>
           <th style="text-align:right">Amount</th>
-          <th></th>
         </tr>
       </thead>
       <tbody>
         {% for p in payments %}
-        <tr>
-          <td>{{ p.payment_date }}</td>
+        {% set _cos = companies_by_client.get(p.client_id, []) %}
+        <tr style="border-left:4px solid var(--success)">
+          <td><a href="{{ url_for('payments.detail', payment_id=p.id) }}" style="color:var(--accent);text-decoration:none;font-weight:700;font-family:monospace" title="View / edit payment">#{{ p.id }}</a></td>
+          <td class="muted">{{ p.payment_date or '—' }}</td>
+          <td>
+            <span style="font-weight:600">{{ p.notes or p.method or 'Payment' }}</span>
+            {% if p.is_opening_balance %}<span class="badge" style="margin-left:6px">opening</span>{% endif %}
+          </td>
           <td class="fw-700">
             <a href="{{ url_for('clients.detail', client_id=p.client_id) }}"
                style="color:var(--accent);text-decoration:none;font-weight:700">{{ p.client_name }}</a>
           </td>
           <td>
-            {% if p.is_opening_balance %}
-              <span class="badge" style="background:var(--warning-bg,#fff7ed);color:var(--warning,#b45309);border:1px solid var(--warning,#f59e0b)">Opening Balance</span>
-            {% elif p.invoice_number %}
-              <span style="font-weight:600;color:var(--accent);font-family:'SF Mono','Fira Code',monospace">{{ p.invoice_number }}</span>
+            {% if can_assign and _cos|length > 1 %}
+              <select class="pay-co-select{% if not p.company_id %} unassigned{% endif %}"
+                      data-prev="{{ p.company_id or '' }}"
+                      onchange="assignPaymentCompanyRow({{ p.client_id }}, {{ p.id }}, this)">
+                <option value="" {% if not p.company_id %}selected{% endif %}>— unassigned —</option>
+                {% for co in _cos %}
+                <option value="{{ co.id }}" {% if p.company_id == co.id %}selected{% endif %}>{{ co.name }}</option>
+                {% endfor %}
+              </select>
+            {% elif p.company_name %}
+              {{ p.company_name }}
+            {% elif _cos|length == 1 %}
+              {{ _cos[0].name }}
             {% else %}
-              <span class="muted" style="font-size:12px;font-style:italic">— credit / opening —</span>
+              <span class="muted">—</span>
             {% endif %}
           </td>
-          <td class="col-mobile-hide"><span class="badge badge-sent" style="text-transform:capitalize">{{ p.method.replace('_',' ') }}</span></td>
-          <td class="muted font-mono col-mobile-hide">{{ p.reference or '—' }}</td>
-          <td class="text-right fw-700" style="color:var(--success)">{{ p.amount|inr }}</td>
-          <td style="display:flex;gap:4px;justify-content:flex-end">
-            <form method="post" action="{{ url_for('payments.toggle_opening_balance', payment_id=p.id) }}"
-                  onsubmit="return confirm('Update the opening-balance flag for this payment? The client will be re-reconciled.')">
-              <button class="btn btn-secondary btn-sm" title="{{ 'Currently assigned to opening balance — click to unmark' if p.is_opening_balance else 'Assign this payment to the opening balance' }}">
-                {{ 'Unmark OB' if p.is_opening_balance else 'Mark OB' }}
-              </button>
-            </form>
-            <form class="confirm-inline" method="post" action="{{ url_for('payments.delete_payment', payment_id=p.id) }}" onsubmit="return confirm('Delete this payment record?')">
-              <button class="btn btn-danger btn-sm">Delete</button>
-            </form>
-          </td>
+          <td class="muted col-mobile-hide">{{ p.invoice_number or '—' }}</td>
+          <td class="fw-700" style="text-align:right;color:var(--success)">{{ p.amount|inr }}</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -76,4 +79,38 @@
   </div>
   {% endif %}
 </div>
+
+<style>
+  .pay-co-select {
+    width:auto; min-width:120px; max-width:200px; font-size:12.5px;
+    padding:4px 6px; border:1px solid var(--border); border-radius:var(--radius-sm);
+    background:var(--surface); color:var(--text-primary); cursor:pointer;
+  }
+  .pay-co-select.unassigned { border-color:var(--warning); }
+</style>
+
+<script>
+// Assign / re-assign a payment's company from the all-payments table. Persists
+// via the same endpoint the client page uses; the row's dropdown already shows
+// the chosen value, so we only flash success / revert on failure.
+function assignPaymentCompanyRow(clientId, paymentId, sel) {
+  const companyId = sel.value;              // '' clears the assignment
+  const prev = sel.dataset.prev || '';
+  sel.disabled = true;
+  fetch(`/clients/${clientId}/payments/${paymentId}/company`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ company_id: companyId }),
+  })
+    .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(() => {
+      sel.disabled = false;
+      sel.dataset.prev = companyId;
+      sel.classList.toggle('unassigned', !companyId);
+      sel.style.outline = '2px solid var(--success)';
+      setTimeout(() => { sel.style.outline = ''; }, 700);
+    })
+    .catch(() => { sel.disabled = false; sel.value = prev; alert('Failed to assign company — please retry.'); });
+}
+</script>
 {% endblock %}

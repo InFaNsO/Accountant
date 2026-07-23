@@ -392,6 +392,50 @@ def set_payment_opening_balance(payment_id, flag):
     return row["client_id"]
 
 
+def update_payment(payment_id, data):
+    """Update an existing payment's editable fields, then rebuild the client's
+    allocations so invoice paid-amounts and balances stay consistent.
+
+    The payment's client is NOT changed here — a payment stays with its client
+    (to move it, delete and re-add). company_id must belong to that client, or
+    it is cleared. Returns the client_id, or None if the payment is missing.
+    """
+    db = get_db()
+    row = db.execute("SELECT client_id FROM payments WHERE id=?", (payment_id,)).fetchone()
+    if not row:
+        return None
+    client_id = row["client_id"]
+
+    amount = float(data["amount"])
+    is_ob  = 1 if data.get("is_opening_balance") in (1, True, "1", "true", "True", "on", "yes") else 0
+
+    # Keep the company only if it belongs to this client.
+    company_id = None
+    if data.get("company_id"):
+        try:
+            cid = int(data["company_id"])
+        except (TypeError, ValueError):
+            cid = None
+        if cid is not None and db.execute(
+            "SELECT 1 FROM client_companies WHERE id=? AND client_id=?", (cid, client_id)
+        ).fetchone():
+            company_id = cid
+
+    db.execute(
+        """UPDATE payments
+              SET amount=?, payment_date=?, method=?, reference=?, notes=?,
+                  company_id=?, is_opening_balance=?
+            WHERE id=?""",
+        (amount, data.get("payment_date"), data.get("method"), data.get("reference"),
+         data.get("notes"), company_id, is_ob, payment_id),
+    )
+    db.commit()
+    # Rebuild allocations for the whole client (amount / date / OB-flag changes
+    # can shift which invoices this and later payments cover).
+    recalculate_client_balance(client_id)
+    return client_id
+
+
 def delete_payment(payment_id):
     db = get_db()
     affected = [r["invoice_id"] for r in db.execute(
@@ -407,7 +451,7 @@ def delete_payment(payment_id):
 
 def get_all_payments():
     return get_db().execute(
-        """SELECT p.*, c.name AS client_name,
+        """SELECT p.*, c.name AS client_name, cc.name AS company_name,
                   (SELECT GROUP_CONCAT(i.invoice_number, ', ')
                      FROM payment_allocations pa
                      JOIN invoices i ON i.id = pa.invoice_id
@@ -415,6 +459,7 @@ def get_all_payments():
                   (SELECT COALESCE(SUM(amount),0) FROM payment_allocations WHERE payment_id=p.id) AS allocated
            FROM payments p
            JOIN clients c ON p.client_id = c.id
+           LEFT JOIN client_companies cc ON p.company_id = cc.id
            ORDER BY p.payment_date DESC, p.created_at DESC"""
     ).fetchall()
 

@@ -266,11 +266,88 @@ def delete_client(client_id):
     db.commit()
 
 
-def get_client_invoices(client_id):
-    return get_db().execute(
-        "SELECT * FROM invoices WHERE client_id = ? ORDER BY created_at DESC",
-        (client_id,),
+def get_client_invoices(client_id, date_from=None, date_to=None):
+    """Client invoices, newest first. When date_from/date_to (YYYY-MM-DD) are
+    given, filter by issue_date inclusively (undated drafts are excluded while
+    a range is active)."""
+    sql = "SELECT * FROM invoices WHERE client_id = ?"
+    params = [client_id]
+    if date_from:
+        sql += " AND issue_date >= ?"
+        params.append(date_from)
+    if date_to:
+        sql += " AND issue_date <= ?"
+        params.append(date_to)
+    sql += " ORDER BY created_at DESC"
+    return get_db().execute(sql, params).fetchall()
+
+
+def get_client_payments(client_id, date_from=None, date_to=None):
+    """Client payments, newest first, each with the invoice numbers it was
+    applied to. When date_from/date_to (YYYY-MM-DD) are given, filter by
+    payment_date inclusively."""
+    sql = (
+        "SELECT p.id, p.amount, p.payment_date, p.method, p.reference, p.notes, "
+        "p.is_opening_balance, p.company_id, cc.name AS company_name, "
+        "(SELECT GROUP_CONCAT(i.invoice_number, ', ') "
+        "   FROM payment_allocations pa JOIN invoices i ON i.id=pa.invoice_id "
+        "  WHERE pa.payment_id=p.id) AS invoice_numbers "
+        "FROM payments p LEFT JOIN client_companies cc ON p.company_id = cc.id "
+        "WHERE p.client_id = ?"
+    )
+    params = [client_id]
+    if date_from:
+        sql += " AND p.payment_date >= ?"
+        params.append(date_from)
+    if date_to:
+        sql += " AND p.payment_date <= ?"
+        params.append(date_to)
+    sql += " ORDER BY p.payment_date DESC, p.id DESC"
+    return get_db().execute(sql, params).fetchall()
+
+
+def default_single_company_payments(client_id):
+    """When a client has exactly one company, assign it to any of that client's
+    payments that still have no company. Idempotent (updates 0 rows once every
+    payment is assigned). Keeps company balances complete for single-company
+    clients, where there is no other company the payment could belong to."""
+    db = get_db()
+    cos = db.execute(
+        "SELECT id FROM client_companies WHERE client_id=?", (client_id,)
     ).fetchall()
+    if len(cos) == 1:
+        db.execute(
+            "UPDATE payments SET company_id=? WHERE client_id=? AND company_id IS NULL",
+            (cos[0]["id"], client_id),
+        )
+        db.commit()
+
+
+def set_payment_company(client_id, payment_id, company_id):
+    """Assign (or clear, when company_id is falsy) the company on a payment.
+    The payment must belong to client_id, and the company (when given) must be
+    one of that client's companies. Returns True on success, False otherwise."""
+    db = get_db()
+    pay = db.execute(
+        "SELECT id FROM payments WHERE id=? AND client_id=?", (payment_id, client_id)
+    ).fetchone()
+    if not pay:
+        return False
+    if company_id in (None, "", 0, "0"):
+        cid = None
+    else:
+        try:
+            cid = int(company_id)
+        except (TypeError, ValueError):
+            return False
+        co = db.execute(
+            "SELECT id FROM client_companies WHERE id=? AND client_id=?", (cid, client_id)
+        ).fetchone()
+        if not co:
+            return False
+    db.execute("UPDATE payments SET company_id=? WHERE id=?", (cid, payment_id))
+    db.commit()
+    return True
 
 
 def get_client_product_breakdown(client_id, date_from=None, date_to=None):

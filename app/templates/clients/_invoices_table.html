@@ -1,0 +1,55 @@
+{# Invoices table for the client detail page — rendered standalone by
+   clients.invoices_partial and included on first page load. Expects:
+   invoices, can_financials, today (global), window_label (optional). #}
+<div class="section-summary">
+  <span class="section-summary-count">{{ invoices|length }} invoice{{ '' if invoices|length == 1 else 's' }}</span>
+  {% if can_financials %}<span class="section-summary-amt">{{ (invoices|sum(attribute='total'))|inr }}</span>{% endif %}
+  {% if window_label %}<span class="section-summary-win">{{ window_label }}</span>{% endif %}
+</div>
+{% if invoices %}
+<div class="table-wrap tbl-scroll">
+  <table>
+    <thead>
+      <tr>
+        <th>Invoice</th>
+        <th class="col-mobile-hide">Date</th>
+        <th class="col-mobile-hide">Due</th>
+        <th>Total</th>
+        {% if can_financials %}<th class="col-mobile-hide">Paid</th><th>Status</th>{% endif %}
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for inv in invoices %}
+      {% if can_financials %}
+        {% set _paid = inv.status == 'paid' or inv.amount_paid >= inv.total and inv.total > 0 %}
+        {% set _overdue = inv.due_date and inv.due_date < today and inv.status not in ('paid','cancelled') %}
+        {% set _pct_unpaid = ((inv.total - inv.amount_paid) / inv.total) if inv.total > 0 else 0 %}
+        {% if inv.status == 'cancelled' %}{% set _rc = '' %}
+        {% elif _paid %}{% set _rc = 'var(--success)' %}
+        {% elif _overdue %}{% set _rc = '#b91c1c' %}
+        {% elif _pct_unpaid > 0.5 %}{% set _rc = 'var(--danger)' %}
+        {% else %}{% set _rc = 'var(--warning)' %}{% endif %}
+      {% else %}
+        {% set _rc = '' %}
+      {% endif %}
+      <tr{% if _rc %} style="border-left:4px solid {{ _rc }}"{% endif %}>
+        <td><a href="{{ url_for('invoices.detail', invoice_id=inv.id) }}" style="font-weight:600;color:var(--accent);text-decoration:none">{{ inv.invoice_number }}</a></td>
+        <td class="muted col-mobile-hide">{{ inv.issue_date }}</td>
+        <td class="muted col-mobile-hide">{{ inv.due_date or '—' }}</td>
+        <td class="fw-700">{{ inv.total|inr }}</td>
+        {% if can_financials %}
+        <td class="col-mobile-hide">{{ inv.amount_paid|inr }}</td>
+        <td><span class="badge badge-{{ inv.status }}">{{ inv.status }}</span></td>
+        {% endif %}
+        <td><a href="{{ url_for('invoices.detail', invoice_id=inv.id) }}" class="btn btn-ghost btn-sm">View</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="empty-state" style="padding:30px">
+  <p>No invoices in this range.</p>
+</div>
+{% endif %}
