@@ -10,6 +10,14 @@ set -e
 APP_DIR="/home/ledger/app"
 cd "$APP_DIR"
 
+# Self-heal: a stray `git` run as root leaves root-owned objects under .git that
+# block this pull (which runs as 'ledger') with
+#   "error: insufficient permission for adding an object to repository database".
+# Repair ownership first. NOPASSWD-allowed for exactly this command in
+# deploy/setup.sh; the `|| true` keeps deploys working if the rule is absent.
+echo "[deploy] Ensuring repo ownership..."
+sudo chown -R ledger:ledger "$APP_DIR" 2>/dev/null || true
+
 echo "[deploy] Pulling latest code..."
 # Retry up to 3 times in case of transient GitHub network issues
 for _attempt in 1 2 3; do

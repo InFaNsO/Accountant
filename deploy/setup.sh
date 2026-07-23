@@ -40,8 +40,10 @@ if ! id "$APP_USER" &>/dev/null; then
 fi
 # Allow nginx (www-data) to traverse the home directory to serve static files
 chmod 755 /home/$APP_USER
-# Allow ledger to restart its own service without a password
-echo "$APP_USER ALL=(ALL) NOPASSWD: /bin/systemctl restart ledger, /bin/systemctl start ledger, /bin/systemctl stop ledger, /bin/systemctl restart ledger-mcp, /bin/systemctl start ledger-mcp, /bin/systemctl stop ledger-mcp" \
+# Allow ledger to restart its own service, and to repair repo ownership during
+# deploys (a stray root `git` run leaves root-owned .git objects that block the
+# deploy's `git pull`), all without a password.
+echo "$APP_USER ALL=(ALL) NOPASSWD: /bin/systemctl restart ledger, /bin/systemctl start ledger, /bin/systemctl stop ledger, /bin/systemctl restart ledger-mcp, /bin/systemctl start ledger-mcp, /bin/systemctl stop ledger-mcp, /usr/bin/chown -R ${APP_USER}\:${APP_USER} ${APP_DIR}" \
     > /etc/sudoers.d/ledger
 chmod 440 /etc/sudoers.d/ledger
 
