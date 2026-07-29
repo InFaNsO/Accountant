@@ -1,9 +1,20 @@
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
 from flask_login import login_required
-from ..services import product_service
+from ..services import product_service, correction_service
 from ..services.auth_service import permission_required
 
 bp = Blueprint("products", __name__, url_prefix="/products")
+
+# Movement types shown under each stock-history tab. Kept here (rather than inline)
+# so the product and sub-product views can never drift apart.
+WAREHOUSE_MOVEMENTS = ["opening", "add", "arrival", "transit_arrival", "correction",
+                       "correction_out", "correction_in",
+                       "warehouse_add", "warehouse_deduct", "sale", "sale_cancelled",
+                       "palm_purchase", "palm_purchase_reversed"]
+PRODUCTION_MOVEMENTS = ["production", "production_add", "production_deduct",
+                        "production_correction_out", "production_correction_in"]
+TRANSIT_MOVEMENTS = ["dispatch", "transit_dispatch", "dispatch_add", "dispatch_deduct",
+                     "dispatch_correction_out", "dispatch_correction_in"]
 
 
 # ── Categories ────────────────────────────────────────────────────────────────
@@ -108,16 +119,11 @@ def product_detail(product_id):
     warehouse_history = production_history = transit_history = []
     if not subs:
         warehouse_history  = product_service.get_stock_history(
-            product_id=product_id,
-            movement_types=["opening", "add", "arrival", "transit_arrival", "correction",
-                            "warehouse_add", "warehouse_deduct", "sale", "sale_cancelled",
-                            "palm_purchase", "palm_purchase_reversed"])
+            product_id=product_id, movement_types=WAREHOUSE_MOVEMENTS)
         production_history = product_service.get_stock_history(
-            product_id=product_id,
-            movement_types=["production", "production_add", "production_deduct"])
+            product_id=product_id, movement_types=PRODUCTION_MOVEMENTS)
         transit_history    = product_service.get_stock_history(
-            product_id=product_id,
-            movement_types=["dispatch", "transit_dispatch", "dispatch_add", "dispatch_deduct"])
+            product_id=product_id, movement_types=TRANSIT_MOVEMENTS)
 
     # Eco range: load linked eco product (if main) or main product (if eco)
     eco_product = None
@@ -133,12 +139,37 @@ def product_detail(product_id):
         if main_row:
             main_product = dict(main_row)
 
+    # Eco ⇄ Normal correction popup data (main products with an eco twin only).
+    eco_pairs = []
+    if eco_product:
+        _eco, eco_pairs, _err = correction_service.get_eco_pairs(product_id)
+
     return render_template("products/detail.html", product=product, subs=subs,
                            warehouse_history=warehouse_history,
                            production_history=production_history,
                            transit_history=transit_history,
                            eco_product=eco_product,
-                           main_product=main_product)
+                           main_product=main_product,
+                           eco_pairs=eco_pairs,
+                           correction_buckets=correction_service.BUCKETS)
+
+
+@bp.route("/<int:product_id>/eco-correction", methods=["POST"])
+@login_required
+@permission_required("products", "edit")
+def eco_correction(product_id):
+    """Apply an Eco ⇄ Normal correction straight from the popup — no draft state."""
+    form   = request.form.to_dict()
+    bucket = (form.get("bucket") or "warehouse").strip()
+    ok, err, n = correction_service.apply_correction(
+        product_id, bucket, correction_service.parse_moves(form),
+        allow_unbalanced=bool(form.get("allow_unbalanced")))
+    if ok:
+        flash(f"Correction applied — {n} sub-product(s) moved between Normal and Eco "
+              f"({correction_service.bucket_label(bucket)}).", "success")
+    else:
+        flash(f"Cannot apply correction: {err}", "error")
+    return redirect(url_for("products.product_detail", product_id=product_id))
 
 
 @bp.route("/<int:product_id>/edit", methods=["GET", "POST"])
@@ -360,16 +391,11 @@ def sub_detail(product_id, sub_id):
         flash("Not found.", "error")
         return redirect(url_for("products.list_products"))
     warehouse_history  = product_service.get_stock_history(
-        sub_id=sub_id,
-        movement_types=["opening", "add", "arrival", "transit_arrival", "correction",
-                        "warehouse_add", "warehouse_deduct", "sale", "sale_cancelled",
-                        "palm_purchase", "palm_purchase_reversed"])
+        sub_id=sub_id, movement_types=WAREHOUSE_MOVEMENTS)
     production_history = product_service.get_stock_history(
-        sub_id=sub_id,
-        movement_types=["production", "production_add", "production_deduct"])
+        sub_id=sub_id, movement_types=PRODUCTION_MOVEMENTS)
     transit_history    = product_service.get_stock_history(
-        sub_id=sub_id,
-        movement_types=["dispatch", "transit_dispatch", "dispatch_add", "dispatch_deduct"])
+        sub_id=sub_id, movement_types=TRANSIT_MOVEMENTS)
     return render_template("products/sub_detail.html",
                            product=product, sub=sub,
                            warehouse_history=warehouse_history,

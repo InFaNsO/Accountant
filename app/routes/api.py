@@ -2852,11 +2852,14 @@ def api_delete_palm_purchase(pp_id):
 _BUCKET_MOVEMENT_TYPES = {
     "warehouse": ("opening", "add", "sale", "sale_cancelled",
                   "warehouse_add", "warehouse_deduct",
-                  "correction", "palm_purchase", "palm_purchase_reversed",
+                  "correction", "correction_out", "correction_in",
+                  "palm_purchase", "palm_purchase_reversed",
                   "arrival", "transit_arrival"),
-    "production": ("production", "production_add", "production_deduct"),
+    "production": ("production", "production_add", "production_deduct",
+                   "production_correction_out", "production_correction_in"),
     "transit":    ("dispatch", "transit_dispatch",
-                   "dispatch_add", "dispatch_deduct"),
+                   "dispatch_add", "dispatch_deduct",
+                   "dispatch_correction_out", "dispatch_correction_in"),
 }
 
 

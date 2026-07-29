@@ -108,6 +108,10 @@
     </div>
     <div style="display:flex;gap:8px;align-items:center">
       <button id="subsSaveBtn" class="btn btn-primary btn-sm" onclick="saveAllSubs()" style="display:none">Save Changes</button>
+      {% if eco_pairs and current_user.has_permission('products', 'edit') %}
+      <button type="button" class="btn btn-secondary btn-sm" onclick="openCorrection()"
+              title="Move stock between the Normal and Eco range">⇄ Correction</button>
+      {% endif %}
       <a href="{{ url_for('products.new_sub_product', product_id=product.id) }}" class="btn btn-secondary btn-sm">+ Add</a>
     </div>
   </div>
@@ -266,12 +270,16 @@
                 {% if m.palm_purchase_id %}<span class="muted" style="font-size:12px;margin-left:6px">PP #{{ m.palm_purchase_id }}</span>{% endif %}
               {% elif m.movement_type == 'palm_purchase_reversed' %}
                 <span class="badge" style="background:rgba(239,68,68,.12);color:var(--danger)">▼ Palm Purchase Reversed</span>
+              {% elif m.movement_type.endswith('correction_out') %}
+                <span class="badge" style="background:rgba(239,68,68,.12);color:var(--danger)">▼ Eco Correction Out</span>
+              {% elif m.movement_type.endswith('correction_in') %}
+                <span class="badge" style="background:rgba(16,185,129,.15);color:#10b981">▲ Eco Correction In</span>
               {% else %}
                 <span class="badge">{{ m.movement_type }}</span>
               {% endif %}
             </td>
-            <td style="text-align:right;font-weight:700;color:{% if m.movement_type in ('sale','warehouse_deduct','palm_purchase_reversed') %}#ef9a9a{% else %}var(--success){% endif %}">
-              {% if m.movement_type in ('sale','warehouse_deduct','palm_purchase_reversed') %}-{% else %}+{% endif %}{{ stock_val(m.quantity, product.pcs_per_carton) }}
+            <td style="text-align:right;font-weight:700;color:{% if m.movement_type in ('sale','warehouse_deduct','palm_purchase_reversed') or m.movement_type.endswith('correction_out') %}#ef9a9a{% else %}var(--success){% endif %}">
+              {% if m.movement_type in ('sale','warehouse_deduct','palm_purchase_reversed') or m.movement_type.endswith('correction_out') %}-{% else %}+{% endif %}{{ stock_val(m.quantity, product.pcs_per_carton) }}
             </td>
             <td class="muted" style="font-size:12px">{{ m.notes or '—' }}</td>
           </tr>
@@ -380,6 +388,110 @@
       <div style="display:flex;gap:10px;justify-content:flex-end">
         <button type="button" onclick="document.getElementById('eco-range-modal').style.display='none'" class="btn btn-secondary">Cancel</button>
         <button type="submit" class="btn btn-primary">Create Eco Range</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+{% if eco_pairs %}
+<!-- ── Eco ⇄ Normal correction popup ─────────────────────────────────────────
+     Applies straight to stock — there is no draft to save. Whatever leaves the
+     Normal side must be matched by what leaves the Eco side, so the range mix
+     changes but the total on hand does not. -->
+<div id="corr-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;align-items:center;justify-content:center"
+     onclick="if(event.target===this)closeCorrection()">
+  <div style="background:var(--bg);border-radius:var(--radius);width:min(880px,96vw);max-height:92vh;display:flex;flex-direction:column;box-shadow:0 12px 48px rgba(0,0,0,.4);overflow:hidden">
+    <form method="post" action="{{ url_for('products.eco_correction', product_id=product.id) }}" id="corrForm"
+          style="display:flex;flex-direction:column;min-height:0">
+
+      <div style="padding:16px 20px 12px;border-bottom:1px solid var(--border);flex-shrink:0">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:16px">
+          <div style="min-width:0">
+            <h3 style="margin:0 0 2px;font-size:15px">Eco ⇄ Normal Correction</h3>
+            <div style="font-size:11px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+              {{ product.name }} ⇄ {{ eco_product.name }} · applies immediately, nothing is saved
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
+            <select name="bucket" id="corr-bucket" onchange="corrBucketChanged()"
+                    style="width:auto;min-width:132px;padding:6px 10px;font-size:13px">
+              {% for key, b in correction_buckets.items() %}
+              <option value="{{ key }}">{{ b[1] }}</option>
+              {% endfor %}
+            </select>
+            <button type="button" onclick="closeCorrection()"
+                    style="background:none;border:none;font-size:22px;cursor:pointer;color:var(--text-muted);line-height:1">&times;</button>
+          </div>
+        </div>
+        <div id="corr-unit-note" style="font-size:11px;color:var(--text-muted);margin-top:8px"></div>
+      </div>
+
+      <div style="overflow:auto;flex:1;min-height:0">
+        <table style="width:100%;border-collapse:collapse;table-layout:fixed">
+          <colgroup>
+            <col><col style="width:74px"><col style="width:74px">
+            <col style="width:210px"><col style="width:74px"><col style="width:80px">
+          </colgroup>
+          <thead style="position:sticky;top:0;background:var(--bg);z-index:1;box-shadow:0 1px 0 var(--border)">
+            <tr>
+              <th></th>
+              <th colspan="2" style="padding:7px 8px;text-align:center;font-size:11px;font-weight:800;letter-spacing:.08em">NORMAL</th>
+              <th style="padding:7px 8px;text-align:center;font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;border-left:2px solid var(--border);border-right:2px solid var(--border)">Transfer</th>
+              <th colspan="2" style="padding:7px 8px;text-align:center;font-size:11px;font-weight:800;letter-spacing:.08em;color:var(--success)">ECO</th>
+            </tr>
+            <tr style="border-bottom:2px solid var(--border)">
+              <th style="padding:5px 14px 7px;text-align:left;font-size:10px;color:var(--text-muted);text-transform:uppercase">Sub-product</th>
+              <th style="padding:5px 8px 7px;text-align:right;font-size:10px;color:var(--text-muted);text-transform:uppercase">Stock</th>
+              <th style="padding:5px 8px 7px;text-align:right;font-size:10px;color:var(--text-muted);text-transform:uppercase">After</th>
+              <th style="padding:5px 8px 7px;text-align:center;font-size:10px;color:var(--text-muted);text-transform:uppercase;border-left:2px solid var(--border);border-right:2px solid var(--border)">Move</th>
+              <th style="padding:5px 8px 7px;text-align:right;font-size:10px;color:var(--text-muted);text-transform:uppercase">After</th>
+              <th style="padding:5px 14px 7px;text-align:right;font-size:10px;color:var(--text-muted);text-transform:uppercase">Stock</th>
+            </tr>
+          </thead>
+          <tbody id="corr-rows"></tbody>
+          <tfoot>
+            <tr style="border-top:2px solid var(--border);background:var(--bg-alt)">
+              <td style="padding:9px 14px;font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:.05em">Total</td>
+              <td id="corr-tot-main" style="padding:9px 8px;text-align:right;font-family:monospace;font-weight:700;font-size:13px"></td>
+              <td id="corr-tot-main-after" style="padding:9px 8px;text-align:right;font-family:monospace;font-weight:700;font-size:13px"></td>
+              <td style="padding:7px 8px;text-align:center;white-space:nowrap;border-left:2px solid var(--border);border-right:2px solid var(--border)">
+                <span id="corr-out-normal" style="font-family:monospace;font-weight:800;font-size:14px">0</span>
+                <span id="corr-sign" style="margin:0 6px;font-weight:800;font-size:14px;color:var(--text-muted)">=</span>
+                <span id="corr-out-eco" style="font-family:monospace;font-weight:800;font-size:14px">0</span>
+                <div id="corr-badge" style="margin-top:2px;font-size:10px;font-weight:700;padding:1px 8px;border-radius:20px;display:none"></div>
+              </td>
+              <td id="corr-tot-eco-after" style="padding:9px 8px;text-align:right;font-family:monospace;font-weight:700;font-size:13px"></td>
+              <td id="corr-tot-eco" style="padding:9px 14px;text-align:right;font-family:monospace;font-weight:700;font-size:13px"></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
+      <div style="padding:12px 20px;border-top:1px solid var(--border);flex-shrink:0">
+        {# Production is work in progress, so a run can legitimately be re-graded one
+           way. Warehouse and in-transit stock is physically counted — no override there. #}
+        {# The global `input { width:100% }` rule would make this checkbox eat the
+           whole row, so its size and box are pinned explicitly. #}
+        <label id="corr-ack-wrap" style="display:none;align-items:flex-start;gap:9px;margin-bottom:10px;cursor:pointer;
+                                         background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.35);
+                                         border-radius:8px;padding:9px 12px">
+          <input type="checkbox" id="corr-ack" name="allow_unbalanced" value="1" onchange="corrUpdate()"
+                 style="width:15px;height:15px;flex:0 0 15px;min-width:0;padding:0;margin:1px 0 0;
+                        border-radius:3px;accent-color:var(--warning)">
+          <span style="flex:1;min-width:0;font-size:12px;line-height:1.45;font-weight:400">
+            <strong style="color:var(--warning);font-weight:700">Allow unbalanced production transfer</strong>
+            <span style="color:var(--text-muted)"> — totals need not match. Production quantities will change on one
+            side, and the movement note records that this was acknowledged.</span>
+          </span>
+        </label>
+        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+          <span id="corr-status" style="font-size:12px;font-weight:600;flex:1;min-width:200px"></span>
+          <button type="button" onclick="closeCorrection()" class="btn btn-secondary">Cancel</button>
+          <button type="submit" id="corr-apply" class="btn btn-primary" disabled onclick="return corrConfirm()">
+            Apply Correction →
+          </button>
+        </div>
       </div>
     </form>
   </div>
@@ -529,6 +641,236 @@ window.__dirtyCheck = () => ({
   save: saveAllSubs,
 });
 </script>
+
+{% if eco_pairs %}
+<script>
+/* ── Eco ⇄ Normal correction popup ───────────────────────────────────────────
+   Strictly balanced: what leaves Normal must equal what leaves Eco, so the
+   total on hand never changes — only which range holds it. Applies on submit;
+   there is no draft. */
+const CORR_PAIRS = {{ eco_pairs|tojson }};
+
+/* Entry follows the page's pcs/box toggle; the posted value is always pieces. */
+function corrBoxMode() { return document.documentElement.classList.contains('show-boxes'); }
+function corrToPieces(v, pcs) { return (corrBoxMode() && pcs > 0) ? v * pcs : v; }
+function corrToDisplay(v, pcs) { return (corrBoxMode() && pcs > 0) ? v / pcs : v; }
+
+function corrFmt(v) {
+  if (v == null || isNaN(v)) return '0';
+  var neg = v < 0; v = Math.abs(v);
+  var r = Math.round(v * 100) / 100, ip = Math.floor(r + 1e-9);
+  var frac = Math.round((r - ip) * 100);
+  var s = (typeof formatIndian === 'function') ? formatIndian(ip) : String(ip);
+  if (frac > 0) s += '.' + String(frac).padStart(2, '0');
+  return (neg ? '-' : '') + s;
+}
+/* Both units, so the row obeys the global Boxes/Pcs toggle like every other table. */
+function corrDual(pieces, pcs) {
+  return '<span class="u-pcs">' + corrFmt(pieces) + '</span>' +
+         '<span class="u-box">' + (pcs > 0 ? corrFmt(pieces / pcs) : '—') + '</span>';
+}
+
+function corrBucket() { return document.getElementById('corr-bucket').value; }
+
+/* keep=true re-renders in a new unit without losing what was typed (pieces are
+   canonical); the bucket selector passes keep=false because entered quantities
+   only make sense against the bucket they were typed for. */
+function corrRenderRows(keep) {
+  var bucket = corrBucket(), box = corrBoxMode();
+  document.getElementById('corr-unit-note').textContent =
+    'Quantities in ' + (box ? 'boxes' : 'pieces') + ' — matches the page toggle.';
+
+  var prev = {};
+  if (keep) {
+    document.querySelectorAll('#corr-rows .corr-row').forEach(function (row) {
+      var pieces = row.querySelector('.corr-qty-pieces').value;
+      if (pieces !== '') prev[row.dataset.key] = { dir: row.querySelector('.corr-dir').value, pieces: pieces };
+    });
+  }
+
+  document.getElementById('corr-rows').innerHTML = CORR_PAIRS.map(function (p) {
+    var key  = p.main_sub_id === null ? 'p' : p.main_sub_id;
+    var main = p.main[bucket] || 0, eco = p.eco[bucket] || 0;
+    /* Nothing on either side in this bucket → nothing can move, so lock the row
+       rather than let someone type into a dead line. */
+    var empty = main <= 0 && eco <= 0;
+    var lock  = (!p.paired || empty);
+    var dis   = lock ? ' disabled' : '';
+    var muted = lock ? ';opacity:.5' : '';
+    var note  = !p.paired ? 'No eco twin' : (empty ? 'Nothing in this bucket' : '');
+    return '' +
+      '<tr class="corr-row" data-key="' + key + '" data-pcs="' + (p.pcs || 0) + '"' +
+      ' data-main="' + main + '" data-eco="' + eco + '" style="border-bottom:1px solid var(--border)' + muted + '">' +
+        '<td style="padding:5px 14px;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
+          '<span style="font-weight:600">' + p.name + '</span>' +
+          (p.sku ? '<span style="color:var(--text-muted);font-size:10px;font-family:monospace;margin-left:7px">' + p.sku + '</span>' : '') +
+          (note ? '<span style="color:var(--warning);font-size:10px;margin-left:7px">· ' + note + '</span>' : '') +
+        '</td>' +
+        '<td style="padding:5px 8px;text-align:right;font-family:monospace;font-size:12.5px">' + corrDual(main, p.pcs) + '</td>' +
+        '<td class="corr-after-main" style="padding:5px 8px;text-align:right;font-family:monospace;font-size:12.5px;font-weight:600">—</td>' +
+        '<td style="padding:4px 8px;text-align:center;white-space:nowrap;border-left:2px solid var(--border);border-right:2px solid var(--border)">' +
+          '<span class="corr-arrow" style="display:inline-block;width:14px;font-size:14px;font-weight:700;color:transparent">→</span>' +
+          '<select class="corr-dir" name="dir_' + key + '" onchange="corrChanged(this)" style="width:86px;margin:0 5px;padding:3px 4px;font-size:12px"' + dis + '>' +
+            '<option value="">—</option>' +
+            '<option value="to_eco">→ Eco</option>' +
+            '<option value="to_main">← Normal</option>' +
+          '</select>' +
+          '<input type="number" class="corr-qty" min="0" step="0.01" placeholder="0" ' +
+                 'style="width:64px;text-align:right;padding:3px 5px;font-size:12px" oninput="corrChanged(this)"' + dis + '>' +
+          '<input type="hidden" class="corr-qty-pieces" name="qty_' + key + '" value="">' +
+        '</td>' +
+        '<td class="corr-after-eco" style="padding:5px 8px;text-align:right;font-family:monospace;font-size:12.5px;font-weight:600">—</td>' +
+        '<td style="padding:5px 14px;text-align:right;font-family:monospace;font-size:12.5px">' + corrDual(eco, p.pcs) + '</td>' +
+      '</tr>';
+  }).join('');
+
+  Object.keys(prev).forEach(function (key) {
+    var row = document.querySelector('#corr-rows .corr-row[data-key="' + key + '"]');
+    if (!row) return;
+    var pcs = parseFloat(row.dataset.pcs) || 0;
+    row.querySelector('.corr-dir').value = prev[key].dir;
+    row.querySelector('.corr-qty-pieces').value = prev[key].pieces;
+    row.querySelector('.corr-qty').value = corrFmt(corrToDisplay(parseFloat(prev[key].pieces), pcs)).replace(/,/g, '');
+  });
+  corrUpdate();
+}
+
+/* Visible input is in the current unit; the hidden field carries pieces. */
+function corrChanged(el) {
+  var row = el.closest('tr');
+  var pcs = parseFloat(row.dataset.pcs) || 0;
+  var sel = row.querySelector('.corr-dir');
+  var inp = row.querySelector('.corr-qty');
+  var hid = row.querySelector('.corr-qty-pieces');
+  if (el.classList.contains('corr-dir') && !sel.value) inp.value = '';
+  var v = inp.value.trim();
+  hid.value = (v === '' || !sel.value) ? '' : corrToPieces(parseFloat(v) || 0, pcs);
+  corrUpdate();
+}
+
+function corrUpdate() {
+  var outNormal = 0, outEco = 0, moves = 0, bad = false;
+  /* Totals are summed in DISPLAY units (converted per row) — pack size differs
+     between sub-products, so dividing a piece-total by one pack size would lie. */
+  var dMain = 0, dEco = 0, dMainAfter = 0, dEcoAfter = 0, dOutN = 0, dOutE = 0, noPcs = false;
+
+  document.querySelectorAll('#corr-rows .corr-row').forEach(function (row) {
+    var pcs  = parseFloat(row.dataset.pcs) || 0;
+    var main = parseFloat(row.dataset.main) || 0;
+    var eco  = parseFloat(row.dataset.eco) || 0;
+    var dir  = row.querySelector('.corr-dir').value;
+    var hid  = row.querySelector('.corr-qty-pieces').value;
+    var qty  = hid === '' ? 0 : (parseFloat(hid) || 0);
+    if (qty <= 0) dir = '';
+
+    var afterMain = main - (dir === 'to_eco' ? qty : 0) + (dir === 'to_main' ? qty : 0);
+    var afterEco  = eco  + (dir === 'to_eco' ? qty : 0) - (dir === 'to_main' ? qty : 0);
+    var rowBad = (dir === 'to_eco' && qty > main + 0.0001) || (dir === 'to_main' && qty > eco + 0.0001);
+    if (rowBad) bad = true;
+    row.style.background = rowBad ? 'rgba(239,68,68,.07)' : '';
+
+    var am = row.querySelector('.corr-after-main'), ae = row.querySelector('.corr-after-eco');
+    am.innerHTML = dir ? corrDual(afterMain, pcs) : '—';
+    ae.innerHTML = dir ? corrDual(afterEco, pcs)  : '—';
+    am.style.color = !dir ? 'var(--text-muted)' : (afterMain < -0.0001 ? 'var(--danger)' : 'var(--accent)');
+    ae.style.color = !dir ? 'var(--text-muted)' : (afterEco  < -0.0001 ? 'var(--danger)' : 'var(--success)');
+
+    var arrow = row.querySelector('.corr-arrow');
+    arrow.textContent = dir === 'to_main' ? '←' : '→';
+    arrow.style.color = dir === 'to_eco' ? 'var(--accent)'
+                      : (dir === 'to_main' ? 'var(--success)' : 'transparent');
+
+    if (corrBoxMode() && !(pcs > 0)) noPcs = true;
+    dMain += corrToDisplay(main, pcs);           dEco += corrToDisplay(eco, pcs);
+    dMainAfter += corrToDisplay(afterMain, pcs); dEcoAfter += corrToDisplay(afterEco, pcs);
+    if (dir && qty > 0) {
+      moves++;
+      if (dir === 'to_eco') { outNormal += qty; dOutN += corrToDisplay(qty, pcs); }
+      else                  { outEco    += qty; dOutE += corrToDisplay(qty, pcs); }
+    }
+  });
+
+  var star = noPcs ? ' <span style="color:var(--text-muted);font-size:10px">*</span>' : '';
+  document.getElementById('corr-tot-main').innerHTML = corrFmt(dMain) + star;
+  document.getElementById('corr-tot-eco').innerHTML  = corrFmt(dEco) + star;
+  document.getElementById('corr-tot-main-after').innerHTML = moves ? corrFmt(dMainAfter) + star : '—';
+  document.getElementById('corr-tot-eco-after').innerHTML  = moves ? corrFmt(dEcoAfter) + star  : '—';
+  document.getElementById('corr-out-normal').textContent = corrFmt(dOutN);
+  document.getElementById('corr-out-eco').textContent    = corrFmt(dOutE);
+
+  /* Balance is judged in pieces (the stored unit); only the label is in display units. */
+  var diff = Math.abs(outNormal - outEco), balanced = diff < 0.0001 && moves > 0;
+  var diffDisp = Math.abs(dOutN - dOutE);
+
+  /* Only production may be left unbalanced, and only when explicitly acknowledged.
+     The server re-checks both conditions — this is convenience, not the guard. */
+  var prod  = corrBucket() === 'production';
+  var acked = prod && document.getElementById('corr-ack').checked;
+  var okUnbalanced = acked && moves > 0;
+  var sign = document.getElementById('corr-sign');
+  sign.textContent = (moves === 0 || balanced) ? '=' : '≠';
+  sign.style.color = balanced ? 'var(--success)'
+                   : (moves === 0 ? 'var(--text-muted)'
+                   : (okUnbalanced ? 'var(--warning)' : 'var(--danger)'));
+
+  var badge = document.getElementById('corr-badge');
+  if (moves === 0) { badge.style.display = 'none'; }
+  else {
+    var warn = !balanced && okUnbalanced;
+    badge.style.display = 'inline-block';
+    badge.textContent = balanced ? 'Balanced' : 'Off by ' + corrFmt(diffDisp);
+    badge.style.background = balanced ? 'rgba(16,185,129,.14)' : (warn ? 'rgba(245,158,11,.14)' : 'rgba(239,68,68,.12)');
+    badge.style.color      = balanced ? 'var(--success)'       : (warn ? 'var(--warning)'       : 'var(--danger)');
+  }
+
+  var status = document.getElementById('corr-status');
+  if (moves === 0)          { status.textContent = 'Pick a direction and quantity to begin.'; status.style.color = 'var(--text-muted)'; }
+  else if (bad)             { status.textContent = '✗ A row moves more stock than that side holds.'; status.style.color = 'var(--danger)'; }
+  else if (balanced)        { status.textContent = '✓ Balanced — total stock unchanged, only the range moves.'; status.style.color = 'var(--success)'; }
+  else if (okUnbalanced)    { status.textContent = '⚠ Unbalanced by ' + corrFmt(diffDisp) + ' — acknowledged, production totals will change.'; status.style.color = 'var(--warning)'; }
+  else if (prod)            { status.textContent = '✗ Off by ' + corrFmt(diffDisp) + ' — tick the box above to allow it.'; status.style.color = 'var(--danger)'; }
+  else                      { status.textContent = '✗ Totals must match — ' + corrFmt(diffDisp) + ' out of balance.'; status.style.color = 'var(--danger)'; }
+
+  document.getElementById('corr-apply').disabled = bad || !(balanced || okUnbalanced);
+}
+
+function corrConfirm() {
+  var unbalanced = document.getElementById('corr-badge').textContent.indexOf('Off by') === 0;
+  return confirm(unbalanced
+    ? 'Apply this UNBALANCED production correction? One side\'s total will change. This cannot be undone.'
+    : 'Apply this correction? Stock moves between Normal and Eco immediately.');
+}
+
+/* Entries reset on bucket change — they were typed against a different bucket.
+   The unbalanced override is production-only, so it hides and clears elsewhere. */
+function corrBucketChanged() {
+  var prod = corrBucket() === 'production';
+  var ack  = document.getElementById('corr-ack');
+  if (!prod) ack.checked = false;
+  document.getElementById('corr-ack-wrap').style.display = prod ? 'flex' : 'none';
+  corrRenderRows(false);
+}
+
+function openCorrection() {
+  var m = document.getElementById('corr-modal');
+  /* Re-parent to <body> so the overlay can never be clipped or offset by an
+     ancestor's stacking/overflow context. */
+  if (m.parentElement !== document.body) document.body.appendChild(m);
+  m.style.display = 'flex';
+  corrBucketChanged();
+}
+function closeCorrection() { document.getElementById('corr-modal').style.display = 'none'; }
+
+/* Keep the popup honest if the global Boxes/Pcs toggle flips while it is open. */
+new MutationObserver(function () {
+  if (document.getElementById('corr-modal').style.display === 'flex') corrRenderRows(true);
+}).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape' && document.getElementById('corr-modal').style.display === 'flex') closeCorrection();
+});
+</script>
+{% endif %}
 
 <style>
 .sub-editable          { cursor: cell; }
