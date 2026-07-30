@@ -402,15 +402,17 @@
 <div id="corr-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;align-items:center;justify-content:center"
      onclick="if(event.target===this)closeCorrection()">
   <div style="background:var(--bg);border-radius:var(--radius);width:min(880px,96vw);max-height:92vh;display:flex;flex-direction:column;box-shadow:0 12px 48px rgba(0,0,0,.4);overflow:hidden">
-    <form method="post" action="{{ url_for('products.eco_correction', product_id=product.id) }}" id="corrForm"
+    <form method="post" action="{{ url_for('products.eco_correction', product_id=corr.product_id) }}" id="corrForm"
           style="display:flex;flex-direction:column;min-height:0">
+      {# Opened from the eco twin? Come back here, not to the main product. #}
+      <input type="hidden" name="return_to" value="{{ product.id }}">
 
       <div style="padding:16px 20px 12px;border-bottom:1px solid var(--border);flex-shrink:0">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:16px">
           <div style="min-width:0">
             <h3 style="margin:0 0 2px;font-size:15px">Eco ⇄ Normal Correction</h3>
             <div style="font-size:11px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
-              {{ product.name }} ⇄ {{ eco_product.name }} · applies immediately, nothing is saved
+              {{ corr.main_name }} ⇄ {{ corr.eco_name }} · applies immediately, nothing is saved
             </div>
           </div>
           <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">

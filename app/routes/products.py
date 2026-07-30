@@ -139,10 +139,25 @@ def product_detail(product_id):
         if main_row:
             main_product = dict(main_row)
 
-    # Eco ⇄ Normal correction popup data (main products with an eco twin only).
-    eco_pairs = []
-    if eco_product:
-        _eco, eco_pairs, _err = correction_service.get_eco_pairs(product_id)
+    # Eco ⇄ Normal correction popup. The sheet is always anchored on the MAIN
+    # product (that is the side eco_parent_id/eco_parent_sub_id hang off), but it
+    # opens from either page — standing on the eco product is just as natural a
+    # place to move stock back to Normal.
+    eco_pairs, corr = [], None
+    if eco_product:                     # this page IS the main product
+        anchor_id, main_name = product_id, product["name"]
+    elif main_product:                  # this page is the eco twin
+        anchor_id, main_name = main_product["id"], main_product["name"]
+    else:
+        anchor_id, main_name = None, None
+
+    if anchor_id:
+        eco_row, pairs, err = correction_service.get_eco_pairs(anchor_id)
+        if pairs and not err:
+            eco_pairs = pairs
+            corr = {"product_id": anchor_id,
+                    "main_name":  main_name,
+                    "eco_name":   eco_row["name"]}
 
     return render_template("products/detail.html", product=product, subs=subs,
                            warehouse_history=warehouse_history,
@@ -151,6 +166,7 @@ def product_detail(product_id):
                            eco_product=eco_product,
                            main_product=main_product,
                            eco_pairs=eco_pairs,
+                           corr=corr,
                            correction_buckets=correction_service.BUCKETS)
 
 
@@ -158,7 +174,11 @@ def product_detail(product_id):
 @login_required
 @permission_required("products", "edit")
 def eco_correction(product_id):
-    """Apply an Eco ⇄ Normal correction straight from the popup — no draft state."""
+    """Apply an Eco ⇄ Normal correction straight from the popup — no draft state.
+
+    `product_id` is always the MAIN product; `return_to` carries the page the
+    popup was opened from, so applying from the eco twin lands you back there.
+    """
     form   = request.form.to_dict()
     bucket = (form.get("bucket") or "warehouse").strip()
     ok, err, n = correction_service.apply_correction(
@@ -169,7 +189,12 @@ def eco_correction(product_id):
               f"({correction_service.bucket_label(bucket)}).", "success")
     else:
         flash(f"Cannot apply correction: {err}", "error")
-    return redirect(url_for("products.product_detail", product_id=product_id))
+
+    try:
+        back = int(form.get("return_to") or product_id)
+    except ValueError:
+        back = product_id
+    return redirect(url_for("products.product_detail", product_id=back))
 
 
 @bp.route("/<int:product_id>/edit", methods=["GET", "POST"])
