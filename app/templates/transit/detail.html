@@ -9,6 +9,9 @@
   {% elif dispatch.status != 'received' %}
   <button class="btn btn-primary" onclick="fillAll(); document.getElementById('receiveForm').submit()">Receive All</button>
   {% endif %}
+  {% if current_user.has_permission('transit', 'edit') and dispatch.status != 'received' %}
+  <a href="{{ url_for('transit.edit_dispatch', dispatch_id=dispatch.id) }}" class="btn btn-secondary">Edit</a>
+  {% endif %}
   <form method="post" action="{{ url_for('transit.delete_dispatch', dispatch_id=dispatch.id) }}" style="display:inline"
         onsubmit="return confirm('Delete {{ dispatch.name }}? Unreceived quantities will be reversed.')">
     <button class="btn btn-danger">Delete</button>

@@ -74,6 +74,9 @@
           </td>
           <td style="text-align:right;white-space:nowrap">
             <a href="{{ url_for('transit.detail', dispatch_id=d.id) }}" class="btn btn-secondary btn-sm">View</a>
+            {% if current_user.has_permission('transit', 'edit') and d.status != 'received' %}
+            <a href="{{ url_for('transit.edit_dispatch', dispatch_id=d.id) }}" class="btn btn-secondary btn-sm">Edit</a>
+            {% endif %}
             <form method="post" action="{{ url_for('transit.delete_dispatch', dispatch_id=d.id) }}" style="display:inline"
                   onsubmit="return confirm('Delete {{ d.name }}? Quantities will be reversed.')">
               <button class="btn btn-danger btn-sm">Delete</button>

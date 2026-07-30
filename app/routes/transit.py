@@ -2,6 +2,7 @@ from flask import Blueprint, render_template, request, redirect, url_for, flash
 from flask_login import login_required
 from ..services import transit_service, supplier_service, product_service
 from ..services.auth_service import permission_required
+from ..database import get_db
 
 bp = Blueprint("transit", __name__, url_prefix="/transit")
 
@@ -149,6 +150,67 @@ def receive(dispatch_id):
     return redirect(url_for("transit.detail", dispatch_id=dispatch_id))
 
 
+@bp.route("/<int:dispatch_id>/edit", methods=["GET", "POST"])
+@login_required
+@permission_required("transit", "edit")
+def edit_dispatch(dispatch_id):
+    """Edit a dispatch's header, line quantities, and each line's Normal/Eco range.
+
+    A draft is a plain rewrite; on a live dispatch the service applies the
+    changes as stock deltas. Line add/remove is deliberately not offered —
+    use the existing delete, or receive what arrived.
+    """
+    dispatch = transit_service.get_dispatch(dispatch_id)
+    if not dispatch:
+        flash("Dispatch not found.", "error")
+        return redirect(url_for("transit.list_transit"))
+    items = transit_service.get_dispatch_items(dispatch_id)
+
+    if request.method == "POST":
+        data = {
+            "name":             request.form.get("name", "").strip(),
+            "supplier_id":      request.form.get("supplier_id") or None,
+            "dispatch_date":    request.form.get("dispatch_date") or None,
+            "expected_arrival": request.form.get("expected_arrival") or None,
+            "notes":            request.form.get("notes", "").strip() or None,
+        }
+        if not data["name"]:
+            flash("Dispatch name is required.", "error")
+        else:
+            item_updates = {}
+            for it in items:
+                i = it["id"]
+                if f"qty_{i}" not in request.form:
+                    continue
+                pid = request.form.get(f"pid_{i}") or None
+                sid = request.form.get(f"sid_{i}") or None
+                item_updates[i] = {
+                    "quantity":       request.form.get(f"qty_{i}"),
+                    "price":          request.form.get(f"price_{i}") or None,
+                    "cbm":            request.form.get(f"cbm_{i}") or None,
+                    "gross_weight":   request.form.get(f"gross_weight_{i}") or None,
+                    "product_id":     int(pid) if pid else it["product_id"],
+                    "sub_product_id": int(sid) if sid else None,
+                }
+            ok, errors, warnings = transit_service.update_dispatch(dispatch_id, data, item_updates)
+            if ok:
+                for w in warnings:
+                    flash(w, "warning")
+                flash("Dispatch updated.", "success")
+                return redirect(url_for("transit.detail", dispatch_id=dispatch_id))
+            for e in errors:
+                flash(e, "error")
+            # Fall through and re-render with what they typed still on screen.
+            items = transit_service.get_dispatch_items(dispatch_id)
+
+    choices = _build_product_choices()
+    return render_template("transit/edit.html",
+                           dispatch=dispatch, items=items,
+                           suppliers=supplier_service.get_all_suppliers(),
+                           products=choices,
+                           eco_map=_build_eco_map(choices))
+
+
 @bp.route("/<int:dispatch_id>/delete", methods=["POST"])
 @login_required
 @permission_required("transit", "delete")
@@ -177,3 +239,35 @@ def _build_product_choices():
                 "production_qty": p["production_qty"] or 0,
             })
     return choices
+
+
+def _build_eco_map(choices):
+    """{'pid:sid': counterpart} for every line that has a Normal ⇄ Eco twin, in
+    both directions — the same shape production/edit.html's ECO_MAP uses.
+
+    Pairing lives on `sub_products.eco_parent_sub_id` (sub level) and
+    `products.eco_parent_id` (leaf products); both point from the eco row back
+    to its main.
+    """
+    db        = get_db()
+    by_key    = {(c["product_id"], c["sub_product_id"]): c for c in choices}
+    sub_owner = {c["sub_product_id"]: c["product_id"] for c in choices if c["sub_product_id"]}
+
+    pairs = []   # (main_key, eco_key)
+    for r in db.execute(
+        "SELECT id, product_id, eco_parent_sub_id FROM sub_products WHERE eco_parent_sub_id IS NOT NULL"
+    ):
+        if r["eco_parent_sub_id"] in sub_owner:
+            pairs.append(((sub_owner[r["eco_parent_sub_id"]], r["eco_parent_sub_id"]),
+                          (r["product_id"], r["id"])))
+    for r in db.execute("SELECT id, eco_parent_id FROM products WHERE eco_parent_id IS NOT NULL"):
+        pairs.append(((r["eco_parent_id"], None), (r["id"], None)))
+
+    eco_map = {}
+    for main_key, eco_key in pairs:
+        main_c, eco_c = by_key.get(main_key), by_key.get(eco_key)
+        if not main_c or not eco_c:
+            continue   # e.g. a product-level pair whose products actually have subs
+        eco_map[f"{main_key[0]}:{main_key[1] or ''}"] = dict(eco_c,  direction="to_eco")
+        eco_map[f"{eco_key[0]}:{eco_key[1] or ''}"]   = dict(main_c, direction="to_main")
+    return eco_map

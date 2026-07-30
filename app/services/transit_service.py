@@ -294,6 +294,237 @@ def delete_dispatch(dispatch_id):
     db.commit()
 
 
+def _unwind_allocations(db, di_id, qty=None):
+    """Give back PO quantity that this dispatch item had claimed.
+
+    qty=None unwinds everything for the item; otherwise it unwinds `qty` LIFO
+    (newest allocation first), which is the mirror of the FIFO that took it.
+    Reopens any PO that had been auto-closed.
+    """
+    allocs = db.execute(
+        "SELECT * FROM dispatch_po_allocations WHERE dispatch_item_id=? ORDER BY id DESC",
+        (di_id,),
+    ).fetchall()
+    remaining = qty
+    for a in allocs:
+        if remaining is not None and remaining <= 1e-9:
+            break
+        give_back = a["quantity"] if remaining is None else min(a["quantity"], remaining)
+
+        db.execute(
+            "UPDATE purchase_order_items SET qty_dispatched=qty_dispatched-? WHERE id=?",
+            (give_back, a["po_item_id"]),
+        )
+        po_row = db.execute(
+            "SELECT po_id FROM purchase_order_items WHERE id=?", (a["po_item_id"],)
+        ).fetchone()
+        if po_row:
+            db.execute(
+                "UPDATE purchase_orders SET status='open' WHERE id=? AND status='closed'",
+                (po_row["po_id"],),
+            )
+
+        if give_back >= a["quantity"] - 1e-9:
+            db.execute("DELETE FROM dispatch_po_allocations WHERE id=?", (a["id"],))
+        else:
+            db.execute(
+                "UPDATE dispatch_po_allocations SET quantity=quantity-? WHERE id=?",
+                (give_back, a["id"]),
+            )
+        if remaining is not None:
+            remaining -= give_back
+
+
+def _reverse_item_stock(db, dispatch_id, product_id, sub_product_id, qty, note):
+    """Put `qty` back: in_transit_qty → production_qty, with an audit row on each
+    bucket. The mirror of the production → transit move a dispatch performs."""
+    if qty <= 1e-9:
+        return
+    _update_qty(db, product_id, sub_product_id, "in_transit_qty", -qty)
+    _update_qty(db, product_id, sub_product_id, "production_qty", +qty)
+    for mtype in ("dispatch_deduct", "production_add"):
+        db.execute(
+            """INSERT INTO stock_movements
+                   (product_id, sub_product_id, movement_type, quantity, notes, dispatch_id)
+               VALUES (?,?,?,?,?,?)""",
+            (product_id, sub_product_id, mtype, qty, note, dispatch_id),
+        )
+
+
+def _refresh_status(db, dispatch_id):
+    """Recompute in_transit / partially_received / received from the line sums.
+    Quantities change under an edit, so the status has to be re-derived."""
+    t = db.execute(
+        """SELECT SUM(quantity) AS total_qty, SUM(qty_received) AS total_rcv
+           FROM dispatch_items WHERE dispatch_id=?""",
+        (dispatch_id,),
+    ).fetchone()
+    total, rcv = (t["total_qty"] or 0), (t["total_rcv"] or 0)
+    status = "in_transit" if rcv <= 0 else ("received" if rcv >= total else "partially_received")
+    db.execute("UPDATE dispatches SET status=? WHERE id=?", (status, dispatch_id))
+
+
+def update_dispatch(dispatch_id, data, item_updates):
+    """Edit a dispatch: header fields, line quantities, and switching a line
+    between its Normal and Eco counterpart.
+
+    `item_updates` maps dispatch_item id → {quantity, price, cbm, gross_weight,
+    product_id, sub_product_id}. The caller resolves an eco switch into concrete
+    product ids; this only sees "the target moved".
+
+    A draft has never moved stock, so it is a plain row rewrite. For a live
+    dispatch every change is applied as a delta:
+      • quantity up   → FIFO the extra, production → transit
+      • quantity down → give back the difference, transit → production
+      • switched line → fully reverse the old side, then apply to the new one,
+        so both products' production and transit buckets end up correct
+    Everything is validated before anything is written. Returns (ok, errors, warnings).
+    """
+    db = get_db()
+    d  = db.execute("SELECT * FROM dispatches WHERE id=?", (dispatch_id,)).fetchone()
+    if not d:
+        return False, ["Dispatch not found."], []
+
+    is_draft  = (d["status"] == "draft")
+    items     = {it["id"]: it for it in get_dispatch_items(dispatch_id)}
+    new_supplier = int(data["supplier_id"]) if data.get("supplier_id") else None
+    supplier_changed = (new_supplier != d["supplier_id"])
+
+    # ── Validate everything first ────────────────────────────────────────────
+    errors, plans = [], []
+    for di_id, upd in item_updates.items():
+        it = items.get(di_id)
+        if not it:
+            continue
+        received = it["qty_received"] or 0
+        new_qty  = float(upd.get("quantity") or 0)
+        new_pid  = upd.get("product_id")     or it["product_id"]
+        new_sid  = upd.get("sub_product_id") if "sub_product_id" in upd else it["sub_product_id"]
+        switched = (new_pid != it["product_id"]) or (new_sid != it["sub_product_id"])
+
+        if new_qty <= 0:
+            errors.append(f"{it['display_name']}: quantity must be greater than zero.")
+            continue
+        if new_qty < received - 1e-9:
+            errors.append(
+                f"{it['display_name']}: {received:g} already received — quantity cannot "
+                f"drop below that."
+            )
+            continue
+
+        if not is_draft:
+            if switched:
+                if received > 1e-9:
+                    errors.append(
+                        f"{it['display_name']}: {received:g} already received, so this line "
+                        f"cannot be switched between Normal and Eco."
+                    )
+                    continue
+                avail = _available_production(db, new_pid, new_sid)
+                if new_qty > avail + 1e-9:
+                    errors.append(
+                        f"{it['display_name']}: the other range only has {avail:g} in "
+                        f"production — cannot switch {new_qty:g}."
+                    )
+                    continue
+            else:
+                delta = new_qty - it["quantity"]
+                if delta > 1e-9:
+                    avail = _available_production(db, it["product_id"], it["sub_product_id"])
+                    if delta > avail + 1e-9:
+                        errors.append(
+                            f"{it['display_name']}: only {avail:g} left in production — "
+                            f"cannot raise this line by {delta:g}."
+                        )
+                        continue
+        plans.append((it, upd, new_qty, new_pid, new_sid, switched))
+
+    if errors:
+        return False, errors, []
+
+    # ── Apply ────────────────────────────────────────────────────────────────
+    db.execute(
+        """UPDATE dispatches SET name=?, supplier_id=?, dispatch_date=?, expected_arrival=?, notes=?
+           WHERE id=?""",
+        (data["name"], new_supplier,
+         data.get("dispatch_date") or None,
+         data.get("expected_arrival") or None,
+         data.get("notes"), dispatch_id),
+    )
+
+    warnings = []
+    for it, upd, new_qty, new_pid, new_sid, switched in plans:
+        price = float(upd["price"])        if upd.get("price")        else None
+        cbm   = float(upd["cbm"])          if upd.get("cbm")          else None
+        gw    = float(upd["gross_weight"]) if upd.get("gross_weight") else None
+
+        if is_draft:
+            db.execute(
+                """UPDATE dispatch_items
+                      SET product_id=?, sub_product_id=?, quantity=?, price=?, cbm=?, gross_weight=?
+                    WHERE id=?""",
+                (new_pid, new_sid, new_qty, price, cbm, gw, it["id"]),
+            )
+            continue
+
+        if switched:
+            # Unwind the old side completely, then apply the line to the new one.
+            note = f"Dispatch #{dispatch_id} edit — switched off {it['display_name']}"
+            _reverse_item_stock(db, dispatch_id, it["product_id"], it["sub_product_id"],
+                                it["quantity"], note)
+            _unwind_allocations(db, it["id"])
+            db.execute(
+                """UPDATE dispatch_items
+                      SET product_id=?, sub_product_id=?, quantity=?, price=?, cbm=?, gross_weight=?
+                    WHERE id=?""",
+                (new_pid, new_sid, new_qty, price, cbm, gw, it["id"]),
+            )
+            w = _apply_dispatch_item_stock(
+                db, dispatch_id, it["id"], new_pid, new_sid, new_qty, new_supplier,
+                f"Dispatch #{dispatch_id} edit — switched range",
+                data.get("expected_arrival") or None, it["display_name"],
+            )
+            if w:
+                warnings.append(w)
+            continue
+
+        delta = new_qty - it["quantity"]
+        db.execute(
+            "UPDATE dispatch_items SET quantity=?, price=?, cbm=?, gross_weight=? WHERE id=?",
+            (new_qty, price, cbm, gw, it["id"]),
+        )
+        if delta > 1e-9:
+            w = _apply_dispatch_item_stock(
+                db, dispatch_id, it["id"], it["product_id"], it["sub_product_id"], delta,
+                new_supplier, f"Dispatch #{dispatch_id} edit — quantity increased",
+                data.get("expected_arrival") or None, it["display_name"],
+            )
+            if w:
+                warnings.append(w)
+        elif delta < -1e-9:
+            give_back = -delta
+            _reverse_item_stock(db, dispatch_id, it["product_id"], it["sub_product_id"],
+                                give_back, f"Dispatch #{dispatch_id} edit — quantity reduced")
+            _unwind_allocations(db, it["id"], give_back)
+        elif supplier_changed:
+            # Same product, same quantity, different supplier: the claim has to move
+            # to that supplier's POs, but no stock changes hands.
+            _unwind_allocations(db, it["id"])
+            allocs, _left = _deduct_production_fifo(
+                db, it["product_id"], it["sub_product_id"], new_qty, new_supplier)
+            for po_item_id, alloc_qty in allocs:
+                db.execute(
+                    """INSERT INTO dispatch_po_allocations (dispatch_item_id, po_item_id, quantity)
+                       VALUES (?,?,?)""",
+                    (it["id"], po_item_id, alloc_qty),
+                )
+
+    if not is_draft:
+        _refresh_status(db, dispatch_id)
+    db.commit()
+    return True, [], warnings
+
+
 def get_dispatches_due_soon(days=14):
     return get_db().execute(
         """SELECT d.*, s.name AS supplier_name,
