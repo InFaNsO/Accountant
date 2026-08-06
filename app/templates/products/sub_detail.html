@@ -3,12 +3,12 @@
 {% block page_title %}{{ sub.name }}{% endblock %}
 {% block topbar_actions %}
   <a href="{{ url_for('products.edit_sub_product', product_id=product.id, sub_id=sub.id) }}" class="btn btn-secondary">Edit</a>
-  <a href="{{ url_for('products.product_detail', product_id=product.id) }}" class="btn btn-secondary">↑ {{ product.name }}</a>
-  <a href="{{ url_for('products.list_products') }}" class="btn btn-secondary">Back to Catalog</a>
+  <a href="{{ url_for('products.product_detail', product_id=product.id) }}" class="btn btn-secondary">↑ <span class="btn-label-mobile">{{ product.name }}</span></a>
+  <a href="{{ url_for('products.list_products') }}" class="btn btn-secondary"><span class="btn-label-mobile">Back to Catalog</span><span class="lbl-mobile-only">Back</span></a>
 {% endblock %}
 
 {% block content %}
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px">
+<div class="grid-collapse" style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px">
 
   <!-- Info card -->
   <div class="card">
@@ -55,7 +55,7 @@
     </div>
     <div class="card-body">
       {% set eff_min = sub.min_quantity or product.min_quantity or 0 %}
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+      <div class="grid-collapse-2" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
         <div style="text-align:center;padding:14px;background:var(--bg-alt);border-radius:var(--radius-sm)">
           <div style="font-size:22px;font-weight:700;color:{% if eff_min > 0 and sub.stock_qty < eff_min %}var(--danger){% elif eff_min > 0 and sub.stock_qty <= (eff_min * 1.2) %}var(--warning){% else %}var(--success){% endif %}">
             {{ stock_val(sub.stock_qty, product.pcs_per_carton) }}

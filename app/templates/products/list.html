@@ -94,9 +94,9 @@
           </div>
         </div>
         <div style="display:flex;gap:6px;flex-shrink:0">
-          <a href="{{ url_for('products.new_sub_product', product_id=p.id) }}" class="btn btn-secondary btn-sm">+ Sub</a>
-          <a href="{{ url_for('products.edit_product', product_id=p.id) }}" class="btn btn-secondary btn-sm">Edit</a>
-          <form method="post" action="{{ url_for('products.delete_product', product_id=p.id) }}"
+          <a href="{{ url_for('products.new_sub_product', product_id=p.id) }}" class="btn btn-secondary btn-sm col-mobile-hide">+ Sub</a>
+          <a href="{{ url_for('products.edit_product', product_id=p.id) }}" class="btn btn-secondary btn-sm col-mobile-hide">Edit</a>
+          <form method="post" action="{{ url_for('products.delete_product', product_id=p.id) }}" class="col-mobile-hide"
                 onsubmit="return confirm('Delete {{ p.name }} and all its sub-products?')">
             <button class="btn btn-danger btn-sm">Delete</button>
           </form>
@@ -135,8 +135,8 @@
             </div>
           </div>
           <div style="display:flex;gap:6px;flex-shrink:0">
-            <a href="{{ url_for('products.edit_sub_product', product_id=p.id, sub_id=s.id) }}" class="btn btn-secondary btn-sm">Edit</a>
-            <form method="post" action="{{ url_for('products.delete_sub_product', product_id=p.id, sub_id=s.id) }}"
+            <a href="{{ url_for('products.edit_sub_product', product_id=p.id, sub_id=s.id) }}" class="btn btn-secondary btn-sm col-mobile-hide">Edit</a>
+            <form method="post" action="{{ url_for('products.delete_sub_product', product_id=p.id, sub_id=s.id) }}" class="col-mobile-hide"
                   onsubmit="return confirm('Delete {{ s.name }}?')">
               <button class="btn btn-danger btn-sm">Delete</button>
             </form>

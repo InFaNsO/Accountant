@@ -4,7 +4,7 @@
 {% block topbar_actions %}
   <a href="{{ url_for('invoices.new_invoice') }}" class="btn btn-primary">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-    New Invoice
+    <span class="btn-label-mobile">New Invoice</span>
   </a>
 {% endblock %}
 
@@ -36,7 +36,7 @@
           <th>Total</th>
           <th class="col-mobile-hide">Balance</th>
           <th>Status</th>
-          <th></th>
+          <th class="col-mobile-hide"></th>
         </tr>
       </thead>
       <tbody>
@@ -64,7 +64,7 @@
             {{ (inv.total - inv.amount_paid)|inr }}
           </td>
           <td><span class="badge badge-{{ inv.status }}">{{ inv.status }}</span></td>
-          <td style="text-align:right">
+          <td style="text-align:right" class="col-mobile-hide">
             <a href="{{ url_for('invoices.detail', invoice_id=inv.id) }}" class="btn btn-secondary btn-sm">View</a>
           </td>
         </tr>

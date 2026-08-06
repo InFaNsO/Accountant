@@ -23,11 +23,11 @@
     <table id="paymentTable">
       <thead>
         <tr>
-          <th>#</th>
+          <th class="col-mobile-hide">#</th>
           <th>Date</th>
-          <th>Details</th>
+          <th class="col-mobile-hide">Details</th>
           <th>Client</th>
-          <th>Company</th>
+          <th class="col-mobile-hide">Company</th>
           <th class="col-mobile-hide">Applied to</th>
           <th style="text-align:right">Amount</th>
         </tr>
@@ -36,9 +36,9 @@
         {% for p in payments %}
         {% set _cos = companies_by_client.get(p.client_id, []) %}
         <tr style="border-left:4px solid var(--success)">
-          <td><a href="{{ url_for('payments.detail', payment_id=p.id) }}" style="color:var(--accent);text-decoration:none;font-weight:700;font-family:monospace" title="View / edit payment">#{{ p.id }}</a></td>
-          <td class="muted">{{ p.payment_date or '—' }}</td>
-          <td>
+          <td class="col-mobile-hide"><a href="{{ url_for('payments.detail', payment_id=p.id) }}" style="color:var(--accent);text-decoration:none;font-weight:700;font-family:monospace" title="View / edit payment">#{{ p.id }}</a></td>
+          <td class="muted"><a href="{{ url_for('payments.detail', payment_id=p.id) }}" style="color:inherit;text-decoration:none" title="View / edit payment">{{ p.payment_date or '—' }}</a></td>
+          <td class="col-mobile-hide">
             <span style="font-weight:600">{{ p.notes or p.method or 'Payment' }}</span>
             {% if p.is_opening_balance %}<span class="badge" style="margin-left:6px">opening</span>{% endif %}
           </td>
@@ -46,7 +46,7 @@
             <a href="{{ url_for('clients.detail', client_id=p.client_id) }}"
                style="color:var(--accent);text-decoration:none;font-weight:700">{{ p.client_name }}</a>
           </td>
-          <td>
+          <td class="col-mobile-hide">
             {% if can_assign and _cos|length > 1 %}
               <select class="pay-co-select{% if not p.company_id %} unassigned{% endif %}"
                       data-prev="{{ p.company_id or '' }}"

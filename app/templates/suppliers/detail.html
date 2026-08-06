@@ -6,7 +6,7 @@
   <a href="{{ url_for('suppliers.list_suppliers') }}" class="btn btn-secondary">Back</a>
 {% endblock %}
 {% block content %}
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px">
+<div class="grid-collapse" style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px">
   <div class="card">
     <div class="card-header"><span class="card-title">Details</span></div>
     <div class="card-body" style="padding:0">
@@ -39,7 +39,7 @@
           </select>
           <small class="muted">If the product has sub-products, all will be added automatically.</small>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+        <div class="grid-collapse-2" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
           <div class="form-group" style="margin:0">
             <label style="font-size:12px">Price (₹, optional)</label>
             <input type="number" name="price" step="0.01" min="0" placeholder="0.00">

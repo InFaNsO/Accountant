@@ -7,7 +7,7 @@
     <button class="btn btn-primary" onclick="return confirm('Activate this dispatch? Stock will move from production to in-transit.')">Activate</button>
   </form>
   {% elif dispatch.status != 'received' %}
-  <button class="btn btn-primary" onclick="fillAll(); document.getElementById('receiveForm').submit()">Receive All</button>
+  <button class="btn btn-primary" onclick="fillAll(); document.getElementById('receiveForm').submit()"><span class="btn-label-mobile">Receive All</span><span class="lbl-mobile-only">Receive</span></button>
   {% endif %}
   {% if current_user.has_permission('transit', 'edit') and dispatch.status != 'received' %}
   <a href="{{ url_for('transit.edit_dispatch', dispatch_id=dispatch.id) }}" class="btn btn-secondary">Edit</a>
@@ -31,7 +31,7 @@
 {% endif %}
 
 <!-- Header -->
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px">
+<div class="grid-collapse" style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px">
   <div class="card">
     <div class="card-header"><span class="card-title">Dispatch Info</span></div>
     <div class="card-body" style="padding:0">
@@ -65,7 +65,7 @@
   <div class="card">
     <div class="card-header"><span class="card-title">Summary</span></div>
     <div class="card-body">
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+      <div class="grid-collapse-2" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
         <div style="text-align:center;padding:16px;background:var(--bg-alt);border-radius:var(--radius-sm)">
           <div style="font-size:26px;font-weight:700;color:var(--primary)">{{ items|length }}</div>
           <div style="font-size:12px;color:var(--text-muted);margin-top:2px">Product Lines</div>

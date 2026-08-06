@@ -3,17 +3,17 @@
 {% block page_title %}{{ product.name }}{% endblock %}
 {% block topbar_actions %}
   {% if subs %}
-  <a href="{{ url_for('products.new_sub_product', product_id=product.id) }}" class="btn btn-secondary">+ Sub-Product</a>
+  <a href="{{ url_for('products.new_sub_product', product_id=product.id) }}" class="btn btn-secondary">+ <span class="btn-label-mobile">Sub-Product</span><span class="lbl-mobile-only">Sub</span></a>
   {% endif %}
   {% if not product.eco_parent_id and not product.has_eco_range %}
-  <button onclick="document.getElementById('eco-range-modal').style.display='flex'" class="btn btn-secondary">+ Eco Range</button>
+  <button onclick="document.getElementById('eco-range-modal').style.display='flex'" class="btn btn-secondary">+ <span class="btn-label-mobile">Eco Range</span><span class="lbl-mobile-only">Eco</span></button>
   {% endif %}
   <a href="{{ url_for('products.edit_product', product_id=product.id) }}" class="btn btn-secondary">Edit</a>
   <a href="{{ url_for('products.list_products') }}" class="btn btn-secondary">Back</a>
 {% endblock %}
 
 {% block content %}
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px">
+<div class="grid-collapse" style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px">
 
   <!-- Info card -->
   <div class="card">
@@ -78,7 +78,7 @@
       </button>
     </div>
     <div class="card-body">
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+      <div class="grid-collapse-2" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
         <div style="text-align:center;padding:14px;background:var(--bg-alt);border-radius:var(--radius-sm)">
           <div style="font-size:22px;font-weight:700;color:{% if product.min_quantity > 0 and product.stock_qty < product.min_quantity %}var(--danger){% elif product.min_quantity > 0 and product.stock_qty <= (product.min_quantity * 1.2) %}var(--warning){% else %}var(--success){% endif %}">
             {{ stock_val(product.stock_qty, product.pcs_per_carton) }}

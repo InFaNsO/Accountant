@@ -5,7 +5,7 @@
   {% if can_edit %}
   <a href="{{ url_for('payments.edit_payment', payment_id=p.id) }}" class="btn btn-primary">Edit</a>
   {% endif %}
-  <a href="{{ url_for('clients.detail', client_id=p.client_id) }}" class="btn btn-secondary">Back to Client</a>
+  <a href="{{ url_for('clients.detail', client_id=p.client_id) }}" class="btn btn-secondary"><span class="btn-label-mobile">Back to Client</span><span class="lbl-mobile-only">Back</span></a>
   {% if can_delete %}
   <form class="confirm-inline" method="post" action="{{ url_for('payments.delete_payment', payment_id=p.id) }}"
         onsubmit="return confirm('Delete this payment? The client will be re-reconciled.')">
@@ -15,7 +15,7 @@
 {% endblock %}
 
 {% block content %}
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:22px;align-items:start">
+<div class="grid-collapse" style="display:grid;grid-template-columns:1fr 1fr;gap:22px;align-items:start">
 
   <!-- Left: payment details -->
   <div class="card">

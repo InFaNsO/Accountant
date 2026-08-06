@@ -5,19 +5,19 @@
   {% if current_user.has_permission('clients', 'edit') %}
   <a href="{{ url_for('clients.assignments') }}" class="btn btn-secondary" title="Assign clients to sales staff">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/></svg>
-    Sales Reps
+    <span class="btn-label-mobile">Sales Reps</span>
   </a>
   {% endif %}
   {% if can_financials %}
   <button type="button" class="btn btn-secondary" id="reconcileBtn" onclick="reconcilePayments(this)"
           title="Apply every client's unallocated payments to their oldest unpaid invoices">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
-    Reconcile Payments
+    <span class="btn-label-mobile">Reconcile Payments</span>
   </button>
   {% endif %}
   <a href="{{ url_for('clients.new_client') }}" class="btn btn-primary">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-    New Client
+    <span class="btn-label-mobile">New Client</span>
   </a>
 {% endblock %}
 
@@ -95,8 +95,8 @@
           {% endif %}
           <td style="text-align:right">
             <a href="{{ url_for('clients.detail', client_id=c.id) }}" class="btn btn-secondary btn-sm">View</a>
-            <a href="{{ url_for('clients.edit_client', client_id=c.id) }}" class="btn btn-secondary btn-sm">Edit</a>
-            <form class="confirm-inline" method="post" action="{{ url_for('clients.delete_client', client_id=c.id) }}"
+            <a href="{{ url_for('clients.edit_client', client_id=c.id) }}" class="btn btn-secondary btn-sm col-mobile-hide">Edit</a>
+            <form class="confirm-inline col-mobile-hide" method="post" action="{{ url_for('clients.delete_client', client_id=c.id) }}"
                   onsubmit="return confirm('Delete {{ c.name }}? This cannot be undone.')">
               <button class="btn btn-danger btn-sm">Delete</button>
             </form>

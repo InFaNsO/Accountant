@@ -249,12 +249,12 @@ document.querySelectorAll('.nav-item').forEach(function(el) {
   <div style="background:var(--bg);border-radius:var(--radius);width:min(760px,96vw);max-height:90vh;display:flex;flex-direction:column;box-shadow:0 12px 48px rgba(0,0,0,.4)">
 
     <!-- Header row -->
-    <div style="display:flex;align-items:center;justify-content:space-between;padding:18px 24px 14px;border-bottom:1px solid var(--border)">
-      <div>
-        <div id="ledgerModalTitle" style="font-size:17px;font-weight:700"></div>
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding:14px 18px 12px;border-bottom:1px solid var(--border)">
+      <div style="min-width:0">
+        <div id="ledgerModalTitle" style="font-size:17px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></div>
         <div style="font-size:12px;color:var(--text-muted);margin-top:2px">Client Ledger</div>
       </div>
-      <div style="display:flex;align-items:center;gap:10px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <div id="ledgerFinalBal" style="font-size:22px;font-weight:800"></div>
         <button onclick="toggleLedgerEntryForm()" class="btn btn-secondary btn-sm" style="white-space:nowrap">+ Add Entry</button>
         <button onclick="closeLedgerModal()" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:22px;line-height:1;padding:0 4px">&times;</button>
@@ -321,8 +321,8 @@ document.querySelectorAll('.nav-item').forEach(function(el) {
     </div>
 
     <!-- Table body -->
-    <div style="overflow-y:auto;flex:1">
-      <table style="width:100%;border-collapse:collapse;font-size:13px">
+    <div style="overflow-y:auto;overflow-x:auto;flex:1;-webkit-overflow-scrolling:touch">
+      <table style="width:100%;min-width:540px;border-collapse:collapse;font-size:13px">
         <thead style="position:sticky;top:0;background:var(--bg);z-index:1">
           <tr style="border-bottom:1px solid var(--border)">
             <th style="padding:10px 16px;text-align:left;color:var(--text-muted);font-weight:600;width:100px">Date</th>
