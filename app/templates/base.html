@@ -265,7 +265,7 @@ document.querySelectorAll('.nav-item').forEach(function(el) {
             </button>
             <button class="ledger-menu-item" onclick="showLedgerQr()">
               <span style="font-weight:600">QR code link</span>
-              <span class="ledger-menu-sub">Scan to open this PDF on a phone</span>
+              <span class="ledger-menu-sub">Scan to save or forward the PDF from a phone</span>
             </button>
           </div>
         </div>
@@ -370,8 +370,10 @@ document.querySelectorAll('.nav-item').forEach(function(el) {
 
     <div id="ledgerQrBody" style="display:none;flex-direction:column;gap:10px;width:100%;align-items:center">
       <div style="font-size:12px;color:var(--text-muted);line-height:1.55">
-        Scan it with the phone’s normal camera to open this statement as a PDF —
-        no sign-in needed. <span id="ledgerQrExpiry" style="color:var(--text-primary)"></span>
+        Scan it with the phone’s normal camera — no sign-in needed. The phone gets
+        <b>Share</b> and <b>Download</b> buttons, so the PDF can go straight to a client
+        on WhatsApp as a file.
+        <span id="ledgerQrExpiry" style="color:var(--text-primary)"></span>
       </div>
       <div style="display:flex;gap:8px;width:100%;align-items:center">
         <input id="ledgerQrUrl" readonly onclick="this.select()"

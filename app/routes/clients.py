@@ -8,7 +8,7 @@ from flask_login import login_required, current_user
 from ..services import client_service, region_service
 from ..services.payment_service import recalculate_client_balance, reconcile_all_clients
 from ..services.auth_service import permission_required, get_scoped_client_ids, get_own_scoped_client_ids
-from ..services.ledger_pdf_service import build_ledger_pdf
+from ..services.ledger_pdf_service import build_ledger_pdf, ledger_pdf_meta
 from ..database import get_db
 from .dashboard import resolve_window, WINDOW_LABELS
 
@@ -481,29 +481,50 @@ def ledger_share_link(client_id):
     # Nginx terminates TLS and proxies over plain http, so trust its
     # forwarded scheme — otherwise the QR would carry an http:// link that
     # only works via the redirect.
-    url = url_for("clients.ledger_shared_pdf", token=token, _external=True,
+    url = url_for("clients.ledger_shared", token=token, _external=True,
                   _scheme=request.headers.get("X-Forwarded-Proto", request.scheme))
     return jsonify({"ok": True, "url": url, "qr": _qr_svg(url),
                     "expires_hours": LEDGER_LINK_MAX_AGE // 3600})
 
 
-@bp.route("/ledger/shared/<token>")
-def ledger_shared_pdf(token):
-    """Public: the PDF behind a shared QR link.
-
-    Deliberately not @login_required — the signed token *is* the credential,
-    which is what lets a phone open it straight from the camera. It unlocks
-    exactly one statement and dies on its own timestamp."""
+def _load_share_token(token):
+    """Verify a share token, or fail with something its recipient can read."""
     try:
-        d = _link_serializer().loads(token, max_age=LEDGER_LINK_MAX_AGE)
+        return _link_serializer().loads(token, max_age=LEDGER_LINK_MAX_AGE)
     except SignatureExpired:
-        abort(410, "This ledger link has expired. Open the ledger again for a fresh one.")
+        abort(410, "This ledger link has expired. Ask for a fresh one.")
     except BadSignature:
         abort(404)
-    # Inline, not an attachment: phones show it in the browser's PDF viewer
-    # and can still save it from there.
+
+
+@bp.route("/ledger/shared/<token>")
+def ledger_shared(token):
+    """Public: a small page offering the statement as a file to save or send on.
+
+    Deliberately not @login_required — the signed token *is* the credential,
+    which is what lets a phone open it straight from the camera.
+
+    A page rather than the PDF itself: a phone browser rendering a PDF leaves
+    you nothing to hand to WhatsApp. This page's Share button attaches the
+    real file to Android's share sheet, so the statement can go to a client
+    as a file without the link going with it."""
+    d    = _load_share_token(token)
+    data = _compute_ledger(d["c"], d.get("f"), d.get("t"), d.get("co"))
+    if data is None:
+        abort(404)
+    return render_template("ledger_share.html", token=token,
+                           meta=ledger_pdf_meta(data),
+                           final_balance=float(data.get("final_balance") or 0),
+                           expires_hours=LEDGER_LINK_MAX_AGE // 3600)
+
+
+@bp.route("/ledger/shared/<token>/file.pdf")
+def ledger_shared_file(token):
+    """The bytes behind the share page — ?dl=1 saves it, otherwise it opens
+    inline for anyone who just wants to read it where they stand."""
+    d = _load_share_token(token)
     return _ledger_pdf_response(d["c"], d.get("f"), d.get("t"), d.get("co"),
-                                as_attachment=False)
+                                as_attachment=request.args.get("dl") == "1")
 
 
 @bp.route("/<int:client_id>/ledger/entry", methods=["POST"])

@@ -1,0 +1,122 @@
+{# Public landing page behind a ledger share QR/link. Standalone on purpose:
+   whoever opens this is not signed in, so it must not pull in base.html's
+   nav, sidebar or current_user. #}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>{{ meta.title }} — Ledger statement</title>
+<style>
+  :root {
+    --bg:#f4f5f7; --card:#ffffff; --text:#181a20; --muted:#6b7280;
+    --border:#e3e5ea; --accent:#1e6fd9; --accent-text:#ffffff; --shadow:rgba(15,20,35,.10);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#101319; --card:#191d26; --text:#e9ebf0; --muted:#9aa2b1;
+      --border:#2b3240; --accent:#3d8bfd; --accent-text:#0b0e14; --shadow:rgba(0,0,0,.45);
+    }
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; min-height:100vh; padding:20px 16px;
+    display:flex; align-items:center; justify-content:center;
+    background:var(--bg); color:var(--text);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    -webkit-text-size-adjust:100%;
+  }
+  .card {
+    width:100%; max-width:420px; background:var(--card); border:1px solid var(--border);
+    border-radius:16px; box-shadow:0 10px 30px var(--shadow); padding:22px 20px 18px;
+  }
+  .head { display:flex; gap:13px; align-items:center; margin-bottom:18px; }
+  .badge {
+    flex-shrink:0; width:46px; height:46px; border-radius:11px; background:#d33a2c; color:#fff;
+    display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:800;
+    letter-spacing:.5px;
+  }
+  .title { font-size:17px; font-weight:700; line-height:1.25; overflow-wrap:anywhere; }
+  .sub   { font-size:12.5px; color:var(--muted); margin-top:2px; }
+  .rows  { border-top:1px solid var(--border); margin-bottom:18px; }
+  .row {
+    display:flex; justify-content:space-between; gap:12px; align-items:baseline;
+    padding:10px 0; border-bottom:1px solid var(--border); font-size:13.5px;
+  }
+  .row span:first-child { color:var(--muted); }
+  .row span:last-child  { font-weight:650; text-align:right; overflow-wrap:anywhere; }
+  .btn {
+    display:flex; align-items:center; justify-content:center; gap:8px; width:100%;
+    padding:13px 16px; margin-bottom:9px; border-radius:11px; border:1px solid var(--border);
+    background:var(--card); color:var(--text); font-size:15px; font-weight:600;
+    text-decoration:none; cursor:pointer; font-family:inherit;
+  }
+  .btn.primary { background:var(--accent); border-color:var(--accent); color:var(--accent-text); }
+  .btn.ghost   { background:none; border:none; color:var(--muted); font-size:13.5px; font-weight:500; }
+  .btn:active  { transform:translateY(1px); }
+  .note { margin:12px 2px 0; font-size:11.5px; color:var(--muted); line-height:1.5; text-align:center; }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="head">
+      <div class="badge">PDF</div>
+      <div style="min-width:0">
+        <div class="title">{{ meta.title }}</div>
+        <div class="sub">{{ meta.subtitle }}</div>
+      </div>
+    </div>
+
+    <div class="rows">
+      <div class="row"><span>Period</span><span>{{ meta.period }}</span></div>
+      <div class="row">
+        <span>Closing balance</span>
+        <span>{{ final_balance|abs|inr }} {{ 'Dr' if final_balance < 0 else 'Cr' }}</span>
+      </div>
+    </div>
+
+    <!-- Shown only once the file is in hand and the browser admits it can
+         share files — otherwise Download is the whole story. -->
+    <button id="shareBtn" class="btn primary" hidden>Share this statement</button>
+    <a class="btn" href="{{ url_for('clients.ledger_shared_file', token=token, dl=1) }}">Download PDF</a>
+    <a class="btn ghost" href="{{ url_for('clients.ledger_shared_file', token=token) }}">Open it here instead</a>
+
+    <p class="note">This link stops working about {{ expires_hours }} hours after it was created.
+       The PDF itself keeps working once saved.</p>
+  </div>
+
+<script>
+  var FILE_URL = {{ url_for('clients.ledger_shared_file', token=token)|tojson }};
+  var FILENAME = {{ meta.filename|tojson }};
+  var btn = document.getElementById('shareBtn');
+  var pdfFile = null;
+
+  // Fetch the PDF up front so the click handler can call navigator.share()
+  // immediately: a share kicked off after an await has lost the user gesture
+  // the API insists on, and Android silently refuses it.
+  (function () {
+    if (!navigator.share || !navigator.canShare || !window.File) return;
+    fetch(FILE_URL)
+      .then(function (r) { return r.ok ? r.blob() : Promise.reject(r.status); })
+      .then(function (blob) {
+        var file = new File([blob], FILENAME, {type: 'application/pdf'});
+        if (!navigator.canShare({files: [file]})) return;   // no file sharing here
+        pdfFile = file;
+        btn.hidden = false;
+      })
+      .catch(function () { /* Download stays as the reliable path */ });
+  })();
+
+  btn.addEventListener('click', function () {
+    if (!pdfFile) return;
+    navigator.share({files: [pdfFile], title: FILENAME}).catch(function (e) {
+      // Backing out of the share sheet is not a failure worth reacting to.
+      if (e && e.name === 'AbortError') return;
+      window.location.href = FILE_URL + '?dl=1';
+    });
+  });
+</script>
+</body>
+</html>

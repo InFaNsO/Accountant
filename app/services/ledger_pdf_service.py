@@ -273,11 +273,11 @@ class _LedgerPDF(FPDF):
         self.set_y(y0 + _LINE_H + 2 * _PAD_Y)
 
 
-def build_ledger_pdf(data):
-    """data is the dict from clients._compute_ledger.
+def ledger_pdf_meta(data):
+    """How a ledger view is named: title, subtitle, period and filename.
 
-    Returns (pdf_bytes, filename).
-    """
+    Split out of build_ledger_pdf so the share page can label the statement
+    with exactly the words the PDF carries inside it."""
     client_name  = data.get("client_name") or "Client"
     company_name = data.get("company_name")
     date_from    = data.get("date_from")
@@ -286,11 +286,20 @@ def build_ledger_pdf(data):
     title    = company_name or client_name
     subtitle = f"Company Ledger - {client_name}" if company_name else "Client Ledger"
     period   = f"{_dmy(date_from)} to {_dmy(date_to)}" if date_from and date_to else "All Time"
+    safe = re.sub(r'[\\/:*?"<>|]+', "", title).strip() or "Client"
+    return {"title": title, "subtitle": subtitle, "period": period,
+            "filename": f"{safe} Ledger {period}.pdf"}
 
-    pdf = _LedgerPDF(title, subtitle, period, float(data.get("final_balance") or 0))
+
+def build_ledger_pdf(data):
+    """data is the dict from clients._compute_ledger.
+
+    Returns (pdf_bytes, filename).
+    """
+    m = ledger_pdf_meta(data)
+
+    pdf = _LedgerPDF(m["title"], m["subtitle"], m["period"],
+                     float(data.get("final_balance") or 0))
     pdf.add_page()
     pdf.render_rows(data.get("entries") or [])
-
-    safe = re.sub(r'[\\/:*?"<>|]+', "", title).strip() or "Client"
-    filename = f"{safe} Ledger {period}.pdf"
-    return bytes(pdf.output()), filename
+    return bytes(pdf.output()), m["filename"]
