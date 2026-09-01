@@ -31,7 +31,7 @@ apt-get update -qq
 apt-get install -y -qq \
     python3 python3-pip python3-venv \
     nginx git ufw certbot python3-certbot-nginx \
-    curl wget unzip
+    curl wget unzip fonts-dejavu-core
 
 # ── 2. Create dedicated app user ──────────────────────────────────────────────
 echo "[2/9] Creating app user '$APP_USER'..."

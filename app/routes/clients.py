@@ -1,8 +1,14 @@
-from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, abort
+import io
+
+import segno
+from flask import (Blueprint, render_template, request, redirect, url_for, flash,
+                   jsonify, abort, send_file, current_app)
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from flask_login import login_required, current_user
 from ..services import client_service, region_service
 from ..services.payment_service import recalculate_client_balance, reconcile_all_clients
 from ..services.auth_service import permission_required, get_scoped_client_ids, get_own_scoped_client_ids
+from ..services.ledger_pdf_service import build_ledger_pdf
 from ..database import get_db
 from .dashboard import resolve_window, WINDOW_LABELS
 
@@ -232,24 +238,22 @@ def toggle_tally_lock(client_id):
     return jsonify({"ok": True, "tally_lock": bool(new_state)})
 
 
-@bp.route("/<int:client_id>/ledger")
-@login_required
-@permission_required("clients", "financials")
-def ledger(client_id):
-    _guard_client(client_id)
+def _compute_ledger(client_id, date_from, date_to, company_id):
+    """Build the ledger statement (entries + running balance) for a client,
+    optionally scoped to one company and/or a date window. Shared by the
+    JSON route and the PDF/QR export routes so every view of the ledger is
+    computed the same way. Returns None when the client doesn't exist."""
     client = client_service.get_client(client_id)
     if not client:
-        return jsonify({"error": "Not found"}), 404
-
-    date_from  = request.args.get("from")        # YYYY-MM-DD or None
-    date_to    = request.args.get("to")          # YYYY-MM-DD or None
-    company_id = request.args.get("company_id", type=int)
+        return None
 
     db = get_db()
+    company_name = None
 
     if company_id:
         co_row  = db.execute("SELECT * FROM client_companies WHERE id=?", (company_id,)).fetchone()
         opening = float(co_row["opening_balance"] or 0) if co_row else 0.0
+        company_name = co_row["name"] if co_row else None
         invoices = db.execute(
             "SELECT i.id, i.invoice_number, i.issue_date, i.total, i.amount_paid, i.status, "
             "cc.name AS company_name "
@@ -374,21 +378,132 @@ def ledger(client_id):
             "running": bbf,
         }] + win_entries
 
-        return jsonify({
+        return {
             "client_name":   client["name"],
+            "company_name":  company_name,
             "entries":       entries,
             "final_balance": final_balance,
             "date_from":     date_from,
             "date_to":       date_to,
-        })
+        }
 
     # Full ledger (no date filter)
     entries, final_balance = _build(combined)
-    return jsonify({
+    return {
         "client_name":   client["name"],
+        "company_name":  company_name,
         "entries":       entries,
         "final_balance": final_balance,
+    }
+
+
+@bp.route("/<int:client_id>/ledger")
+@login_required
+@permission_required("clients", "financials")
+def ledger(client_id):
+    _guard_client(client_id)
+    data = _compute_ledger(
+        client_id,
+        request.args.get("from"),        # YYYY-MM-DD or None
+        request.args.get("to"),          # YYYY-MM-DD or None
+        request.args.get("company_id", type=int),
+    )
+    if data is None:
+        return jsonify({"error": "Not found"}), 404
+    return jsonify(data)
+
+
+def _ledger_pdf_response(client_id, date_from, date_to, company_id, as_attachment=True):
+    """Render a ledger view as a PDF and stream it straight from memory.
+
+    Nothing is written to disk: the statement is rebuilt from the live
+    database on every request, so there is no stored file to expire or
+    clean up."""
+    data = _compute_ledger(client_id, date_from, date_to, company_id)
+    if data is None:
+        abort(404)
+    pdf_bytes, filename = build_ledger_pdf(data)
+    return send_file(io.BytesIO(pdf_bytes), mimetype="application/pdf",
+                     as_attachment=as_attachment, download_name=filename)
+
+
+@bp.route("/<int:client_id>/ledger.pdf")
+@login_required
+@permission_required("clients", "financials")
+def ledger_pdf(client_id):
+    """Download the current ledger view as a PDF statement."""
+    _guard_client(client_id)
+    return _ledger_pdf_response(
+        client_id,
+        request.args.get("from") or None,
+        request.args.get("to") or None,
+        request.args.get("company_id", type=int),
+    )
+
+
+# ── Shareable ledger link (QR) ───────────────────────────────────
+# The QR carries a URL, never the file itself. Opening it re-renders the
+# statement from the live database, so the server stores no PDFs and there
+# is nothing to prune. The link's credential is an itsdangerous token
+# signed with the app secret key: it carries the ledger's own filters plus
+# the moment it was issued, and stops verifying LEDGER_LINK_MAX_AGE later.
+# The expiry rides inside the signature, so there is no table of live links
+# to keep either — an old link simply stops working.
+LEDGER_LINK_MAX_AGE = 24 * 60 * 60       # 24 hours
+_LEDGER_LINK_SALT   = "ledger-share-v1"  # bump to void every link ever issued
+
+
+def _link_serializer():
+    return URLSafeTimedSerializer(current_app.secret_key, salt=_LEDGER_LINK_SALT)
+
+
+def _qr_svg(text):
+    """QR image (data-URI SVG) for a string. Error level Q so it still
+    reads off a screen at an angle or under camera blur."""
+    return segno.make(text, error="q", micro=False).svg_data_uri(
+        scale=6, border=4, dark="#000000")
+
+
+@bp.route("/<int:client_id>/ledger/share-link", methods=["POST"])
+@login_required
+@permission_required("clients", "financials")
+def ledger_share_link(client_id):
+    """Mint a signed, self-expiring link to the current ledger view + its QR."""
+    _guard_client(client_id)
+    payload    = request.get_json(silent=True) or {}
+    company_id = payload.get("company_id")
+    token = _link_serializer().dumps({
+        "c":  client_id,
+        "co": int(company_id) if company_id else None,
+        "f":  payload.get("from") or None,
+        "t":  payload.get("to") or None,
     })
+    # Nginx terminates TLS and proxies over plain http, so trust its
+    # forwarded scheme — otherwise the QR would carry an http:// link that
+    # only works via the redirect.
+    url = url_for("clients.ledger_shared_pdf", token=token, _external=True,
+                  _scheme=request.headers.get("X-Forwarded-Proto", request.scheme))
+    return jsonify({"ok": True, "url": url, "qr": _qr_svg(url),
+                    "expires_hours": LEDGER_LINK_MAX_AGE // 3600})
+
+
+@bp.route("/ledger/shared/<token>")
+def ledger_shared_pdf(token):
+    """Public: the PDF behind a shared QR link.
+
+    Deliberately not @login_required — the signed token *is* the credential,
+    which is what lets a phone open it straight from the camera. It unlocks
+    exactly one statement and dies on its own timestamp."""
+    try:
+        d = _link_serializer().loads(token, max_age=LEDGER_LINK_MAX_AGE)
+    except SignatureExpired:
+        abort(410, "This ledger link has expired. Open the ledger again for a fresh one.")
+    except BadSignature:
+        abort(404)
+    # Inline, not an attachment: phones show it in the browser's PDF viewer
+    # and can still save it from there.
+    return _ledger_pdf_response(d["c"], d.get("f"), d.get("t"), d.get("co"),
+                                as_attachment=False)
 
 
 @bp.route("/<int:client_id>/ledger/entry", methods=["POST"])

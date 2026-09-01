@@ -5,3 +5,5 @@ mcp[cli]>=1.27.1
 gunicorn>=21.2.0
 firebase-admin>=6.5.0
 APScheduler>=3.10.4
+fpdf2>=2.8.0
+segno>=1.6.0

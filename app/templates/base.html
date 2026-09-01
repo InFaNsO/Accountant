@@ -256,6 +256,19 @@ document.querySelectorAll('.nav-item').forEach(function(el) {
       </div>
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <div id="ledgerFinalBal" style="font-size:22px;font-weight:800"></div>
+        <div style="position:relative">
+          <button onclick="toggleLedgerDlMenu(event)" class="btn btn-secondary btn-sm" style="white-space:nowrap">&#8681; Download</button>
+          <div id="ledgerDlMenu" style="display:none;position:absolute;right:0;top:calc(100% + 6px);z-index:40;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);box-shadow:0 10px 28px rgba(0,0,0,.35);min-width:200px;overflow:hidden">
+            <button class="ledger-menu-item" onclick="downloadLedgerPdf()">
+              <span style="font-weight:600">Download PDF</span>
+              <span class="ledger-menu-sub">Save this ledger as a PDF file</span>
+            </button>
+            <button class="ledger-menu-item" onclick="showLedgerQr()">
+              <span style="font-weight:600">QR code link</span>
+              <span class="ledger-menu-sub">Scan to open this PDF on a phone</span>
+            </button>
+          </div>
+        </div>
         <button onclick="toggleLedgerEntryForm()" class="btn btn-secondary btn-sm" style="white-space:nowrap">+ Add Entry</button>
         <button onclick="closeLedgerModal()" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:22px;line-height:1;padding:0 4px">&times;</button>
       </div>
@@ -340,7 +353,57 @@ document.querySelectorAll('.nav-item').forEach(function(el) {
   </div>
 </div>
 
+<!-- ── Ledger QR link — its own layer above the ledger modal, which stays open behind it ── -->
+<div id="ledgerQrModal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.6);align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)closeLedgerQr()">
+  <div style="position:relative;background:var(--bg);border-radius:var(--radius);width:min(420px,95vw);max-height:94vh;overflow-y:auto;box-shadow:0 12px 48px rgba(0,0,0,.5);padding:20px;display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center">
+    <button onclick="closeLedgerQr()" style="position:absolute;top:8px;right:12px;background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:22px;line-height:1;padding:0 4px">&times;</button>
+
+    <div style="min-width:0;max-width:100%;padding:0 18px">
+      <div id="ledgerQrTitle" style="font-size:15px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></div>
+      <div id="ledgerQrSub" style="font-size:12px;color:var(--text-muted);margin-top:2px"></div>
+    </div>
+
+    <div style="background:#fff;padding:10px;border-radius:10px;width:min(300px,42vh);height:min(300px,42vh);max-width:100%;display:flex;align-items:center;justify-content:center;flex-shrink:0;box-sizing:border-box">
+      <span id="ledgerQrStatus" style="color:#555;font-size:13px">Making the link…</span>
+      <img id="ledgerQrImg" alt="QR code linking to this ledger PDF" style="display:none;width:100%;height:100%">
+    </div>
+
+    <div id="ledgerQrBody" style="display:none;flex-direction:column;gap:10px;width:100%;align-items:center">
+      <div style="font-size:12px;color:var(--text-muted);line-height:1.55">
+        Scan it with the phone’s normal camera to open this statement as a PDF —
+        no sign-in needed. <span id="ledgerQrExpiry" style="color:var(--text-primary)"></span>
+      </div>
+      <div style="display:flex;gap:8px;width:100%;align-items:center">
+        <input id="ledgerQrUrl" readonly onclick="this.select()"
+               style="flex:1;min-width:0;font-size:11px;font-family:monospace;padding:7px 8px;
+                      border:1px solid var(--border);border-radius:var(--radius-sm);
+                      background:var(--surface);color:var(--text-muted)">
+        <button id="ledgerQrCopyBtn" onclick="copyLedgerQrLink()" class="btn btn-secondary btn-sm" style="white-space:nowrap">Copy link</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <style>
+.ledger-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 9px 14px;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+.ledger-menu-item + .ledger-menu-item { border-top: 1px solid var(--border); }
+.ledger-menu-item:hover { background: var(--bg-alt); }
+.ledger-menu-sub {
+  display: block;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 1px;
+}
 </style>
 
 <script>
@@ -425,6 +488,92 @@ function applyLedgerCustom() {
 function closeLedgerModal() {
   document.getElementById('ledgerModal').style.display = 'none';
   document.getElementById('ledgerEntryForm').style.display = 'none';
+  document.getElementById('ledgerDlMenu').style.display = 'none';
+  closeLedgerQr();
+}
+
+/* ── Download / QR share ─────────────────────────────────────── */
+function _ledgerRangeQuery() {
+  const p = [];
+  if (_ledgerCompanyId) p.push('company_id=' + _ledgerCompanyId);
+  if (_ledgerDateFrom && _ledgerDateTo) p.push('from=' + _ledgerDateFrom, 'to=' + _ledgerDateTo);
+  return p.length ? '?' + p.join('&') : '';
+}
+function _ledgerPeriodLabel() {
+  const dmy = iso => iso.split('-').reverse().join('-');
+  return (_ledgerDateFrom && _ledgerDateTo)
+    ? dmy(_ledgerDateFrom) + ' to ' + dmy(_ledgerDateTo) : 'All Time';
+}
+function toggleLedgerDlMenu(ev) {
+  ev.stopPropagation();
+  const m = document.getElementById('ledgerDlMenu');
+  m.style.display = m.style.display === 'none' ? '' : 'none';
+}
+document.addEventListener('click', () => {
+  const m = document.getElementById('ledgerDlMenu');
+  if (m && m.style.display !== 'none') m.style.display = 'none';
+});
+
+function downloadLedgerPdf() {
+  window.location = '/clients/' + _ledgerClientId + '/ledger.pdf' + _ledgerRangeQuery();
+}
+
+/* The QR carries a signed link, not the file. The phone opens it and the
+   server re-renders the statement from live data, so nothing is stored on
+   the server and the link stops working on its own after a day. */
+function showLedgerQr() {
+  const status = document.getElementById('ledgerQrStatus');
+  const img    = document.getElementById('ledgerQrImg');
+  const body   = document.getElementById('ledgerQrBody');
+  document.getElementById('ledgerQrTitle').textContent =
+    document.getElementById('ledgerModalTitle').textContent;
+  document.getElementById('ledgerQrSub').textContent = _ledgerPeriodLabel();
+  status.textContent = 'Making the link…';
+  status.style.display = '';
+  img.style.display  = 'none';
+  body.style.display = 'none';
+  document.getElementById('ledgerQrModal').style.display = 'flex';
+
+  const payload = {};
+  if (_ledgerCompanyId) payload.company_id = _ledgerCompanyId;
+  if (_ledgerDateFrom && _ledgerDateTo) { payload.from = _ledgerDateFrom; payload.to = _ledgerDateTo; }
+  fetch('/clients/' + _ledgerClientId + '/ledger/share-link', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload),
+  })
+  .then(r => r.json())
+  .then(d => {
+    if (!d.ok) { status.textContent = d.error || 'Could not make the link.'; return; }
+    img.src = d.qr;
+    document.getElementById('ledgerQrUrl').value = d.url;
+    document.getElementById('ledgerQrExpiry').textContent =
+      'The link works for ' + d.expires_hours + ' hours, then stops.';
+    document.getElementById('ledgerQrCopyBtn').textContent = 'Copy link';
+    status.style.display = 'none';
+    img.style.display  = '';
+    body.style.display = 'flex';
+  })
+  .catch(() => { status.textContent = 'Network error — could not make the link.'; });
+}
+
+function copyLedgerQrLink() {
+  const input = document.getElementById('ledgerQrUrl');
+  const btn   = document.getElementById('ledgerQrCopyBtn');
+  const done  = () => { btn.textContent = 'Copied'; setTimeout(() => { btn.textContent = 'Copy link'; }, 1500); };
+  // navigator.clipboard is missing on insecure origins (plain-http LAN
+  // testing), so keep the old select+execCommand path as a fallback.
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(input.value).then(done).catch(() => { input.select(); });
+  } else {
+    input.select();
+    try { document.execCommand('copy'); done(); } catch (e) { /* leave it selected to copy by hand */ }
+  }
+}
+
+function closeLedgerQr() {
+  const v = document.getElementById('ledgerQrModal');
+  if (v) v.style.display = 'none';
 }
 function toggleLedgerEntryForm() {
   const f = document.getElementById('ledgerEntryForm');
