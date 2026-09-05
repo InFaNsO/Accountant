@@ -2,7 +2,7 @@
 history integrity and the inbox.
 
 Runs against a throwaway copy of the database with a scripted model
-(LEDGER_CHAT_FAKE_LLM=1), so it needs no API key and spends nothing.
+(LEDGER_CHAT_FAKE_LLM=force), so it needs no API key and spends nothing.
 
     python test_chat.py
 """
@@ -13,7 +13,9 @@ import shutil
 import sys
 import tempfile
 
-os.environ["LEDGER_CHAT_FAKE_LLM"] = "1"
+# "force", not "1": stays scripted even if this machine has a real
+# GLM_API_KEY exported, so a test run can never call the paid API.
+os.environ["LEDGER_CHAT_FAKE_LLM"] = "force"
 os.environ.setdefault("MCP_API_KEY", "test-key")
 
 from flask.globals import _cv_app, _cv_request                # noqa: E402

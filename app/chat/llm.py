@@ -220,16 +220,25 @@ class FakeProvider:
         yield {"type": "done", "finish_reason": "stop"}
 
 
+def _use_fake():
+    """Whether this process should run the scripted provider.
+
+    A real key wins over LEDGER_CHAT_FAKE_LLM=1 — the flag marks "no key here
+    yet", so dropping a key into .env is all it takes to go live. Tests pass
+    "force" instead, which stays scripted even on a machine that has a key, so
+    a test run can never spend money.
+    """
+    flag = os.environ.get("LEDGER_CHAT_FAKE_LLM", "")
+    if flag == "force":
+        return True
+    return flag == "1" and not os.environ.get("GLM_API_KEY")
+
+
 def get_provider():
-    """The provider for this process. Fake when LEDGER_CHAT_FAKE_LLM=1."""
-    if os.environ.get("LEDGER_CHAT_FAKE_LLM") == "1":
-        return FakeProvider()
-    return GLMProvider()
+    """The provider for this process."""
+    return FakeProvider() if _use_fake() else GLMProvider()
 
 
 def provider_available():
     """True when a turn could actually run — used to hide the UI when not."""
-    return bool(
-        os.environ.get("LEDGER_CHAT_FAKE_LLM") == "1"
-        or os.environ.get("GLM_API_KEY")
-    )
+    return bool(_use_fake() or os.environ.get("GLM_API_KEY"))
