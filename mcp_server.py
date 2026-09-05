@@ -46,30 +46,52 @@ mcp = FastMCP("Ledger", instructions=(
 ))
 
 
-def _call(method: str, path: str, params: dict = None, body: dict = None) -> str:
-    """Make an authenticated HTTP call to the Ledger API and return the result string."""
-    url = f"{LEDGER_API_URL}/api/{path}"
-    if params:
-        clean = {k: v for k, v in params.items() if v is not None}
-        if clean:
-            url += "?" + urllib.parse.urlencode(clean)
-    data = json.dumps(body).encode() if body is not None else None
-    headers = {"X-MCP-Key": LEDGER_API_KEY}
-    if data:
-        headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(url, data=data, method=method, headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            r = json.loads(resp.read())
-            return r.get("result", r.get("error", "Unknown response"))
-    except urllib.error.HTTPError as e:
+class HttpTransport:
+    """Default transport: an authenticated HTTP call to a running Ledger server.
+
+    Used by Claude Desktop and the Android remote connection, where this script
+    runs as a separate process from the Flask app.
+    """
+
+    def call(self, method: str, path: str, params: dict = None, body: dict = None):
+        url = f"{LEDGER_API_URL}/api/{path}"
+        if params:
+            clean = {k: v for k, v in params.items() if v is not None}
+            if clean:
+                url += "?" + urllib.parse.urlencode(clean)
+        data = json.dumps(body).encode() if body is not None else None
+        headers = {"X-MCP-Key": LEDGER_API_KEY}
+        if data:
+            headers["Content-Type"] = "application/json"
+        req = urllib.request.Request(url, data=data, method=method, headers=headers)
         try:
-            r = json.loads(e.read())
-            return r.get("error", f"HTTP {e.code}")
-        except Exception:
-            return f"HTTP error {e.code}"
-    except Exception as ex:
-        return f"Error connecting to Ledger API: {ex}"
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                r = json.loads(resp.read())
+                return r.get("result", r.get("error", "Unknown response"))
+        except urllib.error.HTTPError as e:
+            try:
+                r = json.loads(e.read())
+                return r.get("error", f"HTTP {e.code}")
+            except Exception:
+                return f"HTTP error {e.code}"
+        except Exception as ex:
+            return f"Error connecting to Ledger API: {ex}"
+
+
+# Swapped for an in-process transport when the Flask app imports this module as
+# its tool catalogue (app/chat/tools.py) — same routes, no second connection.
+TRANSPORT = HttpTransport()
+
+
+def set_transport(transport):
+    """Install the transport every tool call goes through."""
+    global TRANSPORT
+    TRANSPORT = transport
+
+
+def _call(method: str, path: str, params: dict = None, body: dict = None):
+    """Dispatch one Ledger API call through the active transport."""
+    return TRANSPORT.call(method, path, params, body)
 
 
 # ═════════════════════════════════════════════════════════════════════════════

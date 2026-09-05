@@ -55,6 +55,9 @@ class User(UserMixin):
         self.password_hash = row["password_hash"]
         self.role          = row["role"]
         self.manager_id    = row["manager_id"]
+        # Which assistant surfaces this user gets: none | helper | agent.
+        self.chat_level    = (row["chat_level"] if "chat_level" in row.keys()
+                              else "helper") or "helper"
         self._is_active    = bool(row["is_active"])
 
     @property

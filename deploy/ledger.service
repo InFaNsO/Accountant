@@ -13,12 +13,18 @@ WorkingDirectory=/home/ledger/app
 Environment="PATH=/home/ledger/app/venv/bin"
 Environment="SECRET_KEY=changeme"
 Environment="FLASK_ENV=production"
+# Assistant (GLM-5.3-Flash on Z.ai). setup.sh writes the real key.
+Environment="GLM_API_KEY=changeme"
 
-# Gunicorn: 2 workers, bound to localhost only
+# Gunicorn: 2 worker processes, 8 threads each, bound to localhost only.
+# Threads matter for the assistant: a streaming turn occupies its worker
+# for the whole turn, so sync workers would cap concurrent users at 2.
 ExecStart=/home/ledger/app/venv/bin/gunicorn \
     --workers 2 \
+    --worker-class gthread \
+    --threads 8 \
     --bind 127.0.0.1:5000 \
-    --timeout 120 \
+    --timeout 300 \
     --access-logfile /home/ledger/app/logs/access.log \
     --error-logfile  /home/ledger/app/logs/error.log \
     run:app

@@ -149,6 +149,7 @@ def create_app():
         from .routes.api        import bp as api_bp
         from .routes.tallies    import bp as tallies_bp
         from .routes.mobile     import bp as mobile_bp
+        from .chat           import bp as chat_bp
 
         app.register_blueprint(auth_bp)
         app.register_blueprint(users_bp)
@@ -164,6 +165,12 @@ def create_app():
         app.register_blueprint(api_bp)
         app.register_blueprint(tallies_bp)
         app.register_blueprint(mobile_bp)
+        app.register_blueprint(chat_bp)
+
+        # Fail now, not on someone's first question: every tool the assistant
+        # can reach must have a permission mapped to it.
+        from .chat.tools import check_policy_coverage
+        check_policy_coverage()
 
         from .services.notification_service import init_firebase
         init_firebase()

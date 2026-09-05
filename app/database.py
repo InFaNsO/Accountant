@@ -614,5 +614,106 @@ def _create_schema(db):
     # "Mumbai Suburban" for one client never touches the cached shape other
     # clients who also picked "Mumbai Suburban" are using.
     _add_column(db, "client_regions",          "geometry_override",    "TEXT")
+    # Chat surfaces: 'none' | 'helper' | 'agent'. Existing users keep the
+    # read-only helper; the owner is always treated as 'agent' in code.
+    _add_column(db, "users",                   "chat_level",           "TEXT DEFAULT 'helper'")
 
+    _create_chat_schema(db)
+
+    db.commit()
+
+
+def _create_chat_schema(db):
+    """Tables for the assistant.
+
+    Conversations are absent on purpose: they live in the browser tab and are
+    gone when it closes. What persists is what the user asked to keep (the
+    inbox), what runs without them (scheduled tasks and their reports), and a
+    record of every change made through chat.
+    """
+    db.executescript("""
+        -- A reminder to deliver, or a report prompt to run, on a schedule.
+        CREATE TABLE IF NOT EXISTS chat_tasks (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id      INTEGER NOT NULL,
+            kind         TEXT NOT NULL,                    -- reminder | report
+            name         TEXT NOT NULL,
+            prompt       TEXT,                             -- reminder text, or report request
+            due_at       TIMESTAMP,                        -- one-shot ...
+            cron         TEXT,                             -- ... or recurring
+            timezone     TEXT DEFAULT 'Asia/Kolkata',
+            link_entity  TEXT,
+            link_id      INTEGER,
+            enabled      INTEGER DEFAULT 1,
+            notify_push  INTEGER DEFAULT 1,
+            last_run_at  TIMESTAMP,
+            next_run_at  TIMESTAMP,
+            created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_tasks_due
+            ON chat_tasks(enabled, next_run_at);
+
+        -- One execution of a report task. Keeps the output, not the transcript.
+        CREATE TABLE IF NOT EXISTS chat_task_runs (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id      INTEGER NOT NULL,
+            status       TEXT DEFAULT 'running',           -- running | ok | error
+            claimed_by   TEXT,
+            started_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            finished_at  TIMESTAMP,
+            report_md    TEXT,
+            tool_log     TEXT,
+            error        TEXT,
+            tokens       INTEGER DEFAULT 0,
+            FOREIGN KEY (task_id) REFERENCES chat_tasks(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_runs_task ON chat_task_runs(task_id);
+
+        -- The inbox: saved answers, fired reminders and finished reports.
+        CREATE TABLE IF NOT EXISTS chat_deliveries (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id       INTEGER NOT NULL,
+            kind          TEXT NOT NULL,                   -- saved | reminder | report
+            task_id       INTEGER,
+            run_id        INTEGER,
+            title         TEXT,
+            body_md       TEXT,
+            link_entity   TEXT,
+            link_id       INTEGER,
+            created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            read_at       TIMESTAMP,
+            snoozed_until TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_deliveries_user
+            ON chat_deliveries(user_id, read_at, created_at);
+
+        -- Files produced by a scheduled run (nobody is there to download them
+        -- live, so unlike chat exports these have to be stored).
+        CREATE TABLE IF NOT EXISTS chat_files (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            delivery_id INTEGER NOT NULL,
+            token       TEXT UNIQUE,
+            filename    TEXT,
+            mime        TEXT,
+            path        TEXT,
+            size        INTEGER,
+            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (delivery_id) REFERENCES chat_deliveries(id) ON DELETE CASCADE
+        );
+
+        -- Audit of every change made through chat. Reads are not recorded.
+        CREATE TABLE IF NOT EXISTS chat_tool_calls (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id    INTEGER,
+            tool       TEXT,
+            args       TEXT,
+            status     TEXT,                               -- executed | declined | denied | error
+            detail     TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_tool_calls_time
+            ON chat_tool_calls(created_at);
+    """)
     db.commit()

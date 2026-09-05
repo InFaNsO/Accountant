@@ -13,6 +13,9 @@ DOMAIN=${1:-"admin.applestreeabrasives.com"}
 REPO=${2:-"https://github.com/InFaNsO/Accountant.git"}
 SECRET_KEY=${3:-"change-this-to-a-random-secret"}
 MCP_API_KEY=${4:-"change-this-mcp-key"}
+# Z.ai key for the in-app assistant. Without it the chat UI is hidden
+# and /chat/api returns 503; everything else works as before.
+GLM_API_KEY=${5:-""}
 APP_USER="ledger"
 APP_DIR="/home/$APP_USER/app"
 PYTHON="python3"
@@ -87,6 +90,7 @@ cat > "$APP_DIR/.env" <<EOF
 SECRET_KEY=$SECRET_KEY
 FLASK_ENV=production
 MCP_API_KEY=$MCP_API_KEY
+GLM_API_KEY=$GLM_API_KEY
 EOF
 chown $APP_USER:$APP_USER "$APP_DIR/.env"
 chmod 600 "$APP_DIR/.env"
@@ -97,6 +101,7 @@ echo "[7/9] Installing systemd services..."
 # Flask / Gunicorn
 cp "$APP_DIR/deploy/ledger.service" /etc/systemd/system/ledger.service
 sed -i "s|SECRET_KEY=changeme|SECRET_KEY=$SECRET_KEY|g" /etc/systemd/system/ledger.service
+sed -i "s|GLM_API_KEY=changeme|GLM_API_KEY=$GLM_API_KEY|g" /etc/systemd/system/ledger.service
 systemctl daemon-reload
 systemctl enable ledger
 systemctl start ledger
@@ -142,6 +147,12 @@ echo ""
 echo "  App URL   : https://$DOMAIN"
 echo "  MCP URL   : https://$DOMAIN/mcp/sse"
 echo "  App dir   : $APP_DIR"
+if [ -z "$GLM_API_KEY" ]; then
+echo "  Assistant : DISABLED (no GLM_API_KEY given — pass it as the 5th argument,"
+echo "              or add it to $APP_DIR/.env and /etc/systemd/system/ledger.service)"
+else
+echo "  Assistant : enabled (GLM-5.3-Flash)"
+fi
 echo "  Logs      : journalctl -u ledger -f"
 echo "             journalctl -u ledger-mcp -f"
 echo ""
