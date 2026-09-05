@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Payment #{{ p.id }}{% endblock %}
 {% block page_title %}Payment #{{ p.id }}{% endblock %}
+{% block chat_context %}data-chat-context='{"module": "payments", "entity": "payment", "id": {{ p.id }}, "label": {{ ('Payment #' ~ p.id)|tojson }}}'{% endblock %}
 {% block topbar_actions %}
   {% if can_edit %}
   <a href="{{ url_for('payments.edit_payment', payment_id=p.id) }}" class="btn btn-primary">Edit</a>

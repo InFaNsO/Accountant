@@ -169,6 +169,9 @@ def create_app():
 
         # Fail now, not on someone's first question: every tool the assistant
         # can reach must have a permission mapped to it.
+        from .chat import register_template_globals
+        register_template_globals(app)
+
         from .chat.tools import check_policy_coverage
         check_policy_coverage()
 

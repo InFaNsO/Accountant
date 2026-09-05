@@ -8,8 +8,8 @@ conversation for the browser to keep. The only persistence is the inbox.
 import json
 import logging
 
-from flask import (Blueprint, Response, abort, jsonify, request,
-                   stream_with_context)
+from flask import (Blueprint, Response, abort, jsonify, render_template,
+                   request, stream_with_context)
 from flask_login import current_user, login_required
 
 from . import agent, history as hist, inbox, llm
@@ -38,6 +38,30 @@ def _require(level):
         abort(403)
     if not llm.provider_available():
         abort(503)
+
+
+def register_template_globals(app):
+    """Expose chat_level to every template so base.html can decide what to show.
+
+    Reports 'none' when no model is configured, which hides the launcher, the
+    bell and the nav item — a half-configured deploy shows no dead UI.
+    """
+    @app.context_processor
+    def _chat_context():
+        if not (current_user and current_user.is_authenticated
+                and llm.provider_available()):
+            return {"chat_level": "none"}
+        return {"chat_level": chat_level(current_user)}
+
+
+@bp.route("/")
+@login_required
+def index():
+    """The full chat page."""
+    if chat_level(current_user) != "agent":
+        abort(403)
+    return render_template("chat/index.html",
+                           chat_available=llm.provider_available())
 
 
 @bp.route("/api/turn", methods=["POST"])

@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ product.name }}{% endblock %}
 {% block page_title %}{{ product.name }}{% endblock %}
+{% block chat_context %}data-chat-context='{"module": "products", "entity": "product", "id": {{ product.id }}, "label": {{ (product.name)|tojson }}}'{% endblock %}
 {% block topbar_actions %}
   {% if subs %}
   <a href="{{ url_for('products.new_sub_product', product_id=product.id) }}" class="btn btn-secondary">+ <span class="btn-label-mobile">Sub-Product</span><span class="lbl-mobile-only">Sub</span></a>

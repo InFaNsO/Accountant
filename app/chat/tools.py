@@ -275,6 +275,11 @@ def _call_mcp(name, args):
     if isinstance(out, tuple):
         blocks, structured = (out + (None,))[:2]
         if structured is not None:
+            # FastMCP wraps a plain string return as {"result": "..."}. Passing
+            # that envelope to the model is noise it has to see through, so
+            # unwrap it; genuinely structured returns (the _bulk tools) pass on.
+            if isinstance(structured, dict) and set(structured) == {"result"}:
+                return structured["result"]
             return structured
         out = blocks
     if isinstance(out, list):

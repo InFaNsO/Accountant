@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ tally.name }}{% endblock %}
 {% block page_title %}{{ tally.name }}{% endblock %}
+{% block chat_context %}data-chat-context='{"module": "products", "entity": "stock tally", "id": {{ tally.id }}, "label": {{ (tally.name)|tojson }}}'{% endblock %}
 {% block topbar_actions %}
   {% if tally.status == 'draft' %}
   <button form="tallyForm" type="submit" id="saveBtn"

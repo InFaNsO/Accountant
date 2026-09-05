@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ supplier.name }}{% endblock %}
 {% block page_title %}{{ supplier.name }}{% endblock %}
+{% block chat_context %}data-chat-context='{"module": "suppliers", "entity": "supplier", "id": {{ supplier.id }}, "label": {{ (supplier.name)|tojson }}}'{% endblock %}
 {% block topbar_actions %}
   <a href="{{ url_for('suppliers.edit_supplier', supplier_id=supplier.id) }}" class="btn btn-secondary">Edit</a>
   <a href="{{ url_for('suppliers.list_suppliers') }}" class="btn btn-secondary">Back</a>

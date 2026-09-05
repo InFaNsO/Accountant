@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ dispatch.name }}{% endblock %}
 {% block page_title %}{{ dispatch.name }}{% endblock %}
+{% block chat_context %}data-chat-context='{"module": "transit", "entity": "dispatch", "id": {{ dispatch.id }}, "label": {{ (dispatch.name)|tojson }}}'{% endblock %}
 {% block topbar_actions %}
   {% if dispatch.status == 'draft' %}
   <form method="post" action="{{ url_for('transit.activate', dispatch_id=dispatch.id) }}" style="display:inline">

@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ po.name }}{% endblock %}
 {% block page_title %}{{ po.name }}{% endblock %}
+{% block chat_context %}data-chat-context='{"module": "production", "entity": "production order", "id": {{ po.id }}, "label": {{ (po.name)|tojson }}}'{% endblock %}
 {% block topbar_actions %}
   {% if po.status == 'draft' %}
   <form method="post" action="{{ url_for('production.activate_production', po_id=po.id) }}" style="display:inline">

@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ invoice.invoice_number }}{% endblock %}
 {% block page_title %}{{ invoice.invoice_number }}{% endblock %}
+{% block chat_context %}data-chat-context='{"module": "invoices", "entity": "invoice", "id": {{ invoice.id }}, "label": {{ (invoice.invoice_number)|tojson }}}'{% endblock %}
 {% block topbar_actions %}
   <div class="invoice-nav" style="display:inline-flex;gap:6px;margin-right:auto">
     {% if prev_id %}
