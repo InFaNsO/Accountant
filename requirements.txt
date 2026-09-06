@@ -9,3 +9,4 @@ fpdf2>=2.8.0
 segno>=1.6.0
 openai>=1.50.0
 jsonschema>=4.21.0
+cryptography>=42.0.0

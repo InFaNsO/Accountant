@@ -38,7 +38,7 @@ def _require(level):
     have = chat_level(current_user)
     if have == "none" or (level == "agent" and have != "agent"):
         abort(403)
-    if not llm.provider_available():
+    if tools.disabled_reason() or not llm.provider_available():
         abort(503)
 
 
@@ -51,7 +51,8 @@ def register_template_globals(app):
     @app.context_processor
     def _chat_context():
         if not (current_user and current_user.is_authenticated
-                and llm.provider_available()):
+                and llm.provider_available()
+                and not tools.disabled_reason()):
             return {"chat_level": "none"}
         return {"chat_level": chat_level(current_user)}
 

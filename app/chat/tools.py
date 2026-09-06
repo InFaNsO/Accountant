@@ -125,18 +125,37 @@ def _clean_schema(schema):
     return out
 
 
-def check_policy_coverage():
-    """Fail loudly at startup if a tool exists with no permission mapped.
+# Set when startup found a problem that makes the assistant unsafe to offer.
+_disabled_reason = None
 
-    Without this a tool added to mcp_server.py would silently become callable
-    by anyone with chat access.
+
+def disabled_reason():
+    """Why chat is unavailable, or None. Checked before any turn is allowed."""
+    return _disabled_reason
+
+
+def check_policy_coverage():
+    """Verify at startup that every reachable tool has a permission mapped.
+
+    A tool added to mcp_server.py without a policy entry would otherwise become
+    callable by anyone with chat access. That is serious enough to refuse to
+    serve the assistant — but not to refuse to boot: this is an accounting
+    system first, and invoicing should not stop because a chat tool is
+    misconfigured. So the assistant switches itself off and says why.
     """
-    missing = sorted(set(catalogue()) - set(TOOL_POLICY))
+    global _disabled_reason
+    try:
+        missing = sorted(set(catalogue()) - set(TOOL_POLICY))
+    except Exception as e:                                   # noqa: BLE001
+        _disabled_reason = f"the tool catalogue could not be built ({e})"
+        logger.exception("chat disabled: tool catalogue failed to build")
+        return
     if missing:
-        raise RuntimeError(
-            "Tools in mcp_server.py with no entry in app/chat/policy.py: "
-            + ", ".join(missing)
-        )
+        _disabled_reason = ("these tools have no permission mapped: "
+                            + ", ".join(missing))
+        logger.error("chat disabled — %s", _disabled_reason)
+        return
+    _disabled_reason = None
 
 
 # ── Permissions ──────────────────────────────────────────────────────────────
