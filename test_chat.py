@@ -9,6 +9,7 @@ Runs against a throwaway copy of the database with a scripted model
 
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -442,6 +443,64 @@ def main():
         from app.services import settings_service as st
         st._invalidate()
         check("nothing was written by the non-owner", st.get("GLM_API_KEY") == "")
+
+    # ── Prompt caching ───────────────────────────────────────────────────
+    # The provider caches by prefix match, so these are cost-and-latency
+    # regressions waiting to happen: a date in the system prompt, a tool list
+    # that reorders, or a history that gets rewritten in the middle each turn.
+    print("\nPrompt caching")
+    with app.app_context():
+        from app.chat import history as h2, prompts as p2, tools as t2
+        from app.services.auth_service import load_user as _lu
+        owner = _lu(god_id)
+
+        frozen = p2.PROMPTS["chat"] + json.dumps(t2.tools_for(owner, "chat"),
+                                                 ensure_ascii=False)
+        again = p2.PROMPTS["chat"] + json.dumps(t2.tools_for(owner, "chat"),
+                                                ensure_ascii=False)
+        check("the cached prefix is byte-stable", frozen == again)
+        check("no date or clock leaks into the cached prefix",
+              not re.search(r"\b20\d\d-\d\d-\d\d\b|\b\d{2}:\d{2}\b", frozen))
+        check("the clock lives in the trailing context instead",
+              re.search(r"\d{2}:\d{2}",
+                        p2.context_message(owner, None)["content"]) is not None)
+
+        convo, rewrites, previous = [], 0, None
+        for n in range(1, 21):          # not `turn` — that is the helper above
+            convo.append({"role": "user", "content": f"q{n}"})
+            convo.append({"role": "assistant", "content": None, "tool_calls": [
+                {"id": f"c{n}", "type": "function",
+                 "function": {"name": "clients_outstanding", "arguments": "{}"}}]})
+            convo.append({"role": "tool", "tool_call_id": f"c{n}",
+                          "name": "clients_outstanding", "content": "X" * 3000})
+            convo.append({"role": "assistant", "content": f"a{n}"})
+            convo = h2.trim(convo)
+            if previous is not None:
+                shared = 0
+                for old, new in zip(previous, convo):
+                    if old != new:
+                        break
+                    shared += 1
+                if shared < len(previous):
+                    rewrites += 1
+            previous = [dict(m) for m in convo]
+        check("a 20-turn conversation is rewritten at most once",
+              rewrites <= 1, f"{rewrites} rewrites")
+
+        big = h2.trim(convo + [
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "z", "type": "function",
+                 "function": {"name": "invoices_bulk", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "z", "content": "Y" * 400_000}])
+        check("an oversized result is still capped",
+              all(len(m.get("content") or "") <= h2.MAX_RESULT_CHARS + 20
+                  for m in big if m.get("role") == "tool"))
+        calls = {tc["id"] for m in big if m.get("tool_calls")
+                 for tc in m["tool_calls"]}
+        check("trimming leaves every result paired with its call",
+              all(m["tool_call_id"] in calls for m in big if m.get("role") == "tool"))
+        check("trimming bounds the conversation size",
+              len(big) <= h2.MAX_MESSAGES, f"{len(big)} messages")
 
     print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
     if FAIL:

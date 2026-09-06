@@ -19,10 +19,24 @@ from flask import current_app
 
 # Roughly how much of the conversation we carry forward. Tool results are the
 # bulky part, so they get stubbed out first; only then do we drop old turns.
-MAX_MESSAGES = 60
+MAX_MESSAGES = 100
+TARGET_MESSAGES = 60          # what a drop shrinks down to, so drops stay rare
 KEEP_FULL_RESULTS_FOR_TURNS = 2
 MAX_RESULT_CHARS = 20_000
 STUB = "[earlier tool result omitted to save space — call the tool again if needed]"
+
+# Shrinking only happens once a conversation crosses HIGH_WATER, and then it
+# shrinks hard — down past LOW_WATER — so it does not have to happen again for
+# many turns.
+#
+# The reason is prompt caching. The provider caches by prefix match, so a
+# conversation that only ever grows is almost entirely cached on every turn.
+# Rewriting a message in the middle invalidates everything after it. Trimming a
+# little on every turn (which is what this used to do) moved that rewrite point
+# forward each time and threw the cache away continuously. Rare, large trims
+# cost one expensive turn instead of taxing all of them.
+HIGH_WATER_CHARS = 120_000
+LOW_WATER_CHARS = 40_000
 
 
 def _canonical(history, user_id, mode):
@@ -48,33 +62,54 @@ def verify(history, signature, user_id, mode):
 
 
 def trim(history):
-    """Shrink a history before handing it back to the browser.
+    """Shrink a history before handing it back to the browser — but only when
+    it has actually grown too big.
 
-    Old tool results become a stub — the model can always call the tool again,
-    and keeping every `products_snapshot` payload would blow past sessionStorage
-    long before it helped. Turn structure is preserved: an assistant message
-    with tool_calls always keeps its matching tool messages, so the history
+    Below the high-water mark this returns the conversation unchanged, which is
+    the whole point: an untouched history is a stable prefix, and a stable
+    prefix is a cache hit. Above it, old tool results become a stub (the model
+    can always call the tool again) and, if still oversized, the oldest whole
+    turns are dropped. Turn structure is always preserved — an assistant
+    message with tool_calls keeps its matching tool messages — so the result
     stays valid to send back to the model.
     """
     out = [dict(m) for m in history]
 
-    # Index the user turns so "the last two turns" is well defined.
-    user_positions = [i for i, m in enumerate(out) if m.get("role") == "user"]
-    cutoff = (user_positions[-KEEP_FULL_RESULTS_FOR_TURNS]
-              if len(user_positions) > KEEP_FULL_RESULTS_FOR_TURNS else -1)
+    # Always cap a single oversized result. This is idempotent: re-truncating
+    # an already-truncated string reproduces it exactly, so it does not become
+    # a per-turn rewrite.
+    for m in out:
+        if m.get("role") == "tool":
+            content = m.get("content") or ""
+            if len(content) > MAX_RESULT_CHARS:
+                m["content"] = content[:MAX_RESULT_CHARS] + "\n…truncated."
 
+    if _size(out) <= HIGH_WATER_CHARS and len(out) <= MAX_MESSAGES:
+        return out
+
+    # Over budget: stub old results oldest-first, stopping as soon as we are
+    # under the low-water mark. Going well past the threshold buys many quiet
+    # turns before the next rewrite.
+    user_positions = [i for i, m in enumerate(out) if m.get("role") == "user"]
+    keep_from = (user_positions[-KEEP_FULL_RESULTS_FOR_TURNS]
+                 if len(user_positions) > KEEP_FULL_RESULTS_FOR_TURNS else len(out))
     for i, m in enumerate(out):
-        if m.get("role") != "tool":
-            continue
-        content = m.get("content") or ""
-        if i < cutoff:
+        if i >= keep_from or _size(out) <= LOW_WATER_CHARS:
+            break
+        if m.get("role") == "tool" and m.get("content") != STUB:
             m["content"] = STUB
-        elif len(content) > MAX_RESULT_CHARS:
-            m["content"] = content[:MAX_RESULT_CHARS] + "\n…truncated."
 
     if len(out) > MAX_MESSAGES:
-        out = _drop_oldest_turns(out, MAX_MESSAGES)
+        # Drop well past the limit, not just under it: dropping to exactly
+        # MAX_MESSAGES would drop again next turn, and every drop rewrites the
+        # front of the history — the most expensive place to break the cache.
+        out = _drop_oldest_turns(out, TARGET_MESSAGES)
     return out
+
+
+def _size(messages):
+    """Rough serialised size — what the request body and sessionStorage cost."""
+    return sum(len(str(m.get("content") or "")) + 120 for m in messages)
 
 
 def _drop_oldest_turns(history, limit):
