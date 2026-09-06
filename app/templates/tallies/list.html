@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Stock Tallies{% endblock %}
+{% block page_title %}Stock Tallies{% endblock %}
+{% block topbar_actions %}
+  {% if current_user.has_permission('products', 'create') %}
+  <a href="{{ url_for('tallies.new_tally') }}" class="btn btn-primary">+ New Tally</a>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+{% if not tallies %}
+<div class="card" style="text-align:center;padding:60px 40px">
+  <div style="font-size:40px;margin-bottom:12px">📋</div>
+  <div style="font-size:18px;font-weight:700;margin-bottom:8px">No tallies yet</div>
+  <div style="color:var(--text-muted);margin-bottom:24px">Create a stock tally to compare digital and physical stock.</div>
+  {% if current_user.has_permission('products', 'create') %}
+  <a href="{{ url_for('tallies.new_tally') }}" class="btn btn-primary">+ New Tally</a>
+  {% endif %}
+</div>
+{% else %}
+<div class="card">
+  <div class="card-body" style="padding:0">
+    <div class="table-wrap">
+    <table style="width:100%;border-collapse:collapse">
+      <thead>
+        <tr style="border-bottom:1px solid var(--border)">
+          <th style="padding:11px 20px;text-align:left;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">Name</th>
+          <th style="padding:11px 20px;text-align:left;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">Date</th>
+          <th style="padding:11px 20px;text-align:left;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">Status</th>
+          <th style="padding:11px 20px;text-align:left;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">Applied</th>
+          <th style="padding:11px 20px;text-align:left;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">Notes</th>
+          <th style="padding:11px 20px"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in tallies %}
+        <tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:13px 20px;font-weight:600">
+            <a href="{{ url_for('tallies.tally_detail', tally_id=t.id) }}" style="color:var(--accent);text-decoration:none">{{ t.name }}</a>
+          </td>
+          <td style="padding:13px 20px;color:var(--text-muted);font-size:13px">{{ t.created_at[:10] if t.created_at else '—' }}</td>
+          <td style="padding:13px 20px">
+            {% if t.status == 'applied' %}
+            <span style="font-size:11px;background:rgba(16,185,129,.12);color:var(--success);padding:3px 9px;border-radius:20px;font-weight:600">✓ Applied</span>
+            {% else %}
+            <span style="font-size:11px;background:rgba(99,102,241,.12);color:var(--accent);padding:3px 9px;border-radius:20px;font-weight:600">● Draft</span>
+            {% endif %}
+          </td>
+          <td style="padding:13px 20px;color:var(--text-muted);font-size:13px">{{ t.applied_at[:10] if t.applied_at else '—' }}</td>
+          <td style="padding:13px 20px;color:var(--text-muted);font-size:13px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ t.notes or '—' }}</td>
+          <td style="padding:13px 20px;text-align:right">
+            <a href="{{ url_for('tallies.tally_detail', tally_id=t.id) }}" class="btn btn-secondary btn-sm">
+              {% if t.status == 'draft' %}Edit{% else %}View{% endif %}
+            </a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

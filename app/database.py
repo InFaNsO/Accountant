@@ -21,9 +21,59 @@ def close_db(e=None):
 def init_db(app):
     with app.app_context():
         db = sqlite3.connect(app.config["DATABASE"])
+        db.row_factory = sqlite3.Row
         _create_schema(db)
         db.close()
     app.teardown_appcontext(close_db)
+
+
+def _migrate_payment_allocations(db):
+    """One-time migration from split-row payments to a single payment row + allocations.
+
+    Idempotent: skips if payment_allocations already has any rows.
+    """
+    existing = db.execute("SELECT COUNT(*) FROM payment_allocations").fetchone()[0]
+    if existing > 0:
+        return
+
+    # Step 1 — seed allocations from any payment that already targets an invoice.
+    db.execute(
+        "INSERT INTO payment_allocations (payment_id, invoice_id, amount) "
+        "SELECT id, invoice_id, amount FROM payments WHERE invoice_id IS NOT NULL"
+    )
+
+    # Step 2 — collapse system-split rows. A "split" is multiple payments rows that share
+    # client_id, payment_date, method, reference, notes, company_id — these were created
+    # by a single create_payment() call in the old codebase.
+    groups = db.execute("""
+        SELECT GROUP_CONCAT(id) AS ids, SUM(amount) AS total
+        FROM payments
+        GROUP BY client_id, payment_date,
+                 COALESCE(method,''), COALESCE(reference,''),
+                 COALESCE(notes,''),  COALESCE(company_id,0)
+        HAVING COUNT(*) > 1
+    """).fetchall()
+
+    for g in groups:
+        ids  = sorted(int(x) for x in g["ids"].split(","))
+        keep = ids[0]
+        drop = ids[1:]
+        # Re-point allocations from soon-to-be-deleted rows to the keeper.
+        for d in drop:
+            db.execute(
+                "UPDATE payment_allocations SET payment_id=? WHERE payment_id=?",
+                (keep, d),
+            )
+        db.execute(
+            "UPDATE payments SET amount=?, invoice_id=NULL WHERE id=?",
+            (g["total"], keep),
+        )
+        db.executemany("DELETE FROM payments WHERE id=?", [(d,) for d in drop])
+
+    # Step 3 — for any surviving payment row that still carries invoice_id, NULL it.
+    # The allocation row created in step 1 is now the source of truth.
+    db.execute("UPDATE payments SET invoice_id=NULL WHERE invoice_id IS NOT NULL")
+    db.commit()
 
 
 def _add_column(db, table, column, definition):
@@ -291,14 +341,399 @@ def _create_schema(db):
         PRAGMA foreign_keys = ON;
     """)
 
-    # ── Column-level migrations for existing installs ─────────
-    _add_column(db, "clients",       "opening_balance", "REAL DEFAULT 0")
-    _add_column(db, "products",      "category_id",     "INTEGER")
-    _add_column(db, "products",      "min_quantity",    "REAL DEFAULT 0")
-    _add_column(db, "products",      "production_qty",  "REAL DEFAULT 0")
-    _add_column(db, "products",      "in_transit_qty",  "REAL DEFAULT 0")
-    _add_column(db, "sub_products",  "production_qty",  "REAL DEFAULT 0")
-    _add_column(db, "sub_products",  "in_transit_qty",  "REAL DEFAULT 0")
-    _add_column(db, "invoice_items", "sub_product_id",  "INTEGER")
+    # ── Palm purchases (instant warehouse stock-in) ───────────
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS palm_purchases (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            name          TEXT,
+            supplier_id   INTEGER,
+            purchase_date DATE NOT NULL,
+            notes         TEXT,
+            total_cost    REAL DEFAULT 0,
+            created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (supplier_id) REFERENCES suppliers(id)
+        );
 
+        CREATE TABLE IF NOT EXISTS palm_purchase_items (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            palm_purchase_id INTEGER NOT NULL,
+            product_id       INTEGER,
+            sub_product_id   INTEGER,
+            quantity         REAL NOT NULL,
+            unit_cost        REAL DEFAULT 0,
+            notes            TEXT,
+            FOREIGN KEY (palm_purchase_id) REFERENCES palm_purchases(id) ON DELETE CASCADE,
+            FOREIGN KEY (product_id)       REFERENCES products(id),
+            FOREIGN KEY (sub_product_id)   REFERENCES sub_products(id)
+        );
+    """)
+
+    # ── Payment allocations (links one payment to N invoices) ─
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS payment_allocations (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            payment_id INTEGER NOT NULL,
+            invoice_id INTEGER NOT NULL,
+            amount     REAL NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (payment_id) REFERENCES payments(id) ON DELETE CASCADE,
+            FOREIGN KEY (invoice_id) REFERENCES invoices(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_pa_payment ON payment_allocations(payment_id);
+        CREATE INDEX IF NOT EXISTS idx_pa_invoice ON payment_allocations(invoice_id);
+    """)
+    # The migration below groups payments by company_id; on a fresh database that
+    # column doesn't exist yet (it's normally added with the column migrations at
+    # the bottom of this function). Idempotent, so the later call is a no-op.
+    _add_column(db, "payments", "company_id", "INTEGER")
+    _migrate_payment_allocations(db)
+
+    # ── Manual ledger entries ─────────────────────────────────
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS ledger_entries (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id   INTEGER NOT NULL,
+            entry_date  DATE NOT NULL,
+            description TEXT,
+            debit       REAL DEFAULT 0,
+            credit      REAL DEFAULT 0,
+            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (client_id) REFERENCES clients(id)
+        );
+    """)
+
+    # ── Client companies (multiple companies per client) ──────
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS client_companies (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id  INTEGER NOT NULL,
+            name       TEXT NOT NULL,
+            email      TEXT,
+            phone      TEXT,
+            address    TEXT,
+            city       TEXT,
+            country    TEXT,
+            tax_id     TEXT,
+            notes      TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
+        );
+    """)
+
+    # ── Users & permissions ───────────────────────────────────
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS users (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            name          TEXT NOT NULL,
+            email         TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            role          TEXT DEFAULT 'user',
+            is_active     INTEGER DEFAULT 1,
+            created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS user_permissions (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id    INTEGER NOT NULL,
+            module     TEXT NOT NULL,
+            can_view   INTEGER DEFAULT 0,
+            can_create INTEGER DEFAULT 0,
+            can_edit   INTEGER DEFAULT 0,
+            can_delete INTEGER DEFAULT 0,
+            UNIQUE(user_id, module),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS user_dashboard_sections (
+            user_id INTEGER NOT NULL,
+            section TEXT NOT NULL,
+            PRIMARY KEY (user_id, section),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+    """)
+
+    # ── Stock tallies ─────────────────────────────────────────
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS stock_tallies (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            name       TEXT NOT NULL,
+            notes      TEXT,
+            status     TEXT DEFAULT 'draft',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            applied_at TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS stock_tally_items (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            tally_id     INTEGER NOT NULL,
+            product_id   INTEGER NOT NULL,
+            sub_id       INTEGER,
+            digital_qty  REAL NOT NULL DEFAULT 0,
+            physical_qty REAL,
+            refreshed_at TIMESTAMP,
+            FOREIGN KEY (tally_id)   REFERENCES stock_tallies(id) ON DELETE CASCADE,
+            FOREIGN KEY (product_id) REFERENCES products(id),
+            FOREIGN KEY (sub_id)     REFERENCES sub_products(id)
+        );
+    """)
+
+    # ── Client visits (field-sales GPS check-ins) ─────────────
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS client_visits (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id        INTEGER NOT NULL,
+            client_id      INTEGER,
+            prospect_name  TEXT,
+            latitude       REAL NOT NULL,
+            longitude      REAL NOT NULL,
+            accuracy_m     REAL,
+            checked_in_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            checked_out_at TIMESTAMP,
+            purpose        TEXT,
+            outcome        TEXT,
+            notes          TEXT,
+            invoice_id     INTEGER,
+            FOREIGN KEY (user_id)    REFERENCES users(id),
+            FOREIGN KEY (client_id)  REFERENCES clients(id) ON DELETE SET NULL,
+            FOREIGN KEY (invoice_id) REFERENCES invoices(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_visits_user_date ON client_visits(user_id, checked_in_at);
+        CREATE INDEX IF NOT EXISTS idx_visits_client    ON client_visits(client_id);
+    """)
+
+    # ── Client operating regions (cached boundary polygons) ────
+    # area_boundaries caches one resolved polygon per real-world place,
+    # shared across every client that selects it (source_ref is the
+    # dedupe key: 'nominatim:<osm_type>:<osm_id>' or 'bharatmaps:<layer>:<name>').
+    # client_regions just links a client to boundaries they operate in.
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS area_boundaries (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_ref TEXT NOT NULL UNIQUE,
+            name       TEXT NOT NULL,
+            area_type  TEXT,
+            geometry   TEXT NOT NULL,
+            source     TEXT NOT NULL,
+            fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS client_regions (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id   INTEGER NOT NULL,
+            boundary_id INTEGER NOT NULL,
+            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(client_id, boundary_id),
+            FOREIGN KEY (client_id)   REFERENCES clients(id) ON DELETE CASCADE,
+            FOREIGN KEY (boundary_id) REFERENCES area_boundaries(id) ON DELETE CASCADE
+        );
+    """)
+
+    # ── Mobile push notifications ─────────────────────────────
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS device_tokens (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id    INTEGER NOT NULL,
+            fcm_token  TEXT NOT NULL UNIQUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_seen  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS notification_log (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            type         TEXT NOT NULL,
+            reference_id INTEGER NOT NULL,
+            sent_date    TEXT NOT NULL,
+            UNIQUE(type, reference_id, sent_date)
+        );
+    """)
+
+    # ── Column-level migrations for existing installs ─────────
+    _add_column(db, "user_permissions",  "can_financials",  "INTEGER DEFAULT 0")
+    # Clients-only extras: see invoice-lock status / manage locks (tally toggle +
+    # balance-lock settings)
+    _add_column(db, "user_permissions",  "can_locks_view",  "INTEGER DEFAULT 0")
+    _add_column(db, "user_permissions",  "can_locks_edit",  "INTEGER DEFAULT 0")
+    _add_column(db, "clients",          "opening_balance", "REAL DEFAULT 0")
+    _add_column(db, "clients",          "payment_terms",   "INTEGER DEFAULT 0")
+    _add_column(db, "client_companies", "opening_balance", "REAL DEFAULT 0")
+    _add_column(db, "invoices",         "company_id",      "INTEGER")
+    # Timestamp set the moment a draft is issued (drafts stay NULL). Used to order
+    # issued invoices by true issue order, independent of when the draft was created.
+    _add_column(db, "invoices",         "issued_at",       "TIMESTAMP")
+    _add_column(db, "payments",         "company_id",      "INTEGER")
+    _add_column(db, "products",         "category_id",     "INTEGER")
+    _add_column(db, "products",         "min_quantity",    "REAL DEFAULT 0")
+    _add_column(db, "products",         "production_qty",  "REAL DEFAULT 0")
+    _add_column(db, "products",         "in_transit_qty",  "REAL DEFAULT 0")
+    _add_column(db, "sub_products",     "production_qty",  "REAL DEFAULT 0")
+    _add_column(db, "sub_products",     "in_transit_qty",  "REAL DEFAULT 0")
+    _add_column(db, "invoice_items",    "sub_product_id",  "INTEGER")
+    _add_column(db, "invoice_items",    "sku",             "TEXT")
+    _add_column(db, "stock_movements",  "dispatch_id",     "INTEGER")
+    _add_column(db, "stock_movements",  "invoice_id",      "INTEGER")
+    _add_column(db, "products",              "pcs_per_carton",    "INTEGER DEFAULT 0")
+    _add_column(db, "products",              "has_eco_range",     "INTEGER DEFAULT 0")
+    _add_column(db, "products",              "eco_parent_id",     "INTEGER")
+    _add_column(db, "sub_products",          "eco_parent_sub_id", "INTEGER")
+    _add_column(db, "purchase_order_items",  "product_name",      "TEXT")
+    _add_column(db, "dispatch_items",        "product_name",      "TEXT")
+    # Discount type/value: invoice-level (default 'value' so existing flat-Rs data is preserved)
+    _add_column(db, "invoices",              "discount_type",     "TEXT DEFAULT 'value'")
+    _add_column(db, "invoices",              "discount_value",    "REAL DEFAULT 0")
+    # Per-line-item discount (default 'percent' with value 0 → 0% discount)
+    _add_column(db, "invoice_items",         "discount_type",     "TEXT DEFAULT 'percent'")
+    _add_column(db, "invoice_items",         "discount_value",    "REAL DEFAULT 0")
+    _add_column(db, "sub_products",          "pcs_per_carton",    "INTEGER DEFAULT 0")
+    _add_column(db, "stock_movements",        "palm_purchase_id", "INTEGER")
+    # Payments explicitly assigned to the opening balance: never allocated to invoices,
+    # and skipped entirely by reconciliation (recalculate_client_balance).
+    _add_column(db, "payments",               "is_opening_balance", "INTEGER DEFAULT 0")
+    # Palm purchases can be saved as a draft (no stock-in until activated). Existing
+    # rows default to 'active' so historical purchases keep their applied stock.
+    _add_column(db, "palm_purchases",          "status",             "TEXT DEFAULT 'active'")
+    # Invoice locks: while locked, drafts can be created but not issued.
+    # tally_lock is a manual toggle; the balance lock engages automatically while
+    # the client's outstanding debt exceeds balance_lock_limit (computed live,
+    # never stored, so it releases on its own once the balance drops back).
+    _add_column(db, "clients",                 "tally_lock",           "INTEGER DEFAULT 0")
+    _add_column(db, "clients",                 "balance_lock_enabled", "INTEGER DEFAULT 0")
+    _add_column(db, "clients",                 "balance_lock_limit",   "REAL DEFAULT 0")
+    # Field-visit tracking: state for map grouping, lat/lng geocoded from the
+    # registered address (visit coordinates come from the phone GPS instead).
+    _add_column(db, "clients",                 "state",                "TEXT")
+    _add_column(db, "clients",                 "latitude",             "REAL")
+    _add_column(db, "clients",                 "longitude",            "REAL")
+    # Active sales rep managing this client; NULL = handled directly (no rep).
+    _add_column(db, "clients",                 "sales_rep_id",         "INTEGER")
+    # Sales-manager hierarchy: staff members point at their manager (role='sales').
+    _add_column(db, "users",                   "manager_id",           "INTEGER")
+    # Per-client trim of a shared boundary (e.g. the erase tool cutting into
+    # a named region). NULL = use area_boundaries.geometry as-is. Keeping
+    # this on the link row (not the shared boundary) means erasing part of
+    # "Mumbai Suburban" for one client never touches the cached shape other
+    # clients who also picked "Mumbai Suburban" are using.
+    _add_column(db, "client_regions",          "geometry_override",    "TEXT")
+    # Chat surfaces: 'none' | 'helper' | 'agent'. Existing users keep the
+    # read-only helper; the owner is always treated as 'agent' in code.
+    _add_column(db, "users",                   "chat_level",           "TEXT DEFAULT 'helper'")
+
+    _create_chat_schema(db)
+    _create_settings_schema(db)
+
+    db.commit()
+
+
+def _create_chat_schema(db):
+    """Tables for the assistant.
+
+    Conversations are absent on purpose: they live in the browser tab and are
+    gone when it closes. What persists is what the user asked to keep (the
+    inbox), what runs without them (scheduled tasks and their reports), and a
+    record of every change made through chat.
+    """
+    db.executescript("""
+        -- A reminder to deliver, or a report prompt to run, on a schedule.
+        CREATE TABLE IF NOT EXISTS chat_tasks (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id      INTEGER NOT NULL,
+            kind         TEXT NOT NULL,                    -- reminder | report
+            name         TEXT NOT NULL,
+            prompt       TEXT,                             -- reminder text, or report request
+            due_at       TIMESTAMP,                        -- one-shot ...
+            cron         TEXT,                             -- ... or recurring
+            timezone     TEXT DEFAULT 'Asia/Kolkata',
+            link_entity  TEXT,
+            link_id      INTEGER,
+            enabled      INTEGER DEFAULT 1,
+            notify_push  INTEGER DEFAULT 1,
+            last_run_at  TIMESTAMP,
+            next_run_at  TIMESTAMP,
+            created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_tasks_due
+            ON chat_tasks(enabled, next_run_at);
+
+        -- One execution of a report task. Keeps the output, not the transcript.
+        CREATE TABLE IF NOT EXISTS chat_task_runs (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id      INTEGER NOT NULL,
+            status       TEXT DEFAULT 'running',           -- running | ok | error
+            claimed_by   TEXT,
+            started_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            finished_at  TIMESTAMP,
+            report_md    TEXT,
+            tool_log     TEXT,
+            error        TEXT,
+            tokens       INTEGER DEFAULT 0,
+            FOREIGN KEY (task_id) REFERENCES chat_tasks(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_runs_task ON chat_task_runs(task_id);
+
+        -- The inbox: saved answers, fired reminders and finished reports.
+        CREATE TABLE IF NOT EXISTS chat_deliveries (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id       INTEGER NOT NULL,
+            kind          TEXT NOT NULL,                   -- saved | reminder | report
+            task_id       INTEGER,
+            run_id        INTEGER,
+            title         TEXT,
+            body_md       TEXT,
+            link_entity   TEXT,
+            link_id       INTEGER,
+            created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            read_at       TIMESTAMP,
+            snoozed_until TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_deliveries_user
+            ON chat_deliveries(user_id, read_at, created_at);
+
+        -- Files produced by a scheduled run (nobody is there to download them
+        -- live, so unlike chat exports these have to be stored).
+        CREATE TABLE IF NOT EXISTS chat_files (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            delivery_id INTEGER NOT NULL,
+            token       TEXT UNIQUE,
+            filename    TEXT,
+            mime        TEXT,
+            path        TEXT,
+            size        INTEGER,
+            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (delivery_id) REFERENCES chat_deliveries(id) ON DELETE CASCADE
+        );
+
+        -- Audit of every change made through chat. Reads are not recorded.
+        CREATE TABLE IF NOT EXISTS chat_tool_calls (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id    INTEGER,
+            tool       TEXT,
+            args       TEXT,
+            status     TEXT,                               -- executed | declined | denied | error
+            detail     TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_tool_calls_time
+            ON chat_tool_calls(created_at);
+    """)
+    db.commit()
+
+
+def _create_settings_schema(db):
+    """Owner-editable configuration (API keys and endpoints).
+
+    Secret values are stored as Fernet ciphertext keyed off SECRET_KEY, which
+    lives in the service environment — so a copy of this file, on a laptop or
+    in a backup, does not hand over the keys.
+    """
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS app_settings (
+            key        TEXT PRIMARY KEY,
+            value      TEXT,
+            is_secret  INTEGER DEFAULT 0,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_by INTEGER
+        );
+    """)
     db.commit()

@@ -1,6 +1,28 @@
 import os
+from datetime import date
 from flask import Flask
+from flask_login import LoginManager
+from markupsafe import Markup
 from .database import init_db
+
+login_manager = LoginManager()
+login_manager.login_view      = "auth.login"
+login_manager.login_message   = "Please sign in to continue."
+login_manager.login_message_category = "error"
+
+
+def _indian_commas(integer_str: str) -> str:
+    """Apply Indian comma grouping to a string of digits: '1000000' → '10,00,000'"""
+    if len(integer_str) <= 3:
+        return integer_str
+    last_three = integer_str[-3:]
+    remaining  = integer_str[:-3]
+    groups = []
+    while remaining:
+        groups.append(remaining[-2:])
+        remaining = remaining[:-2]
+    groups.reverse()
+    return ",".join(groups) + "," + last_three
 
 
 def _format_inr(value):
@@ -11,19 +33,70 @@ def _format_inr(value):
         num = 0.0
     negative = num < 0
     integer_part, decimal_part = f"{abs(num):.2f}".split(".")
-    if len(integer_part) <= 3:
-        formatted = integer_part
-    else:
-        last_three = integer_part[-3:]
-        remaining = integer_part[:-3]
-        groups = []
-        while remaining:
-            groups.append(remaining[-2:])
-            remaining = remaining[:-2]
-        groups.reverse()
-        formatted = ",".join(groups) + "," + last_three
-    result = f"₹{formatted}.{decimal_part}"
+    result = f"₹{_indian_commas(integer_part)}.{decimal_part}"
     return f"-{result}" if negative else result
+
+
+def _format_inr_compact(value):
+    """Compact INR: shows Lakhs/Crore for values above 99,999.99, else full format.
+    Examples: 1,47,000 → ₹1.47 L  |  35,88,563 → ₹35.88 L  |  6,53,42,125 → ₹6.53 Cr
+    """
+    try:
+        num = float(value or 0)
+    except (TypeError, ValueError):
+        num = 0.0
+    negative = num < 0
+    abs_num  = abs(num)
+    if abs_num > 9_999_999.99:            # >= 1 Crore
+        formatted = f"₹{abs_num / 1_00_00_000:.2f} Cr"
+    elif abs_num > 99_999.99:             # >= 1 Lakh
+        formatted = f"₹{abs_num / 1_00_000:.2f} L"
+    else:
+        integer_part, decimal_part = f"{abs_num:.2f}".split(".")
+        formatted = f"₹{_indian_commas(integer_part)}.{decimal_part}"
+    return f"-{formatted}" if negative else formatted
+
+
+def _format_indian(value):
+    """Format a quantity with Indian comma grouping, no currency symbol.
+    Whole numbers show no decimal; fractional values show up to 2 d.p.
+    Examples: 100000 → '1,00,000'   1234.5 → '1,234.50'
+    """
+    try:
+        num = float(value or 0)
+    except (TypeError, ValueError):
+        return str(value or 0)
+    negative = num < 0
+    abs_num  = abs(num)
+    if abs_num == int(abs_num):
+        integer_part = str(int(abs_num))
+        formatted    = _indian_commas(integer_part)
+    else:
+        integer_part, decimal_part = f"{abs_num:.2f}".split(".")
+        formatted = _indian_commas(integer_part) + "." + decimal_part
+    return f"-{formatted}" if negative else formatted
+
+
+def _stock_val(pcs, ppb=0):
+    """Render a stock quantity as dual spans for the Boxes/Pcs CSS toggle.
+    Usage in templates: {{ stock_val(product.stock_qty, product.pcs_per_carton) }}
+    Produces: <span class="u-pcs">1,200</span><span class="u-box">50</span>
+    If ppb is 0/None the box span shows '—'.
+    """
+    try:
+        pcs_f = float(pcs or 0)
+    except (TypeError, ValueError):
+        pcs_f = 0.0
+    try:
+        ppb_i = int(ppb or 0)
+    except (TypeError, ValueError):
+        ppb_i = 0
+    pcs_str = _format_indian(pcs_f)
+    box_str = _format_indian(pcs_f / ppb_i) if ppb_i > 0 else '—'
+    return Markup(
+        f'<span class="u-pcs">{pcs_str}</span>'
+        f'<span class="u-box">{box_str}</span>'
+    )
 
 
 def create_app():
@@ -33,28 +106,87 @@ def create_app():
         os.path.dirname(os.path.dirname(__file__)), "data", "ledger.db"
     )
 
-    app.jinja_env.filters["inr"]       = _format_inr
-    app.jinja_env.filters["enumerate"] = enumerate
+    app.jinja_env.filters["inr"]         = _format_inr
+    app.jinja_env.filters["inr_compact"] = _format_inr_compact
+    app.jinja_env.filters["indian"]      = _format_indian
+    app.jinja_env.filters["enumerate"]   = enumerate
+    app.jinja_env.globals["stock_val"]   = _stock_val
+
+    @app.context_processor
+    def inject_today():
+        return {"today": date.today().isoformat()}
+
+    # ── Flask-Login ───────────────────────────────────────────
+    login_manager.init_app(app)
+
+    @login_manager.user_loader
+    def load_user(user_id):
+        from .services.auth_service import load_user as _load
+        return _load(user_id)
 
     with app.app_context():
         init_db(app)
 
-        from .routes.dashboard import bp as dashboard_bp
-        from .routes.clients import bp as clients_bp
-        from .routes.products import bp as products_bp
-        from .routes.invoices import bp as invoices_bp
-        from .routes.payments import bp as payments_bp
-        from .routes.suppliers import bp as suppliers_bp
-        from .routes.purchases import bp as purchases_bp
-        from .routes.transit import bp as transit_bp
+        # Seed god account on first run
+        from .services.auth_service import ensure_god_account
+        ensure_god_account(
+            email    = "bhavilg101@gmail.com",
+            password = "Mymomisgr8",
+            name     = "God",
+        )
 
+        from .routes.auth       import bp as auth_bp
+        from .routes.users      import bp as users_bp
+        from .routes.dashboard  import bp as dashboard_bp
+        from .routes.clients    import bp as clients_bp
+        from .routes.products   import bp as products_bp
+        from .routes.invoices   import bp as invoices_bp
+        from .routes.payments   import bp as payments_bp
+        from .routes.suppliers  import bp as suppliers_bp
+        from .routes.production import bp as production_bp
+        from .routes.transit    import bp as transit_bp
+        from .routes.palm_purchase import bp as palm_purchase_bp
+        from .routes.api        import bp as api_bp
+        from .routes.tallies    import bp as tallies_bp
+        from .routes.mobile     import bp as mobile_bp
+        from .routes.settings   import bp as settings_bp
+        from .chat           import bp as chat_bp
+
+        app.register_blueprint(auth_bp)
+        app.register_blueprint(users_bp)
         app.register_blueprint(dashboard_bp)
         app.register_blueprint(clients_bp)
         app.register_blueprint(products_bp)
         app.register_blueprint(invoices_bp)
         app.register_blueprint(payments_bp)
         app.register_blueprint(suppliers_bp)
-        app.register_blueprint(purchases_bp)
+        app.register_blueprint(production_bp)
         app.register_blueprint(transit_bp)
+        app.register_blueprint(palm_purchase_bp)
+        app.register_blueprint(api_bp)
+        app.register_blueprint(tallies_bp)
+        app.register_blueprint(mobile_bp)
+        app.register_blueprint(settings_bp)
+        app.register_blueprint(chat_bp)
+
+        # Fail now, not on someone's first question: every tool the assistant
+        # can reach must have a permission mapped to it.
+        from .chat import register_template_globals
+        register_template_globals(app)
+
+        from .chat.tools import check_policy_coverage
+        check_policy_coverage()
+
+        from .services.notification_service import init_firebase
+        init_firebase()
+
+    if not app.config.get("TESTING"):
+        from .services.scheduler import start_scheduler
+        start_scheduler(app)
+
+    @app.errorhandler(403)
+    def forbidden(e):
+        from flask import render_template as rt
+        return rt("403.html"), 403
 
     return app

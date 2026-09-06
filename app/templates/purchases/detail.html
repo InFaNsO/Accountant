@@ -4,7 +4,7 @@
 {% block topbar_actions %}
   {% if po.status == 'open' %}
   <form method="post" action="{{ url_for('purchases.close_purchase', po_id=po.id) }}" style="display:inline">
-    <button class="btn btn-secondary" onclick="return confirm('Mark this order as closed?')">Mark Closed</button>
+    <button class="btn btn-secondary" onclick="return confirm('Mark this order as closed?')"><span class="btn-label-mobile">Mark Closed</span><span class="lbl-mobile-only">Close</span></button>
   </form>
   <a href="{{ url_for('purchases.edit_purchase', po_id=po.id) }}" class="btn btn-secondary">Edit</a>
   {% endif %}
@@ -17,7 +17,7 @@
 {% block content %}
 
 <!-- Header -->
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px">
+<div class="grid-collapse" style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px">
   <div class="card">
     <div class="card-header"><span class="card-title">Order Info</span></div>
     <div class="card-body" style="padding:0">
@@ -36,7 +36,7 @@
   <div class="card">
     <div class="card-header"><span class="card-title">Summary</span></div>
     <div class="card-body">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div class="grid-collapse-2" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
         <div style="text-align:center;padding:16px;background:var(--bg-alt);border-radius:var(--radius-sm)">
           <div style="font-size:26px;font-weight:700;color:var(--primary)">{{ items|length }}</div>
           <div style="font-size:12px;color:var(--text-muted);margin-top:2px">Product Lines</div>
@@ -73,10 +73,10 @@
         {% set pct = ((it.qty_dispatched or 0) / it.quantity * 100)|round(0)|int if it.quantity > 0 else 0 %}
         <tr>
           <td class="fw-700">{{ it.display_name }}</td>
-          <td style="text-align:right">{{ it.quantity }}</td>
-          <td style="text-align:right;color:var(--warning)">{{ it.qty_dispatched or 0 }}</td>
+          <td style="text-align:right">{{ it.quantity | indian }}</td>
+          <td style="text-align:right;color:var(--warning)">{{ it.qty_dispatched | indian if it.qty_dispatched else 0 }}</td>
           <td style="text-align:right;font-weight:700;color:{% if remaining <= 0 %}var(--success){% else %}var(--text){% endif %}">
-            {{ remaining|round(2) }}
+            {{ remaining | indian }}
           </td>
           <td style="text-align:right">{% if it.price %}{{ it.price|inr }}{% else %}<span class="muted">—</span>{% endif %}</td>
           <td style="min-width:120px">

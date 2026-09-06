@@ -1,92 +1,1448 @@
 {% extends "base.html" %}
 {% block title %}{{ client.name }}{% endblock %}
 {% block page_title %}{{ client.name }}{% endblock %}
+{% block chat_context %}data-chat-context='{"module": "clients", "entity": "client", "id": {{ client.id }}, "label": {{ (client.name)|tojson }}}'{% endblock %}
 {% block topbar_actions %}
   <a href="{{ url_for('invoices.new_invoice') }}?client_id={{ client.id }}" class="btn btn-primary">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-    New Invoice
+    <span class="btn-label-mobile">New Invoice</span>
   </a>
   <a href="{{ url_for('clients.edit_client', client_id=client.id) }}" class="btn btn-secondary">Edit</a>
   <form class="confirm-inline" method="post" action="{{ url_for('clients.delete_client', client_id=client.id) }}" onsubmit="return confirm('Delete this client?')">
-    <button class="btn btn-danger">Delete</button>
+    <button class="btn btn-danger">Del</button>
   </form>
 {% endblock %}
 
 {% block content %}
+<style>
+  .np-cat { border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; }
+  .np-cat > summary {
+    list-style:none; cursor:pointer; user-select:none;
+    display:flex; align-items:center; gap:8px;
+    padding:9px 12px; font-size:13px; font-weight:600;
+    background:var(--bg-subtle, rgba(0,0,0,.02));
+  }
+  .np-cat > summary::-webkit-details-marker { display:none; }
+  .np-cat > summary::before {
+    content:"▸"; color:var(--text-muted); font-size:11px;
+    transition:transform .12s ease;
+  }
+  .np-cat[open] > summary::before { transform:rotate(90deg); }
+  .np-cat .np-cat-count { margin-left:0; }
+  .np-cat-meta { margin-left:auto; display:flex; align-items:center; gap:10px; }
+  .np-cat-amount { font-size:12.5px; font-weight:700; color:var(--text-primary); }
+  .np-cat-boxes { font-size:11.5px; font-weight:600; color:var(--text-muted); }
+  .np-list { margin:0; padding:6px 12px 10px 30px; list-style:disc; }
+  .np-list li { font-size:13px; padding:2px 0; }
+  .np-list a { color:var(--accent); text-decoration:none; }
+  .np-list a:hover { text-decoration:underline; }
+  /* Purchased products grouped under a category */
+  .np-prod-table { width:100%; border-collapse:collapse; }
+  .np-prod-table td { padding:7px 12px; font-size:13px; border-top:1px solid var(--border); }
+  .np-prod-table td:first-child { padding-left:30px; font-weight:600; }
+  .np-prod-table td.num { text-align:right; font-weight:600; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  #regionSearch { width:100%; }
+  .region-item { display:flex; align-items:center; gap:8px; padding:8px 10px; border:1px solid var(--border); border-radius:var(--radius-sm); font-size:13px; }
+  .region-item .region-swatch { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
+  .region-item .region-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .region-item .region-type { font-size:11px; color:var(--text-muted); text-transform:capitalize; }
+  .region-search-row { display:flex; align-items:center; gap:8px; padding:9px 12px; cursor:pointer; font-size:13px; }
+  .region-search-row:hover { background:var(--bg-subtle, rgba(0,0,0,.03)); }
+  .region-search-row:not(:last-child) { border-bottom:1px solid var(--border); }
+  .region-pin-row { display:flex; align-items:center; gap:8px; padding:9px 12px; cursor:pointer; font-size:13px; }
+  .region-pin-row:hover { background:var(--bg-subtle, rgba(0,0,0,.03)); }
+  .region-pin-row:not(:last-child) { border-bottom:1px solid var(--border); }
+  .region-pin-swatch { width:12px; height:12px; border-radius:3px; flex-shrink:0; }
+  #regionMap.pin-drop-active .maplibregl-canvas { cursor:crosshair; }
+  @media (max-width: 720px) {
+    .region-layout { grid-template-columns:1fr !important; }
+    /* Let the picker share the row and shrink so it never stacks */
+    .range-picker input[type=date] { flex:1 1 0; width:auto; }
+    .range-picker select { max-width:120px; }
+    .pay-co-select { min-width:86px; max-width:118px; font-size:12px; padding:4px; }
+  }
+  /* Invoices / Payments sections — scroll after ~5 rows, sticky header */
+  .tbl-scroll { max-height:320px; overflow-y:auto; scrollbar-width:thin; scrollbar-color:var(--border) transparent; }
+  .tbl-scroll::-webkit-scrollbar { width:4px; }
+  .tbl-scroll::-webkit-scrollbar-thumb { background:var(--border); border-radius:99px; }
+  .tbl-scroll thead th { position:sticky; top:0; z-index:1; }
+  .section-summary {
+    display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+    padding:8px 16px; border-bottom:1px solid var(--border);
+    font-size:12.5px; color:var(--text-muted);
+  }
+  .section-summary-amt { font-weight:700; color:var(--text-primary); }
+  .section-summary-win { margin-left:auto; font-size:11.5px; text-transform:uppercase; letter-spacing:.04em; }
+  /* Per-section date-range picker in the card header — stays on one line */
+  .range-picker { display:flex; gap:5px; align-items:center; flex-wrap:nowrap; margin-left:auto; min-width:0; }
+  .range-picker select, .range-picker input[type=date] {
+    font-size:12px; padding:4px 6px; border:1px solid var(--border);
+    border-radius:var(--radius-sm); background:var(--surface); color:var(--text-primary);
+    min-width:0;
+  }
+  .range-picker select { cursor:pointer; width:auto; max-width:132px; flex:0 1 auto; }
+  .range-picker input[type=date] { width:122px; flex:0 1 122px; }
+  .range-picker .rp-dash { color:var(--text-muted); flex-shrink:0; }
+  .range-picker .btn { flex:0 0 auto; white-space:nowrap; }
+  /* Payment → company assign / re-assign dropdown */
+  .pay-co-select {
+    width:auto; min-width:96px; max-width:140px; font-size:12.5px;
+    padding:4px 6px; border:1px solid var(--border); border-radius:var(--radius-sm);
+    background:var(--surface); color:var(--text-primary); cursor:pointer;
+  }
+  .pay-co-select.unassigned { border-color:var(--warning); }
+</style>
+<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
+<style>
+  /* MapLibre popups default to a white box + black text — force them onto
+     the app's theme variables so they stay readable in dark mode too. */
+  #regionMap .maplibregl-popup-content {
+    background: var(--surface);
+    color: var(--text-primary);
+    box-shadow: var(--shadow-md);
+    border: 1px solid var(--border);
+    font-size: 12.5px;
+  }
+  #regionMap .maplibregl-popup-anchor-bottom .maplibregl-popup-tip { border-top-color: var(--surface); }
+  #regionMap .maplibregl-popup-anchor-top .maplibregl-popup-tip { border-bottom-color: var(--surface); }
+  #regionMap .maplibregl-popup-anchor-left .maplibregl-popup-tip { border-right-color: var(--surface); }
+  #regionMap .maplibregl-popup-anchor-right .maplibregl-popup-tip { border-left-color: var(--surface); }
+  #regionMap .maplibregl-popup-close-button { color: var(--text-primary); }
+
+  /* Full-screen expand: the card pops out to a near-viewport-filling popup,
+     the map/list grid grows to fill it. */
+  #regionsBackdrop {
+    display: none; position: fixed; inset: 0; z-index: 9998;
+    background: rgba(0,0,0,.55);
+  }
+  #regionsBackdrop.active { display: block; }
+  #regionsCard.map-fullscreen {
+    position: fixed; inset: 3vh; z-index: 9999; margin: 0;
+    display: flex; flex-direction: column;
+    box-shadow: 0 20px 60px rgba(0,0,0,.45);
+  }
+  #regionsCard.map-fullscreen .card-body {
+    flex: 1; display: flex; flex-direction: column; overflow: auto;
+  }
+  #regionsCard.map-fullscreen .region-layout { flex: 1; min-height: 0; }
+  #regionsCard.map-fullscreen #regionMap { height: 100% !important; }
+  #regionsCard.map-fullscreen .region-layout > div:last-child { max-height: none !important; }
+  body.map-fullscreen-active { overflow: hidden; }
+  .map-expand-btn {
+    display: flex; align-items: center; justify-content: center;
+    width: 26px; height: 26px; border-radius: var(--radius-sm);
+    color: var(--text-muted); background: transparent; border: none; cursor: pointer;
+  }
+  .map-expand-btn:hover { background: var(--bg); color: var(--text-primary); }
+</style>
+{% set RANGE_PRESETS = [
+    ('today','Today'),('yesterday','Yesterday'),
+    ('this_week','This Week'),('last_week','Last Week'),
+    ('last_15','Last 15 Days'),('last_30','Last 30 Days'),
+    ('this_month','This Month'),
+    ('last_2_months','Last 2 Months'),('60_days','60 Days'),
+    ('90_days','90 Days'),('this_year','This Year'),
+    ('current_fy','Current FY'),('last_fy','Last FY'),
+    ('all','All Time'),('custom','Custom')
+] %}
+{% macro range_picker(kind, client_id, window, date_from, date_to) %}
+<form class="range-picker" onsubmit="event.preventDefault();clientSectionFetch('{{ kind }}',{{ client_id }})">
+  <select id="{{ kind }}-win" onchange="clientSectionPreset('{{ kind }}',{{ client_id }})">
+    {% for val, lbl in RANGE_PRESETS %}
+    <option value="{{ val }}"{% if window == val %} selected{% endif %}>{{ lbl }}</option>
+    {% endfor %}
+  </select>
+  <input type="date" id="{{ kind }}-from" value="{{ date_from }}" onchange="clientSectionDate('{{ kind }}')">
+  <span class="rp-dash">—</span>
+  <input type="date" id="{{ kind }}-to" value="{{ date_to }}" onchange="clientSectionDate('{{ kind }}')">
+  <button type="submit" class="btn btn-primary btn-sm">Apply</button>
+</form>
+{% endmacro %}
 <div class="detail-grid">
   <!-- Left: info + invoices -->
   <div style="display:flex;flex-direction:column;gap:22px">
 
+
     <div class="card">
-      <div class="card-header"><span class="card-title">Contact Details</span></div>
-      <div class="card-body">
-        <div class="info-list">
-          {% if client.company %}<div class="info-row"><span class="info-label">Company</span><span class="info-value fw-700">{{ client.company }}</span></div>{% endif %}
-          {% if client.email %}<div class="info-row"><span class="info-label">Email</span><span class="info-value"><a href="mailto:{{ client.email }}" style="color:var(--accent)">{{ client.email }}</a></span></div>{% endif %}
-          {% if client.phone %}<div class="info-row"><span class="info-label">Phone</span><span class="info-value">{{ client.phone }}</span></div>{% endif %}
-          {% if client.address or client.city %}<div class="info-row"><span class="info-label">Address</span><span class="info-value">{{ [client.address, client.city, client.country]|select|join(', ') }}</span></div>{% endif %}
-          {% if client.tax_id %}<div class="info-row"><span class="info-label">Tax ID</span><span class="info-value font-mono">{{ client.tax_id }}</span></div>{% endif %}
-          {% if client.notes %}<div class="info-row"><span class="info-label">Notes</span><span class="info-value text-muted">{{ client.notes }}</span></div>{% endif %}
-        </div>
+      <div class="card-header">
+        <span class="card-title">Invoices</span>
+        {{ range_picker('invoices', client.id, section_window, section_from, section_to) }}
+      </div>
+      <div id="invoices-section">
+        {% set window_label = section_window_label %}
+        {% include "clients/_invoices_table.html" with context %}
       </div>
     </div>
 
+    {% if can_financials %}
     <div class="card">
-      <div class="card-header"><span class="card-title">Invoices ({{ invoices|length }})</span></div>
-      {% if invoices %}
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Invoice</th><th>Date</th><th>Due</th><th>Total</th><th>Paid</th><th>Status</th><th></th></tr></thead>
-          <tbody>
-            {% for inv in invoices %}
-            <tr>
-              <td><a href="{{ url_for('invoices.detail', invoice_id=inv.id) }}" style="font-weight:600;color:var(--accent);text-decoration:none">{{ inv.invoice_number }}</a></td>
-              <td class="muted">{{ inv.issue_date }}</td>
-              <td class="muted">{{ inv.due_date or '—' }}</td>
-              <td class="fw-700">{{ inv.total|inr }}</td>
-              <td>{{ inv.amount_paid|inr }}</td>
-              <td><span class="badge badge-{{ inv.status }}">{{ inv.status }}</span></td>
-              <td><a href="{{ url_for('invoices.detail', invoice_id=inv.id) }}" class="btn btn-ghost btn-sm">View</a></td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
+      <div class="card-header">
+        <span class="card-title">Payments</span>
+        {{ range_picker('payments', client.id, section_window, section_from, section_to) }}
+      </div>
+      <div id="payments-section">
+        {% set window_label = section_window_label %}
+        {% set client_id = client.id %}
+        {% include "clients/_payments_table.html" with context %}
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Products purchased in the recent window -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Products Purchased
+          <span class="text-muted" style="font-weight:500">· last {{ product_breakdown.period_label }}</span>
+        </span>
+        <span class="badge" style="margin-left:auto">{{ product_breakdown.purchased|length }}</span>
+      </div>
+      {% if product_breakdown.purchased_by_category %}
+      <div class="card-body" style="display:flex;flex-direction:column;gap:6px">
+        {% for cat in product_breakdown.purchased_by_category %}
+        <details class="np-cat">
+          <summary>
+            <span class="np-cat-name">{{ cat.category_name }}</span>
+            <span class="np-cat-meta">
+              {% if can_financials %}<span class="np-cat-amount">{{ cat.total_amount|inr }}</span>{% endif %}
+              {% if cat.any_box_size %}<span class="np-cat-boxes">{{ cat.total_boxes|round(1) }} bx</span>{% endif %}
+              <span class="badge np-cat-count">{{ cat.products|length }}</span>
+            </span>
+          </summary>
+          <table class="np-prod-table">
+            <tbody>
+              {% for p in cat.products %}
+              <tr>
+                <td>{{ p.name }}</td>
+                <td class="num">
+                  {% if p.has_box_size %}{{ p.total_boxes|round(1) }}
+                  {% else %}<span class="muted" title="No box size configured">{{ p.total_qty|round(0)|int }} pcs</span>{% endif %}
+                </td>
+                {% if can_financials %}<td class="num">{{ p.total_amount|inr }}</td>{% endif %}
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </details>
+        {% endfor %}
       </div>
       {% else %}
-      <div class="empty-state" style="padding:30px">
-        <p>No invoices for this client yet.</p>
+      <div class="empty-state" style="padding:24px">
+        <p style="font-size:13px;color:var(--text-muted)">No products purchased in the last {{ product_breakdown.period_label }}.</p>
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- Products NOT purchased in the recent window (collapsible by category) -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Not Purchased
+          <span class="text-muted" style="font-weight:500">· last {{ product_breakdown.period_label }}</span>
+        </span>
+        <span class="badge" style="margin-left:auto">{{ product_breakdown.not_purchased|map(attribute='products')|map('length')|sum }}</span>
+      </div>
+      {% if product_breakdown.not_purchased %}
+      <div class="card-body" style="display:flex;flex-direction:column;gap:6px">
+        {% for cat in product_breakdown.not_purchased %}
+        <details class="np-cat">
+          <summary>
+            <span class="np-cat-name">{{ cat.category_name }}</span>
+            <span class="badge np-cat-count">{{ cat.products|length }}</span>
+          </summary>
+          <ul class="np-list">
+            {% for p in cat.products %}
+            <li><a href="{{ url_for('products.product_detail', product_id=p.id) }}">{{ p.name }}</a></li>
+            {% endfor %}
+          </ul>
+        </details>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="empty-state" style="padding:24px">
+        <p style="font-size:13px;color:var(--text-muted)">This client has purchased every active product in the last {{ product_breakdown.period_label }}.</p>
       </div>
       {% endif %}
     </div>
 
   </div>
 
-  <!-- Right: balance -->
+  <!-- Right: balance + summary + companies -->
   <div style="display:flex;flex-direction:column;gap:22px">
-    <div class="card">
-      <div class="card-header"><span class="card-title">Balance</span></div>
+
+    <!-- Invoice locks (requires clients → Invoice Locks view permission) -->
+    {% if can_locks_view %}
+    <div class="card" {% if lock.locked %}style="border:1px solid var(--danger)"{% endif %}>
+      <div class="card-header">
+        <span class="card-title">Invoice Lock</span>
+        {% if lock.locked %}
+        <span class="badge" style="margin-left:auto;background:var(--danger-light);color:#991B1B;font-weight:700">🔒 LOCKED</span>
+        {% else %}
+        <span class="badge" style="margin-left:auto;background:var(--success-light);color:#065F46;font-weight:700">Unlocked</span>
+        {% endif %}
+      </div>
       <div class="card-body">
+        {% if lock.locked %}
+        <p style="font-size:13px;color:var(--danger);margin:0 0 12px">
+          Drafts can be created, but invoices cannot be issued — {{ lock.reasons | join('; ') }}.
+        </p>
+        {% endif %}
+        <div class="info-list">
+          <div class="info-row">
+            <span class="info-label">Tally lock</span>
+            <span class="info-value" style="display:flex;align-items:center;gap:8px">
+              <span id="tallyLockState" style="font-weight:700;color:{{ 'var(--danger)' if lock.tally_lock else 'var(--text-muted)' }}">
+                {{ 'ON' if lock.tally_lock else 'off' }}
+              </span>
+              {% if can_locks %}
+              <button id="tallyLockBtn" class="btn btn-sm {{ 'btn-secondary' if lock.tally_lock else 'btn-danger' }}"
+                      onclick="toggleTallyLock({{ client.id }})">
+                {{ 'Unlock' if lock.tally_lock else 'Lock' }}
+              </button>
+              {% endif %}
+            </span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Balance lock</span>
+            <span class="info-value">
+              {% if lock.balance_lock_enabled and lock.balance_lock_limit > 0 %}
+                {% if lock.balance_lock %}
+                <span style="color:var(--danger);font-weight:700">TRIGGERED</span>
+                {% else %}
+                <span style="color:var(--success);font-weight:600">armed</span>
+                {% endif %}
+                <span class="text-muted" style="font-size:12px">· limit {{ lock.balance_lock_limit|inr }}</span>
+              {% elif lock.balance_lock_enabled %}
+                <span class="text-muted">enabled, no limit set</span>
+              {% else %}
+                <span class="text-muted">off</span>
+              {% endif %}
+            </span>
+          </div>
+          {% if can_financials and lock.balance_lock_enabled and lock.balance_lock_limit > 0 %}
+          <div class="info-row">
+            <span class="info-label">Debt vs limit</span>
+            <span class="info-value" style="font-weight:600;color:{{ 'var(--danger)' if lock.balance_lock else 'var(--text-primary)' }}">
+              {{ lock.debt|inr }} / {{ lock.balance_lock_limit|inr }}
+            </span>
+          </div>
+          {% endif %}
+        </div>
+        {% if can_locks %}
+        <div style="margin-top:10px;font-size:11.5px;color:var(--text-muted)">
+          Configure locks in <a href="{{ url_for('clients.edit_client', client_id=client.id) }}" style="color:var(--accent)">client settings</a>.
+        </div>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+    {% if can_financials %}
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title" style="cursor:pointer" onclick="showClientLedger({{ client.id }}, '{{ client.name|replace("'", "\\'") }}')" title="Click to view full ledger">Balance</span>
+        <span style="font-size:11px;color:var(--text-muted);margin-left:8px;cursor:pointer" onclick="showClientLedger({{ client.id }}, '{{ client.name|replace("'", "\\'") }}')">Click to view ledger</span>
+        <button id="recalcBtn" class="btn btn-secondary btn-sm" style="margin-left:auto"
+                onclick="recalculateBalance({{ client.id }})">Recalculate</button>
+      </div>
+      <div class="card-body" id="balanceBody"
+           style="cursor:pointer" title="Click to view ledger"
+           onclick="showClientLedger({{ client.id }}, '{{ client.name|replace("'", "\\'") }}')">
         <div class="stat-value" style="font-size:32px;color:{% if balance < 0 %}var(--danger){% elif balance > 0 %}var(--success){% else %}var(--warning){% endif %}">
           {{ balance|inr }}
         </div>
         <div class="stat-sub mt-4">{% if balance < 0 %}Outstanding balance{% elif balance > 0 %}Overpaid — credit available{% else %}Settled{% endif %}</div>
       </div>
     </div>
+    {% endif %}
 
     <div class="card">
       <div class="card-header"><span class="card-title">Summary</span></div>
       <div class="card-body">
         <div class="info-list">
-          <div class="info-row"><span class="info-label">Invoices</span><span class="info-value fw-700">{{ invoices|length }}</span></div>
-          <div class="info-row"><span class="info-label">Paid</span><span class="info-value" style="color:var(--success)">{{ invoices|selectattr('status','eq','paid')|list|length }}</span></div>
-          <div class="info-row"><span class="info-label">Pending</span><span class="info-value" style="color:var(--warning)">{{ invoices|selectattr('status','in',['sent','partial'])|list|length }}</span></div>
-          {% if client.opening_balance %}
-          <div class="info-row"><span class="info-label">Opening bal.</span><span class="info-value" style="color:var(--text-secondary)">{{ client.opening_balance|inr }}</span></div>
+          <div class="info-row">
+            <span class="info-label">Sales Rep</span>
+            <span class="info-value">
+              {% if rep_name %}{{ rep_name }}{% else %}<span class="text-muted">None</span>{% endif %}
+              {% if current_user.has_permission('clients', 'edit') %}
+              <a href="{{ url_for('clients.assignments') }}" style="font-size:11.5px;color:var(--accent);margin-left:6px">change</a>
+              {% endif %}
+            </span>
+          </div>
+          <div class="info-row"><span class="info-label">Invoices</span><span class="info-value fw-700">{{ all_invoices|length }}</span></div>
+          {% if can_financials %}
+          <div class="info-row"><span class="info-label">Paid</span><span class="info-value" style="color:var(--success)">{{ all_invoices|selectattr('status','eq','paid')|list|length }}</span></div>
+          <div class="info-row"><span class="info-label">Pending</span><span class="info-value" style="color:var(--warning)">{{ all_invoices|selectattr('status','in',['sent','issued','partial'])|list|length }}</span></div>
+          <div class="info-row">
+            <span class="info-label">Current Balance</span>
+            <span class="info-value fw-700" style="color:{% if balance < 0 %}var(--danger){% elif balance > 0 %}var(--success){% else %}var(--text-muted){% endif %}">
+              {% if balance < 0 %}-{{ (balance * -1)|inr }}{% else %}{{ balance|inr }}{% endif %}
+            </span>
+          </div>
           {% endif %}
           <div class="info-row"><span class="info-label">Client since</span><span class="info-value muted">{{ client.created_at[:10] }}</span></div>
         </div>
       </div>
     </div>
+
+    <!-- Companies card -->
+    <div class="card" id="companiesCard">
+      <div class="card-header">
+        <span class="card-title">Companies ({{ companies|length }})</span>
+        <button class="btn btn-secondary btn-sm" onclick="showAddCompany()" style="margin-left:auto">+ Add</button>
+      </div>
+
+      <!-- Add company form (hidden by default) -->
+      <div id="addCompanyForm" style="display:none;padding:14px 18px;border-bottom:1px solid var(--border)">
+        <div class="form-grid form-grid-2" style="gap:10px">
+          <div class="form-group span-2">
+            <label style="font-size:12px">Company Name *</label>
+            <input type="text" id="nc_name" placeholder="Acme Corp" style="font-size:13px">
+          </div>
+          <div class="form-group span-2">
+            <label style="font-size:12px">GST Number</label>
+            <input type="text" id="nc_tax_id" placeholder="27AABCJ1234A1Z5" style="font-size:13px;font-family:monospace;text-transform:uppercase" oninput="this.value=this.value.toUpperCase()">
+          </div>
+          <div class="form-group">
+            <label style="font-size:12px">Opening Balance (₹)</label>
+            <input type="number" id="nc_ob_amt" value="0" min="0" step="0.01" style="font-size:13px">
+          </div>
+          <div class="form-group">
+            <label style="font-size:12px">Balance Type</label>
+            <select id="nc_ob_type" style="font-size:13px">
+              <option value="debt">Client owes us (debt)</option>
+              <option value="credit">Client has credit (advance paid)</option>
+            </select>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <button class="btn btn-primary btn-sm" onclick="saveNewCompany({{ client.id }})">Save</button>
+          <button class="btn btn-secondary btn-sm" onclick="hideAddCompany()">Cancel</button>
+        </div>
+      </div>
+
+      {% if companies %}
+      <div class="table-wrap">
+        <table id="companiesTable">
+          <thead>
+            <tr>
+              <th>Name</th>
+              {% if can_financials %}<th style="text-align:right">Balance</th>{% endif %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for co in companies %}
+            <tr id="co-row-{{ co.id }}">
+              <td style="font-weight:600;font-size:13px">{{ co.name }}</td>
+              {% if can_financials %}
+              {% set bal = co.balance %}
+              {% set _col = 'var(--danger)' if bal < 0 else 'var(--success)' if bal > 0 else 'var(--warning)' %}
+              {% set _lbl = 'outstanding' if bal < 0 else 'credit' if bal > 0 else 'settled' %}
+              <td style="text-align:right">
+                <span onclick="showCompanyLedger({{ client.id }}, {{ co.id }}, {{ co.name|tojson|forceescape }})"
+                      style="cursor:pointer;text-decoration:underline dotted"
+                      title="Click to view company ledger">
+                  <span id="co-bal-amt-{{ co.id }}" style="color:{{ _col }};font-weight:700">{{ bal|inr }}</span>
+                  <div id="co-bal-lbl-{{ co.id }}" style="font-size:11px;color:var(--text-muted)">{{ _lbl }}</div>
+                </span>
+              </td>
+              {% endif %}
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="empty-state" style="padding:20px" id="companiesEmpty">
+        <p style="font-size:13px;color:var(--text-muted)">No companies added yet.</p>
+      </div>
+      {% endif %}
+    </div>
+
   </div>
 </div>
+
+<!-- Regions (operating areas) -->
+<div id="regionsBackdrop" onclick="toggleRegionsFullscreen()"></div>
+<div class="card" id="regionsCard" style="margin-top:22px">
+  <div class="card-header">
+    <span class="card-title">Regions</span>
+    <button type="button" class="map-expand-btn" style="margin-left:auto" onclick="toggleRegionsFullscreen()" title="Full screen" id="regionsExpandBtn">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+      </svg>
+    </button>
+  </div>
+  <div class="card-body">
+    {% if current_user.has_permission('clients', 'edit') %}
+    <div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:14px;flex-wrap:wrap">
+      <div style="position:relative;flex:1;min-width:220px;max-width:420px">
+        <input type="text" id="regionSearch" placeholder="Search a city, town, or state to add…"
+               autocomplete="off" oninput="onRegionSearchInput()">
+        <div id="regionSearchResults" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:20;
+             margin-top:4px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);
+             max-height:280px;overflow-y:auto;box-shadow:0 8px 24px rgba(0,0,0,.18)"></div>
+      </div>
+      <button type="button" id="pinDropBtn" class="btn btn-secondary btn-sm" onclick="togglePinDrop()">📍 Drop Pin</button>
+      <button type="button" id="brushBtn" class="btn btn-secondary btn-sm" onclick="toggleDrawMode('brush')">🖌 Brush</button>
+      <button type="button" id="eraseBtn" class="btn btn-secondary btn-sm" onclick="toggleDrawMode('erase')">🧹 Erase</button>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="startNewCustomArea()" title="Start a new blank custom area">+ New Area</button>
+    </div>
+    <div id="regionPinHint" style="display:none;font-size:12px;color:var(--text-muted);margin:-8px 0 12px">
+      Click anywhere on the map to see boundary options for that point.
+    </div>
+    <div id="regionPinPanel" style="display:none;margin-bottom:14px;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden"></div>
+    <div id="regionDrawBar" style="display:none;align-items:center;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--text-muted);margin:-8px 0 12px;padding:8px 12px;background:var(--bg-subtle,rgba(0,0,0,.03));border-radius:var(--radius-sm)">
+      <span style="display:flex;align-items:center;gap:6px">
+        Editing:
+        <b id="drawTargetName" style="color:var(--text-primary)">New area</b>
+        <button type="button" id="drawDeselectBtn" class="btn btn-ghost btn-sm" style="padding:1px 6px;display:none"
+                onclick="deselectRegion()" title="Deselect — brush will start a new area">✕</button>
+      </span>
+      <span id="regionDrawHint" style="flex-basis:100%;order:9"></span>
+      <label style="display:flex;align-items:center;gap:6px">
+        Brush size
+        <input type="range" id="brushSize" min="1" max="15" value="3" step="0.5" style="width:110px" oninput="onBrushSizeChange()">
+        <span id="brushSizeLabel">3 km</span>
+      </label>
+      <button type="button" id="saveCustomBtn" class="btn btn-primary btn-sm" onclick="saveCustomRegion()">💾 Save</button>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="clearCustomRegion()">Clear</button>
+    </div>
+    {% endif %}
+    <div style="display:grid;grid-template-columns:1fr 280px;gap:14px" class="region-layout">
+      <div id="regionMap" style="height:380px;border-radius:var(--radius);background:var(--bg-subtle,rgba(0,0,0,.03))"></div>
+      <div style="display:flex;flex-direction:column;gap:16px;max-height:380px;overflow-y:auto">
+        <div>
+          <div style="display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">
+            Regions <span class="badge" id="regionCount">0</span>
+          </div>
+          <div id="regionList" style="display:flex;flex-direction:column;gap:6px"></div>
+        </div>
+        <div>
+          <div style="display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">
+            Custom Areas <span class="badge" id="customAreaCount">0</span>
+          </div>
+          <div id="customAreaList" style="display:flex;flex-direction:column;gap:6px"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Edit company modal -->
+<div id="editCoModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9000;align-items:center;justify-content:center">
+  <div style="background:var(--bg);border-radius:var(--radius);padding:24px;width:440px;max-width:94vw;box-shadow:0 16px 48px rgba(0,0,0,.3)">
+    <div style="font-weight:700;font-size:15px;margin-bottom:16px">Edit Company</div>
+    <input type="hidden" id="ec_id">
+    <div class="form-group" style="margin-bottom:10px">
+      <label style="font-size:12px">Company Name *</label>
+      <input type="text" id="ec_name" style="font-size:13px">
+    </div>
+    <div class="form-group" style="margin-bottom:10px">
+      <label style="font-size:12px">GST Number</label>
+      <input type="text" id="ec_tax_id" style="font-size:13px;font-family:monospace;text-transform:uppercase" oninput="this.value=this.value.toUpperCase()" placeholder="27AABCJ1234A1Z5">
+    </div>
+    <div class="form-grid form-grid-2" style="gap:10px">
+      <div class="form-group">
+        <label style="font-size:12px">Opening Balance (₹)</label>
+        <input type="number" id="ec_ob_amt" min="0" step="0.01" style="font-size:13px">
+      </div>
+      <div class="form-group">
+        <label style="font-size:12px">Balance Type</label>
+        <select id="ec_ob_type" style="font-size:13px">
+          <option value="debt">Client owes us (debt)</option>
+          <option value="credit">Client has credit (advance paid)</option>
+        </select>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end">
+      <button class="btn btn-primary" onclick="saveEditCompany({{ client.id }})">Save</button>
+      <button class="btn btn-secondary" onclick="document.getElementById('editCoModal').style.display='none'">Cancel</button>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── Company ledger — opens the shared modal scoped to one company. Delegates to
+// the shared window/reload logic in base.html so the period picker works and it
+// defaults to the last 30 days like every other ledger view. ─────────────────
+function showCompanyLedger(clientId, companyId, companyName) {
+  _ledgerClientId  = clientId;
+  _ledgerCompanyId = companyId;
+  document.getElementById('ledgerModalTitle').textContent = companyName;
+  document.getElementById('ledgerFinalBal').textContent   = '';
+  document.getElementById('ledgerEmpty').style.display    = 'none';
+  document.getElementById('ledgerEntryForm').style.display = 'none';
+  document.getElementById('ledgerModal').style.display    = 'flex';
+  setLedgerWindow('last_30');   // default view: last 30 days (sets picker + reloads)
+}
+
+async function toggleTallyLock(clientId) {
+  const btn = document.getElementById('tallyLockBtn');
+  btn.disabled = true;
+  try {
+    const res  = await fetch(`/clients/${clientId}/tally-lock`, { method: 'POST' });
+    const data = await res.json();
+    if (data.ok) { location.reload(); return; }
+    alert(data.error || 'Failed to toggle tally lock.');
+  } catch (e) {
+    alert('Error: ' + e);
+  }
+  btn.disabled = false;
+}
+
+async function recalculateBalance(clientId) {
+  const btn = document.getElementById('recalcBtn');
+  btn.disabled = true;
+  btn.textContent = 'Recalculating…';
+  try {
+    const res = await fetch(`/clients/${clientId}/recalculate`, { method: 'POST' });
+    const data = await res.json();
+    if (data.ok) {
+      location.reload();
+    } else {
+      alert('Recalculation failed.');
+      btn.disabled = false;
+      btn.textContent = 'Recalculate';
+    }
+  } catch (e) {
+    alert('Error: ' + e);
+    btn.disabled = false;
+    btn.textContent = 'Recalculate';
+  }
+}
+
+function showAddCompany() {
+  document.getElementById('addCompanyForm').style.display = '';
+  document.getElementById('nc_name').focus();
+}
+function hideAddCompany() {
+  document.getElementById('addCompanyForm').style.display = 'none';
+  ['nc_name','nc_tax_id'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('nc_ob_amt').value  = '0';
+  document.getElementById('nc_ob_type').value = 'debt';
+}
+
+async function saveNewCompany(clientId) {
+  const name = document.getElementById('nc_name').value.trim();
+  if (!name) { alert('Company name is required.'); return; }
+  const res = await fetch(`/clients/${clientId}/companies`, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({
+      name,
+      tax_id:               document.getElementById('nc_tax_id').value.trim(),
+      opening_balance_amt:  document.getElementById('nc_ob_amt').value,
+      opening_balance_type: document.getElementById('nc_ob_type').value,
+    })
+  });
+  const data = await res.json();
+  if (data.error) { alert(data.error); return; }
+  location.reload();
+}
+
+function editCompany(id, name, tax_id, ob_signed) {
+  document.getElementById('ec_id').value     = id;
+  document.getElementById('ec_name').value   = name;
+  document.getElementById('ec_tax_id').value = tax_id;
+  document.getElementById('ec_ob_amt').value  = Math.abs(ob_signed).toFixed(2);
+  document.getElementById('ec_ob_type').value = ob_signed < 0 ? 'credit' : 'debt';
+  document.getElementById('editCoModal').style.display = 'flex';
+}
+
+async function saveEditCompany(clientId) {
+  const id   = document.getElementById('ec_id').value;
+  const name = document.getElementById('ec_name').value.trim();
+  if (!name) { alert('Company name is required.'); return; }
+  const res = await fetch(`/clients/${clientId}/companies/${id}`, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({
+      name,
+      tax_id:               document.getElementById('ec_tax_id').value.trim(),
+      opening_balance_amt:  document.getElementById('ec_ob_amt').value,
+      opening_balance_type: document.getElementById('ec_ob_type').value,
+    })
+  });
+  const data = await res.json();
+  if (data.error) { alert(data.error); return; }
+  location.reload();
+}
+
+async function deleteCompany(clientId, companyId, name) {
+  if (!confirm(`Delete company "${name}"?\n\nExisting invoices and payments will keep their data but the company link will be removed.`)) return;
+  const res  = await fetch(`/clients/${clientId}/companies/${companyId}/delete`, { method: 'POST' });
+  const data = await res.json();
+  if (data.error) { alert(data.error); return; }
+  location.reload();
+}
+</script>
+
+<!-- ── Regions (operating areas) ─────────────────────────────────────────── -->
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
+<script>
+const REGION_CLIENT_ID = {{ client.id }};
+const OLA_API_KEY = {{ ola_maps_api_key|tojson }};
+const CAN_EDIT_REGIONS = {{ 'true' if current_user.has_permission('clients', 'edit') else 'false' }};
+const REGION_PALETTE = ['#E2703A','#3B6FB5','#0C7A64','#B5485D','#7A5CB8','#C98F1B','#2E9E88','#C9455C'];
+const regionColor = i => REGION_PALETTE[i % REGION_PALETTE.length];
+// Distinct from REGION_PALETTE so "already added" vs "pin-drop candidate" never look alike.
+const PIN_PALETTE = ['#EF4444','#3B82F6','#10B981','#F59E0B','#8B5CF6','#EC4899','#06B6D4'];
+const pinColor = i => PIN_PALETTE[i % PIN_PALETTE.length];
+
+let regionMap, regionMapReady = false;
+// Set both right before regionMap.setStyle(): MapLibre keeps the OLD style
+// (and its sources) alive until the new style's fetch finishes, so
+// getSource() keeps returning the soon-to-vanish old source for a while —
+// these stop renderRegions()/renderCustomShape() from being fooled into
+// "reusing" it via setData() instead of re-adding fresh once the swap lands.
+// Separate flags because the two functions run back-to-back in the same
+// redraw pass — sharing one would let the first call's success reset it
+// before the second call (for a different source) ever runs.
+let regionForceRebuild = false;
+let customForceRebuild = false;
+let regions = [];
+let searchDebounce = null;
+let pinDropMode = false, pinMarker = null, pinCandidates = [];
+let hiddenCandidateIds = new Set();
+const DRAW_COLOR = '#14B8A6';
+let drawMode = null;       // 'brush' | 'erase' | null
+let isDrawing = false;
+let brushRadiusKm = 3;
+let customShape = null;    // GeoJSON geometry (Polygon|MultiPolygon) currently on the canvas, or null
+let activeBoundaryId = null;   // boundary_id of the region (named OR custom) currently selected
+                                // for editing — brush extends it, erase reduces it. null means
+                                // either nothing is selected, or a brand new custom area is being drawn.
+let customShapeDirty = false;   // true once brush/erase touches customShape, until it's saved —
+                                 // guards against a reload (e.g. from erasing a different region
+                                 // mid-session) silently discarding unsaved custom-shape edits
+let lastStampLngLat = null;
+let lastHoverLngLat = null;
+
+const regEsc = s => String(s ?? '').replace(/[&<>"']/g,
+  m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const olaStyleUrl = dark =>
+  `https://api.olamaps.io/tiles/vector/v1/styles/${dark ? 'default-dark-standard' : 'default-light-standard'}/style.json`;
+let regionHandlersBound = false;  // client-regions-fill click handler is bound once, ever —
+                                   // setStyle() wipes the layer but not map-level delegated
+                                   // listeners, so re-adding it on every restyle would stack popups
+
+function initRegionMap() {
+  regionMap = new maplibregl.Map({
+    container: 'regionMap',
+    style: olaStyleUrl(document.body.classList.contains('dark')),
+    center: [78.9, 23.5],
+    zoom: 3.5,
+    transformRequest: (url) => {
+      if (url.startsWith('https://api.olamaps.io')) {
+        const sep = url.includes('?') ? '&' : '?';
+        return { url: `${url}${sep}api_key=${OLA_API_KEY}` };
+      }
+      return { url };
+    },
+  });
+  regionMap.addControl(new maplibregl.NavigationControl(), 'top-left');
+  const markReady = () => {
+    if (regionMapReady) return;
+    regionMapReady = true;
+    loadRegions();   // re-fetch fresh (not just render whatever `regions` holds already —
+  };                 // avoids any ordering race with the eager loadRegions() call below)
+  regionMap.on('load', markReady);
+  // 'load' waits for a first paint, which can hang indefinitely in some
+  // environments even though the style/sources are already usable — poll
+  // as a backstop so the map isn't stuck showing nothing.
+  (function pollReady(attempt) {
+    if (regionMapReady) return;
+    if (regionMap.isStyleLoaded() || regionMap.areTilesLoaded() || attempt > 15) { markReady(); return; }
+    setTimeout(() => pollReady(attempt + 1), 200);
+  })(0);
+
+  // Single click handler: clicking a candidate polygon adds it; clicking
+  // anywhere else while pin-drop mode is on drops a new pin and re-queries.
+  regionMap.on('click', (e) => {
+    const hits = regionMap.getLayer('pin-candidates-fill')
+      ? regionMap.queryRenderedFeatures(e.point, { layers: ['pin-candidates-fill'] })
+      : [];
+    if (hits.length) {
+      selectPinCandidate(hits[0].properties.boundary_id);
+      return;
+    }
+    if (pinDropMode) queryPinCandidates(e.lngLat);
+  });
+
+  // Brush/erase: drag to paint. dragPan is disabled while a draw mode is
+  // active (see toggleDrawMode) so a drag always draws, never pans.
+  regionMap.on('mousedown', (e) => {
+    if (!drawMode) return;
+    isDrawing = true;
+    lastStampLngLat = null;
+    stampAt(e.lngLat);
+  });
+  regionMap.on('mousemove', (e) => {
+    if (!drawMode) return;
+    showBrushCursor(e.lngLat);
+    if (isDrawing) stampAt(e.lngLat);
+  });
+  const stopDrawing = () => {
+    isDrawing = false;
+    lastStampLngLat = null;
+  };
+  regionMap.on('mouseup', stopDrawing);
+  regionMap.getCanvasContainer().addEventListener('mouseleave', () => {
+    stopDrawing();
+    hideBrushCursor();
+  });
+
+  // The base map style (light/dark) doesn't follow prefers-color-scheme —
+  // it's swapped explicitly whenever the site-wide theme toggle fires, then
+  // everything on the map is redrawn (setStyle wipes custom sources/layers).
+  window.addEventListener('ledger:theme-changed', (e) => {
+    regionForceRebuild = true;
+    customForceRebuild = true;
+    regionMap.setStyle(olaStyleUrl(e.detail.dark));
+    retryOnRegionMapIdle(() => {
+      renderRegions({ skipFit: true });
+      renderCustomShape();
+      if (pinCandidates.length) renderPinCandidates();
+    });
+  });
+}
+
+// Source/layer additions can throw if attempted before a just-swapped style
+// finishes loading. Neither isStyleLoaded() nor the 'idle' event have proven
+// reliable triggers for retrying in every environment (isStyleLoaded() can
+// stay false indefinitely even once addLayer works; 'idle' can simply never
+// fire) — a plain poll is the resilient option, same as the initial-load
+// readiness check in initRegionMap().
+function retryOnRegionMapIdle(fn, attempt) {
+  attempt = attempt || 0;
+  try { fn(); }
+  catch (e) {
+    if (attempt < 30) { setTimeout(() => retryOnRegionMapIdle(fn, attempt + 1), 200); return; }
+    console.error('Region map restyle redraw failed after retries:', e);
+  }
+}
+
+/* ── Interaction modes: pin-drop / brush / erase are mutually exclusive ── */
+function setInteractionMode(mode) {   // 'pin' | 'brush' | 'erase' | null
+  pinDropMode = mode === 'pin';
+  drawMode = (mode === 'brush' || mode === 'erase') ? mode : null;
+
+  const pinBtn = document.getElementById('pinDropBtn');
+  pinBtn.classList.toggle('btn-primary', pinDropMode);
+  pinBtn.classList.toggle('btn-secondary', !pinDropMode);
+  document.getElementById('regionPinHint').style.display = pinDropMode ? '' : 'none';
+  if (!pinDropMode) clearPinCandidates();
+
+  const brushBtn = document.getElementById('brushBtn');
+  brushBtn.classList.toggle('btn-primary', drawMode === 'brush');
+  brushBtn.classList.toggle('btn-secondary', drawMode !== 'brush');
+  const eraseBtn = document.getElementById('eraseBtn');
+  eraseBtn.classList.toggle('btn-primary', drawMode === 'erase');
+  eraseBtn.classList.toggle('btn-secondary', drawMode !== 'erase');
+  document.getElementById('regionDrawBar').style.display = drawMode ? 'flex' : 'none';
+  regionMap.dragPan[drawMode ? 'disable' : 'enable']();
+  if (drawMode) updateDrawBarLabel();
+
+  document.getElementById('regionMap').classList.toggle('pin-drop-active', pinDropMode || !!drawMode);
+}
+
+function togglePinDrop() { setInteractionMode(pinDropMode ? null : 'pin'); }
+function toggleDrawMode(mode) {
+  setInteractionMode(drawMode === mode ? null : mode);
+  if (!drawMode) hideBrushCursor();
+}
+
+function onBrushSizeChange() {
+  brushRadiusKm = parseFloat(document.getElementById('brushSize').value);
+  document.getElementById('brushSizeLabel').textContent = brushRadiusKm + ' km';
+  if (drawMode && lastHoverLngLat) showBrushCursor(lastHoverLngLat);
+}
+
+/* ── Brush cursor preview — shows the exact brush footprint before you
+   click, so you know what a stamp will cover. Outline only, no fill, so
+   it never gets mistaken for actual painted area. ── */
+function showBrushCursor(lngLat) {
+  lastHoverLngLat = lngLat;
+  const circle = turf.circle([lngLat.lng, lngLat.lat], brushRadiusKm, { units: 'kilometers', steps: 48 });
+  const data = { type: 'FeatureCollection', features: [circle] };
+  if (regionMap.getSource('brush-cursor')) {
+    regionMap.getSource('brush-cursor').setData(data);
+  } else {
+    regionMap.addSource('brush-cursor', { type: 'geojson', data });
+    regionMap.addLayer({ id: 'brush-cursor-line', type: 'line', source: 'brush-cursor',
+      paint: {
+        'line-color': drawMode === 'erase' ? '#EF4444' : DRAW_COLOR,
+        'line-width': 2, 'line-dasharray': [2, 1.5],
+      } });
+  }
+  // Erase uses red to warn "this will remove", brush stays teal — update on mode change too.
+  if (regionMap.getLayer('brush-cursor-line')) {
+    regionMap.setPaintProperty('brush-cursor-line', 'line-color', drawMode === 'erase' ? '#EF4444' : DRAW_COLOR);
+  }
+}
+
+function hideBrushCursor() {
+  lastHoverLngLat = null;
+  if (regionMap.getLayer('brush-cursor-line')) regionMap.removeLayer('brush-cursor-line');
+  if (regionMap.getSource('brush-cursor')) regionMap.removeSource('brush-cursor');
+}
+
+/* ── Brush/erase drawing ──────────────────────────────────────────
+   Both tools operate ONLY on the working shape (customShape) — nothing else
+   on the map is touched. What the working shape *is* depends entirely on
+   selection: select a region/area first (activeBoundaryId set) and the
+   working shape is a copy of its geometry, so brush extends it and erase
+   reduces it; with nothing selected, brush starts a fresh shape and erase
+   only carves into that not-yet-saved shape. Nothing persists until Save. */
+function stampAt(lngLat) {
+  if (lastStampLngLat) {
+    const moved = turf.distance(
+      [lastStampLngLat.lng, lastStampLngLat.lat], [lngLat.lng, lngLat.lat], { units: 'kilometers' },
+    );
+    if (moved < brushRadiusKm * 0.3) return;   // throttle — don't stamp every pixel of the drag
+  }
+  lastStampLngLat = lngLat;
+  const circle = turf.circle([lngLat.lng, lngLat.lat], brushRadiusKm, { units: 'kilometers', steps: 32 });
+  try {
+    if (drawMode === 'brush') {
+      customShape = customShape ? turf.union(turf.feature(customShape), circle).geometry : circle.geometry;
+      customShapeDirty = true;
+      renderCustomShape();
+    } else if (drawMode === 'erase' && customShape) {
+      const result = turf.difference(turf.feature(customShape), circle);
+      customShape = result ? result.geometry : null;
+      customShapeDirty = true;
+      renderCustomShape();
+    }
+  } catch (e) {
+    console.error('Draw operation failed:', e);
+  }
+}
+
+function renderCustomShape() {
+  const data = customShape
+    ? { type: 'FeatureCollection', features: [{ type: 'Feature', properties: {}, geometry: customShape }] }
+    : { type: 'FeatureCollection', features: [] };
+  if (!customForceRebuild && regionMap.getSource('custom-draw')) {
+    regionMap.getSource('custom-draw').setData(data);
+  } else {
+    regionMap.addSource('custom-draw', { type: 'geojson', data });
+    regionMap.addLayer({ id: 'custom-draw-fill', type: 'fill', source: 'custom-draw',
+      paint: { 'fill-color': DRAW_COLOR, 'fill-opacity': 0.35 } });
+    regionMap.addLayer({ id: 'custom-draw-line', type: 'line', source: 'custom-draw',
+      paint: { 'line-color': DRAW_COLOR, 'line-width': 2.5 } });
+    customForceRebuild = false;
+  }
+}
+
+async function saveCustomRegion() {
+  const active = activeBoundaryId ? regions.find(r => r.boundary_id === activeBoundaryId) : null;
+
+  // Editing a selected region (named place OR custom area) that's been fully
+  // erased away: saving an empty shape means "delete this region".
+  if (active && !customShape) {
+    if (!confirm(`"${active.name}" has been erased completely. Remove it?`)) return;
+    const res = await fetch(`/clients/${REGION_CLIENT_ID}/regions/${active.link_id}/delete`, { method: 'POST' });
+    const data = await res.json();
+    if (data.error) { alert(data.error); return; }
+    activeBoundaryId = null; customShape = null; customShapeDirty = false;
+    loadRegions();
+    return;
+  }
+  if (!customShape) { alert('Select a region to edit, or brush to paint a new area first.'); return; }
+
+  // Editing a selected NAMED place: persist the reshaped geometry via the
+  // trim endpoint, which saves it as this client's own override rather than
+  // touching the shared boundary other clients also use.
+  if (active && active.source !== 'custom') {
+    const res = await fetch(`/clients/${REGION_CLIENT_ID}/regions/${active.link_id}/trim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ geometry: customShape }),
+    });
+    const data = await res.json();
+    if (data.error) { alert(data.error); return; }
+    customShapeDirty = false;
+    loadRegions();
+    return;
+  }
+
+  // New, or an existing custom area.
+  let name;
+  if (active) {
+    name = active.name;
+  } else {
+    const suggested = 'Custom Area ' + (regions.filter(r => r.source === 'custom').length + 1);
+    name = prompt('Name this area:', suggested);
+    if (name === null) return;   // cancelled
+    name = name.trim() || suggested;
+  }
+  const res = await fetch(`/clients/${REGION_CLIENT_ID}/regions/custom`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ geometry: customShape, name, boundary_id: activeBoundaryId }),
+  });
+  const data = await res.json();
+  if (data.error) { alert(data.error); return; }
+  activeBoundaryId = data.boundary_id;   // keep editing the same area after saving
+  customShapeDirty = false;
+  loadRegions();
+}
+
+function clearCustomRegion() {
+  // Discards unsaved edits — reverts to the active region's last-saved shape,
+  // or to blank if nothing is selected (a brand new, never-saved area).
+  const active = activeBoundaryId ? regions.find(r => r.boundary_id === activeBoundaryId) : null;
+  customShape = active ? active.geometry : null;
+  customShapeDirty = false;
+  renderCustomShape();
+}
+
+function startNewCustomArea() {
+  deselectRegion();
+  if (!drawMode) setInteractionMode('brush');
+}
+
+function deselectRegion() {
+  activeBoundaryId = null;
+  customShape = null;
+  customShapeDirty = false;
+  renderCustomShape();
+  renderRegions({ skipFit: true });
+}
+
+function selectRegion(boundaryId) {
+  // Works for any region — named place or custom area. Extending a named
+  // place's shape never touches the shared boundary (see trim_region on the
+  // backend): it's saved as this client's own override, same mechanism
+  // erase already used to shrink one.
+  activeBoundaryId = (activeBoundaryId === boundaryId) ? null : boundaryId;
+  customShapeDirty = false;
+  const region = activeBoundaryId ? regions.find(r => r.boundary_id === activeBoundaryId) : null;
+  customShape = region ? region.geometry : null;
+  renderCustomShape();
+  renderRegions({ skipFit: true });   // refreshes the active-highlight in both lists
+  if (activeBoundaryId && !drawMode) setInteractionMode('brush');
+}
+
+function updateDrawBarLabel() {
+  const targetName = document.getElementById('drawTargetName');
+  const deselectBtn = document.getElementById('drawDeselectBtn');
+  const hint = document.getElementById('regionDrawHint');
+  const saveBtn = document.getElementById('saveCustomBtn');
+  if (!targetName || !hint || !saveBtn) return;   // draw controls only exist for editors
+  const active = activeBoundaryId ? regions.find(r => r.boundary_id === activeBoundaryId) : null;
+  if (active) {
+    targetName.textContent = active.name;
+    deselectBtn.style.display = '';
+    hint.textContent = 'Brush extends this region · erase reduces it. Nothing else on the map is affected.';
+    saveBtn.textContent = '💾 Update';
+  } else {
+    targetName.textContent = 'New area';
+    deselectBtn.style.display = 'none';
+    hint.textContent = 'Nothing selected — brush paints a brand new area. Select a region from the list first to edit it instead.';
+    saveBtn.textContent = '💾 Save';
+  }
+}
+
+async function renameCustomArea(linkId) {
+  const region = regions.find(r => r.link_id === linkId);
+  const name = prompt('Rename this area:', region ? region.name : '');
+  if (name === null) return;
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  const res = await fetch(`/clients/${REGION_CLIENT_ID}/regions/${linkId}/rename`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: trimmed }),
+  });
+  const data = await res.json();
+  if (data.error) { alert(data.error); return; }
+  loadRegions();
+}
+
+function clearPinCandidates() {
+  pinCandidates = [];
+  hiddenCandidateIds = new Set();
+  if (pinMarker) { pinMarker.remove(); pinMarker = null; }
+  if (regionMap.getLayer('pin-candidates-fill')) regionMap.removeLayer('pin-candidates-fill');
+  if (regionMap.getLayer('pin-candidates-line')) regionMap.removeLayer('pin-candidates-line');
+  if (regionMap.getSource('pin-candidates')) regionMap.removeSource('pin-candidates');
+  document.getElementById('regionPinPanel').style.display = 'none';
+}
+
+function queryPinCandidates(lngLat) {
+  clearPinCandidates();
+  pinMarker = new maplibregl.Marker({ color: '#111827' }).setLngLat(lngLat).addTo(regionMap);
+  const panel = document.getElementById('regionPinPanel');
+  panel.style.display = '';
+  panel.innerHTML = '<div style="padding:12px;font-size:13px;color:var(--text-muted)">Looking up boundaries…</div>';
+
+  fetch(`/clients/regions/reverse?lat=${lngLat.lat}&lon=${lngLat.lng}`)
+    .then(r => r.json())
+    .then(candidates => {
+      pinCandidates = candidates;
+      if (!candidates.length) {
+        panel.innerHTML = '<div style="padding:12px;font-size:13px;color:var(--text-muted)">No boundary data found for that point.</div>';
+        return;
+      }
+      renderPinCandidates();
+    })
+    .catch(() => {
+      panel.innerHTML = '<div style="padding:12px;font-size:13px;color:var(--danger)">Lookup failed — try again.</div>';
+    });
+}
+
+function pinCandidateFeatures() {
+  return pinCandidates
+    .map((c, i) => ({
+      type: 'Feature',
+      properties: { boundary_id: c.boundary_id, name: c.name, color: pinColor(i) },
+      geometry: c.geometry,
+    }))
+    .filter((f, i) => !hiddenCandidateIds.has(pinCandidates[i].boundary_id));
+}
+
+function renderPinCandidates() {
+  const data = { type: 'FeatureCollection', features: pinCandidateFeatures() };
+  regionMap.addSource('pin-candidates', { type: 'geojson', data });
+  regionMap.addLayer({ id: 'pin-candidates-fill', type: 'fill', source: 'pin-candidates',
+    paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.28 } });
+  regionMap.addLayer({ id: 'pin-candidates-line', type: 'line', source: 'pin-candidates',
+    paint: { 'line-color': ['get', 'color'], 'line-width': 2.5 } });
+  renderPinPanel();
+}
+
+function renderPinPanel() {
+  document.getElementById('regionPinPanel').innerHTML = pinCandidates.map((c, i) => {
+    const hidden = hiddenCandidateIds.has(c.boundary_id);
+    return `
+    <div class="region-pin-row" style="${hidden ? 'opacity:.5' : ''}" onclick="selectPinCandidate(${c.boundary_id})">
+      <button type="button" class="btn btn-ghost btn-sm" style="padding:2px 6px"
+              onclick="event.stopPropagation(); toggleCandidateVisibility(${c.boundary_id})"
+              title="${hidden ? 'Show' : 'Hide'} this boundary on the map">${hidden ? '🙈' : '👁'}</button>
+      <span class="region-pin-swatch" style="background:${pinColor(i)}"></span>
+      <span class="region-name" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${regEsc(c.name)}">${regEsc(c.name)}</span>
+      <span class="region-type">${regEsc(c.area_type || '')}</span>
+      <span style="font-size:11px;color:var(--text-muted);text-transform:uppercase">${regEsc(c.source)}</span>
+    </div>`;
+  }).join('');
+}
+
+function toggleCandidateVisibility(boundaryId) {
+  if (hiddenCandidateIds.has(boundaryId)) hiddenCandidateIds.delete(boundaryId);
+  else hiddenCandidateIds.add(boundaryId);
+  regionMap.getSource('pin-candidates').setData({ type: 'FeatureCollection', features: pinCandidateFeatures() });
+  renderPinPanel();
+}
+
+async function selectPinCandidate(boundaryId) {
+  const res = await fetch(`/clients/${REGION_CLIENT_ID}/regions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ boundary_id: boundaryId }),
+  });
+  const data = await res.json();
+  if (data.error) { alert(data.error); return; }
+  clearPinCandidates();
+  loadRegions();
+}
+
+function regionBounds(features) {
+  const bounds = new maplibregl.LngLatBounds();
+  features.forEach(f => {
+    const rings = f.geometry.type === 'MultiPolygon' ? f.geometry.coordinates.flat() : f.geometry.coordinates;
+    rings.forEach(ring => ring.forEach(pt => bounds.extend(pt)));
+  });
+  return bounds;
+}
+
+function renderRegions(opts) {
+  opts = opts || {};
+  if (!regionMapReady) return;
+
+  // Pick up the active custom area's saved shape so re-entering draw mode
+  // continues editing it instead of starting from a blank canvas — but not
+  // while there are unsaved in-progress edits to it (customShapeDirty):
+  // this render pass can be triggered mid-session by erasing a *different*
+  // region (which reloads from the server), and that must not clobber a
+  // custom shape the user hasn't saved yet.
+  if (!customShapeDirty) {
+    const active = activeBoundaryId ? regions.find(r => r.boundary_id === activeBoundaryId) : null;
+    customShape = active ? active.geometry : null;
+  }
+
+  const visible = regions.filter(r => r.geometry);
+
+  const features = visible.map((r, i) => ({
+    type: 'Feature',
+    properties: { name: r.name, color: regionColor(i) },
+    geometry: r.geometry,
+  }));
+  const data = { type: 'FeatureCollection', features };
+  if (!regionForceRebuild && regionMap.getSource('client-regions')) {
+    regionMap.getSource('client-regions').setData(data);
+  } else {
+    regionMap.addSource('client-regions', { type: 'geojson', data });
+    regionMap.addLayer({ id: 'client-regions-fill', type: 'fill', source: 'client-regions',
+      paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.18 } });
+    regionMap.addLayer({ id: 'client-regions-line', type: 'line', source: 'client-regions',
+      paint: { 'line-color': ['get', 'color'], 'line-width': 2.5 } });
+    regionForceRebuild = false;
+  }
+  if (!regionHandlersBound) {
+    regionHandlersBound = true;
+    regionMap.on('click', 'client-regions-fill', (e) => {
+      new maplibregl.Popup({ offset: 6 }).setLngLat(e.lngLat)
+        .setHTML('<b>' + regEsc(e.features[0].properties.name) + '</b>').addTo(regionMap);
+    });
+  }
+  if (features.length && !opts.skipFit) {
+    regionMap.fitBounds(regionBounds(features), { padding: 30, animate: false });
+  }
+
+  // Named places and hand-drawn custom areas get their own lists, but share
+  // one color sequence (via `visible`'s index) so a region's swatch always
+  // matches its outline on the map, whichever list it's showing in. Both
+  // lists are selectable the same way — brush/erase then edit whichever
+  // region is active, named place or custom area alike.
+  const namedRegions = visible.filter(r => r.source !== 'custom');
+  const list = document.getElementById('regionList');
+  document.getElementById('regionCount').textContent = namedRegions.length;
+  if (!namedRegions.length) {
+    list.innerHTML = '<div style="font-size:13px;color:var(--text-muted);padding:8px">No regions added yet.</div>';
+  } else {
+    list.innerHTML = namedRegions.map(r => {
+      const active = r.boundary_id === activeBoundaryId;
+      return `
+      <div class="region-item" style="${active ? 'border-color:var(--accent)' : ''}">
+        <span class="region-swatch" style="background:${regionColor(visible.indexOf(r))}"></span>
+        ${selectableNameSpan(r, active)}
+        <span class="region-type">${regEsc(r.area_type || '')}</span>
+        ${CAN_EDIT_REGIONS ? `<button class="btn btn-ghost btn-sm" onclick="removeRegion(${r.link_id})" title="Remove">✕</button>` : ''}
+      </div>`;
+    }).join('');
+  }
+
+  renderCustomAreaList(visible);
+  updateDrawBarLabel();
+}
+
+function selectableNameSpan(r, active) {
+  if (!CAN_EDIT_REGIONS) {
+    return `<span class="region-name" title="${regEsc(r.name)}">${regEsc(r.name)}</span>`;
+  }
+  const label = active ? 'stop editing' : 'select — then Brush/Erase to reshape it';
+  return `<span class="region-name" style="cursor:pointer;${active ? 'font-weight:700' : ''}"
+            title="Click to ${label}" onclick="selectRegion(${r.boundary_id})">${regEsc(r.name)}</span>`;
+}
+
+function renderCustomAreaList(visible) {
+  visible = visible || regions.filter(r => r.geometry);
+  const customAreas = visible.filter(r => r.source === 'custom');
+  document.getElementById('customAreaCount').textContent = customAreas.length;
+  const list = document.getElementById('customAreaList');
+  if (!customAreas.length) {
+    list.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:6px 0">No custom areas yet — use Brush to paint one.</div>';
+    return;
+  }
+  list.innerHTML = customAreas.map(r => {
+    const active = r.boundary_id === activeBoundaryId;
+    return `
+    <div class="region-item" style="${active ? 'border-color:var(--accent)' : ''}">
+      <span class="region-swatch" style="background:${regionColor(visible.indexOf(r))}"></span>
+      ${selectableNameSpan(r, active)}
+      ${CAN_EDIT_REGIONS ? `
+      <button class="btn btn-ghost btn-sm" onclick="renameCustomArea(${r.link_id})" title="Rename">✏️</button>
+      <button class="btn btn-ghost btn-sm" onclick="removeRegion(${r.link_id})" title="Remove">✕</button>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function loadRegions() {
+  fetch(`/clients/${REGION_CLIENT_ID}/regions`)
+    .then(r => r.json())
+    .then(d => { regions = d; renderRegions(); })
+    .catch(e => console.error('Failed to load regions:', e));
+}
+
+async function removeRegion(linkId) {
+  const removed = regions.find(r => r.link_id === linkId);
+  const res = await fetch(`/clients/${REGION_CLIENT_ID}/regions/${linkId}/delete`, { method: 'POST' });
+  const data = await res.json();
+  if (data.error) { alert(data.error); return; }
+  if (removed && removed.boundary_id === activeBoundaryId) {
+    activeBoundaryId = null;
+    customShape = null;
+    customShapeDirty = false;
+  }
+  loadRegions();
+}
+
+function onRegionSearchInput() {
+  clearTimeout(searchDebounce);
+  const q = document.getElementById('regionSearch').value.trim();
+  const box = document.getElementById('regionSearchResults');
+  if (!q) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  searchDebounce = setTimeout(() => {
+    fetch(`/clients/regions/search?q=${encodeURIComponent(q)}`)
+      .then(r => r.json())
+      .then(candidates => {
+        if (!candidates.length) {
+          box.innerHTML = '<div class="region-search-row" style="color:var(--text-muted);cursor:default">No matches.</div>';
+          box.style.display = '';
+          return;
+        }
+        box.innerHTML = candidates.map(c => `
+          <div class="region-search-row" onclick='addRegionFromSearch(${JSON.stringify(c).replace(/'/g, "&#39;")})'>
+            <div style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${regEsc(c.name)}</div>
+            <div style="font-size:11px;color:var(--text-muted);text-transform:capitalize;flex-shrink:0">${regEsc(c.type)}</div>
+          </div>`).join('');
+        box.style.display = '';
+      })
+      .catch(() => { box.style.display = 'none'; });
+  }, 300);
+}
+
+async function addRegionFromSearch(candidate) {
+  const box = document.getElementById('regionSearchResults');
+  box.style.display = 'none';
+  document.getElementById('regionSearch').value = '';
+  const res = await fetch(`/clients/${REGION_CLIENT_ID}/regions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ osm_type: candidate.osm_type, osm_id: candidate.osm_id, name: candidate.name }),
+  });
+  const data = await res.json();
+  if (data.error) { alert(data.error); return; }
+  loadRegions();
+}
+
+document.addEventListener('click', (e) => {
+  const box = document.getElementById('regionSearchResults');
+  const input = document.getElementById('regionSearch');
+  if (box && !box.contains(e.target) && e.target !== input) box.style.display = 'none';
+});
+
+const REGIONS_EXPAND_ICON = '<path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>';
+const REGIONS_COLLAPSE_ICON = '<path d="M9 3v3a2 2 0 0 1-2 2H4m16 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M4 15h3a2 2 0 0 1 2 2v3"/>';
+function toggleRegionsFullscreen() {
+  const isFull = document.getElementById('regionsCard').classList.toggle('map-fullscreen');
+  document.getElementById('regionsBackdrop').classList.toggle('active', isFull);
+  document.body.classList.toggle('map-fullscreen-active', isFull);
+  const btn = document.getElementById('regionsExpandBtn');
+  btn.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${isFull ? REGIONS_COLLAPSE_ICON : REGIONS_EXPAND_ICON}</svg>`;
+  btn.title = isFull ? 'Exit full screen' : 'Full screen';
+  setTimeout(() => regionMap.resize(), 50);
+}
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && document.getElementById('regionsCard').classList.contains('map-fullscreen')) {
+    toggleRegionsFullscreen();
+  }
+});
+
+initRegionMap();
+loadRegions();
+</script>
+
+<!-- ── Invoices / Payments per-section date-range reload ─────────────────── -->
+<script>
+// Resolve a preset window key to [from, to] date strings (mirrors the
+// dashboard's picker so the options behave identically).
+function _winDates(w) {
+  const t = new Date(); t.setHours(0,0,0,0);
+  const fmt = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  const add = (d,n) => { const r=new Date(d); r.setDate(r.getDate()+n); return r; };
+  const dow = t.getDay()===0 ? 6 : t.getDay()-1;   // Mon=0
+  const y=t.getFullYear(), mo=t.getMonth();          // mo: 0-based
+  const cfy  = mo>=3 ? `${y}-04-01`   : `${y-1}-04-01`;
+  const lfyS = mo>=3 ? `${y-1}-04-01` : `${y-2}-04-01`;
+  const lfyE = mo>=3 ? `${y}-03-31`   : `${y-1}-03-31`;
+  switch(w) {
+    case 'all':           return ['',''];
+    case 'today':         return [fmt(t),fmt(t)];
+    case 'yesterday':     { const d=add(t,-1); return [fmt(d),fmt(d)]; }
+    case 'this_week':     return [fmt(add(t,-dow)),fmt(t)];
+    case 'last_week':     return [fmt(add(t,-dow-7)),fmt(add(t,-dow-1))];
+    case 'last_15':       return [fmt(add(t,-14)),fmt(t)];
+    case 'last_30':       return [fmt(add(t,-29)),fmt(t)];
+    case 'this_month':    return [fmt(new Date(y,mo,1)),fmt(t)];
+    case 'last_2_months': return [fmt(add(t,-60)),fmt(t)];
+    case '60_days':       return [fmt(add(t,-59)),fmt(t)];
+    case '90_days':       return [fmt(add(t,-89)),fmt(t)];
+    case 'this_year':     return [`${y}-01-01`,fmt(t)];
+    case 'current_fy':    return [cfy,fmt(t)];
+    case 'last_fy':       return [lfyS,lfyE];
+    default:              return ['',''];   // custom
+  }
+}
+
+// Fetch the rendered partial for one section (kind='invoices'|'payments')
+// and swap just that card's body.
+function clientSectionFetch(kind, clientId) {
+  const sel  = document.getElementById(kind+'-win');
+  const from = document.getElementById(kind+'-from');
+  const to   = document.getElementById(kind+'-to');
+  const box  = document.getElementById(kind+'-section');
+  if (!box) return;
+  const q = new URLSearchParams({ window: sel.value, from: from.value, to: to.value });
+  box.style.opacity = '.45';
+  fetch(`/clients/${clientId}/${kind}-partial?` + q.toString())
+    .then(r => { if (!r.ok) throw new Error(r.status); return r.text(); })
+    .then(html => { box.innerHTML = html; box.style.opacity = ''; })
+    .catch(() => {
+      box.style.opacity = '';
+      box.innerHTML = '<div class="empty-state" style="padding:24px"><p style="color:var(--danger)">Failed to load — please retry.</p></div>';
+    });
+}
+
+// Preset dropdown changed → fill the date inputs and reload immediately
+// (custom keeps whatever dates are in the inputs).
+function clientSectionPreset(kind, clientId) {
+  const sel = document.getElementById(kind+'-win');
+  if (sel.value !== 'custom') {
+    const [df, dt] = _winDates(sel.value);
+    document.getElementById(kind+'-from').value = df;
+    document.getElementById(kind+'-to').value   = dt;
+  }
+  clientSectionFetch(kind, clientId);
+}
+
+// Manually editing a date switches the dropdown to Custom; the reload waits
+// for the Apply button (so half-typed dates don't fire a fetch).
+function clientSectionDate(kind) {
+  document.getElementById(kind+'-win').value = 'custom';
+}
+
+// Assign a company to an unassigned payment, then reload the payments section
+// so the row shows the company as text.
+function assignPaymentCompany(clientId, paymentId, sel) {
+  const companyId = sel.value;   // '' clears the assignment
+  sel.disabled = true;
+  fetch(`/clients/${clientId}/payments/${paymentId}/company`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ company_id: companyId }),
+  })
+    .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(data => { updateCompanyBalances(data.companies); clientSectionFetch('payments', clientId); })
+    .catch(() => { sel.disabled = false; alert('Failed to assign company — please retry.'); });
+}
+
+// Live-update the Companies card balances after a payment is (re)assigned,
+// so each company's outstanding/credit figure reflects the change immediately.
+function _coBalColor(b) { return b < 0 ? 'var(--danger)' : b > 0 ? 'var(--success)' : 'var(--warning)'; }
+function _coBalLabel(b) { return b < 0 ? 'outstanding'   : b > 0 ? 'credit'        : 'settled'; }
+function updateCompanyBalances(companies) {
+  (companies || []).forEach(co => {
+    const amt = document.getElementById('co-bal-amt-' + co.id);
+    const lbl = document.getElementById('co-bal-lbl-' + co.id);
+    if (amt) { amt.textContent = formatINR(co.balance); amt.style.color = _coBalColor(co.balance); }
+    if (lbl) { lbl.textContent = _coBalLabel(co.balance); }
+  });
+}
+</script>
 {% endblock %}

@@ -1,0 +1,62 @@
+{# Payments table for the client detail page — rendered standalone by
+   clients.payments_partial and included on first page load. Only ever shown
+   to users with clients:financials. Expects: payments, window_label (opt). #}
+<div class="section-summary">
+  <span class="section-summary-count">{{ payments|length }} payment{{ '' if payments|length == 1 else 's' }}</span>
+  <span class="section-summary-amt" style="color:var(--success)">{{ (payments|sum(attribute='amount'))|inr }}</span>
+  {% if window_label %}<span class="section-summary-win">{{ window_label }}</span>{% endif %}
+</div>
+{% set can_view_payment = current_user.has_permission('payments', 'view') %}
+{% if payments %}
+<div class="table-wrap tbl-scroll">
+  <table>
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Date</th>
+        <th>Details</th>
+        <th>Company</th>
+        <th class="col-mobile-hide">Applied to</th>
+        <th style="text-align:right">Amount</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in payments %}
+      <tr style="border-left:4px solid var(--success)">
+        <td>
+          {% if can_view_payment %}
+          <a href="{{ url_for('payments.detail', payment_id=p.id) }}" style="color:var(--accent);text-decoration:none;font-weight:700;font-family:monospace" title="View / edit payment">#{{ p.id }}</a>
+          {% else %}<span class="muted" style="font-family:monospace">#{{ p.id }}</span>{% endif %}
+        </td>
+        <td class="muted">{{ p.payment_date or '—' }}</td>
+        <td>
+          <span style="font-weight:600">{{ p.notes or p.method or 'Payment' }}</span>
+          {% if p.is_opening_balance %}<span class="badge" style="margin-left:6px">opening</span>{% endif %}
+        </td>
+        <td>
+          {% if companies and companies|length > 1 %}
+            <select class="pay-co-select{% if not p.company_id %} unassigned{% endif %}"
+                    onchange="assignPaymentCompany({{ client_id }}, {{ p.id }}, this)">
+              <option value="" {% if not p.company_id %}selected{% endif %}>— unassigned —</option>
+              {% for co in companies %}
+              <option value="{{ co.id }}" {% if p.company_id == co.id %}selected{% endif %}>{{ co.name }}</option>
+              {% endfor %}
+            </select>
+          {% elif p.company_name %}
+            {{ p.company_name }}
+          {% else %}
+            <span class="muted">—</span>
+          {% endif %}
+        </td>
+        <td class="muted col-mobile-hide">{{ p.invoice_numbers or '—' }}</td>
+        <td class="fw-700" style="text-align:right;color:var(--success)">{{ p.amount|inr }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="empty-state" style="padding:30px">
+  <p>No payments in this range.</p>
+</div>
+{% endif %}

@@ -1,0 +1,212 @@
+{% extends "base.html" %}
+{% block title %}Edit {{ dispatch.name }}{% endblock %}
+{% block page_title %}Edit Dispatch{% endblock %}
+{% block topbar_actions %}
+  <a href="{{ url_for('transit.detail', dispatch_id=dispatch.id) }}" class="btn btn-secondary">Cancel</a>
+  <button form="editForm" type="submit" class="btn btn-primary"><span class="btn-label-mobile">Save Changes</span><span class="lbl-mobile-only">Save</span></button>
+{% endblock %}
+
+{% block content %}
+<form method="post" id="editForm">
+
+  {% if dispatch.status == 'draft' %}
+  <div class="card" style="margin-bottom:16px;border-left:3px solid var(--accent)">
+    <div class="card-body" style="padding:12px 18px;font-size:13px;color:var(--text-muted)">
+      This dispatch is still a <strong style="color:var(--accent)">draft</strong> — it holds no stock,
+      so changes here only rewrite the lines. Stock moves when you activate it.
+    </div>
+  </div>
+  {% else %}
+  <div class="card" style="margin-bottom:16px;border-left:3px solid var(--warning)">
+    <div class="card-body" style="padding:12px 18px;font-size:13px;color:var(--text-muted)">
+      This dispatch is <strong style="color:var(--warning)">live</strong>. Changes are applied as stock
+      movements straight away: raising a quantity takes more from production, lowering it gives the
+      difference back, and switching a line's range moves both products' production and transit
+      quantities. A line that has already been received cannot switch range.
+    </div>
+  </div>
+  {% endif %}
+
+  {# ── Header ───────────────────────────────────────────────────────────── #}
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-header"><span class="card-title">Dispatch Details</span></div>
+    <div class="card-body">
+      <div class="form-grid form-grid-2" style="margin-bottom:14px">
+        <div class="form-group">
+          <label>Name *</label>
+          <input type="text" name="name" value="{{ dispatch.name }}" required>
+        </div>
+        <div class="form-group">
+          <label>Supplier</label>
+          <select name="supplier_id">
+            <option value="">— None —</option>
+            {% for s in suppliers %}
+            <option value="{{ s.id }}" {% if s.id == dispatch.supplier_id %}selected{% endif %}>{{ s.name }}</option>
+            {% endfor %}
+          </select>
+          {% if dispatch.status != 'draft' %}
+          <div style="font-size:11px;color:var(--text-muted);margin-top:4px">
+            Changing this re-points each line's purchase-order claim to the new supplier.
+          </div>
+          {% endif %}
+        </div>
+      </div>
+      <div class="form-grid form-grid-2" style="margin-bottom:14px">
+        <div class="form-group">
+          <label>Dispatch Date</label>
+          <input type="date" name="dispatch_date" value="{{ dispatch.dispatch_date or '' }}">
+        </div>
+        <div class="form-group">
+          <label>Expected Arrival</label>
+          <input type="date" name="expected_arrival" value="{{ dispatch.expected_arrival or '' }}">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Notes</label>
+        <textarea name="notes" rows="2">{{ dispatch.notes or '' }}</textarea>
+      </div>
+    </div>
+  </div>
+
+  {# ── Lines ────────────────────────────────────────────────────────────── #}
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Items ({{ items|length }})</span>
+      <span style="font-size:11px;color:var(--text-muted)">Use ⇄ to move a line between its Normal and Eco range</span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Product</th>
+            <th style="text-align:right;width:130px">Quantity</th>
+            <th style="text-align:right;width:90px">Received</th>
+            <th style="text-align:right;width:110px">Price (₹)</th>
+            <th style="text-align:right;width:90px">CBM</th>
+            <th style="text-align:right;width:110px">Gross Wt</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for it in items %}
+          {% set key = (it.product_id|string) ~ ':' ~ (it.sub_product_id or '') %}
+          {% set twin = eco_map.get(key) %}
+          {% set received = it.qty_received or 0 %}
+          <tr class="line-row"
+              data-id="{{ it.id }}"
+              data-key="{{ key }}"
+              data-received="{{ received }}"
+              data-orig-qty="{{ it.quantity }}">
+            <td>
+              <span class="line-label" style="font-weight:600">{{ it.display_name }}</span>
+              <input type="hidden" name="pid_{{ it.id }}" value="{{ it.product_id or '' }}">
+              <input type="hidden" name="sid_{{ it.id }}" value="{{ it.sub_product_id or '' }}">
+              {% if twin %}
+                {% if received > 0 and dispatch.status != 'draft' %}
+                <span style="font-size:11px;color:var(--text-muted);margin-left:8px"
+                      title="Part of this line has already been received into stock">⇄ locked ({{ received|indian }} received)</span>
+                {% else %}
+                <button type="button" class="btn btn-secondary btn-sm" style="margin-left:8px"
+                        onclick="switchRange(this)" title="Switch this line between Normal and Eco">⇄ Eco/Normal</button>
+                {% endif %}
+              {% endif %}
+              <div class="avail-hint" style="font-size:11px;color:var(--text-muted);margin-top:3px"></div>
+            </td>
+            <td style="text-align:right">
+              <input type="number" name="qty_{{ it.id }}" value="{{ it.quantity }}"
+                     min="{{ received }}" step="0.01" required
+                     style="width:110px;text-align:right" oninput="updateHint(this.closest('tr'))">
+            </td>
+            <td style="text-align:right;color:var(--text-muted)">{{ received|indian if received else '—' }}</td>
+            <td style="text-align:right">
+              <input type="number" name="price_{{ it.id }}" value="{{ it.price if it.price is not none else '' }}"
+                     step="0.01" min="0" style="width:95px;text-align:right">
+            </td>
+            <td style="text-align:right">
+              <input type="number" name="cbm_{{ it.id }}" value="{{ it.cbm if it.cbm is not none else '' }}"
+                     step="0.001" min="0" style="width:80px;text-align:right">
+            </td>
+            <td style="text-align:right">
+              <input type="number" name="gross_weight_{{ it.id }}" value="{{ it.gross_weight if it.gross_weight is not none else '' }}"
+                     step="0.01" min="0" style="width:95px;text-align:right">
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div style="display:flex;gap:10px;margin-top:16px">
+    <button type="submit" class="btn btn-primary">Save Changes</button>
+    <a href="{{ url_for('transit.detail', dispatch_id=dispatch.id) }}" class="btn btn-secondary">Cancel</a>
+  </div>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const ECO_MAP  = {{ eco_map | tojson }};
+const IS_DRAFT = {{ 'true' if dispatch.status == 'draft' else 'false' }};
+/* production_qty per catalogue line, so the form can show the real ceiling. */
+const PROD_QTY = (function () {
+  var m = {};
+  {{ products | tojson }}.forEach(function (c) {
+    m[c.product_id + ':' + (c.sub_product_id || '')] = c.production_qty || 0;
+  });
+  return m;
+})();
+
+/* Swap a line to its Normal/Eco counterpart. Only the hidden ids and the label
+   change here — the stock consequences are worked out server-side on save. */
+function switchRange(btn) {
+  var row  = btn.closest('tr');
+  var twin = ECO_MAP[row.dataset.key];
+  if (!twin) return;
+  row.dataset.key = twin.product_id + ':' + (twin.sub_product_id || '');
+  row.querySelector('[name^="pid_"]').value = twin.product_id;
+  row.querySelector('[name^="sid_"]').value = twin.sub_product_id || '';
+  row.querySelector('.line-label').textContent = twin.label;
+  row.dataset.switched = (row.dataset.key !== row.dataset.origKey) ? '1' : '';
+  updateHint(row);
+}
+
+/* What this line may be raised to, in the same terms the server will check. */
+function updateHint(row) {
+  var hint = row.querySelector('.avail-hint');
+  if (!hint) return;
+  if (IS_DRAFT) { hint.textContent = ''; return; }
+
+  var key      = row.dataset.key;
+  var avail    = PROD_QTY[key] || 0;
+  var origQty  = parseFloat(row.dataset.origQty) || 0;
+  var received = parseFloat(row.dataset.received) || 0;
+  var qty      = parseFloat(row.querySelector('[name^="qty_"]').value) || 0;
+  var switched = key !== row.dataset.origKey;
+
+  /* Switching re-applies the whole line to the other range, so the ceiling is that
+     range's production. Staying put only needs production to cover the increase. */
+  var max = switched ? avail : origQty + avail;
+  var bad = qty > max + 1e-9 || qty < received - 1e-9;
+
+  hint.textContent = switched
+    ? 'Switching — needs ' + qty + ' in the other range’s production (has ' + max + ')'
+    : 'Max ' + max + ' (this line ' + origQty + ' + ' + avail + ' in production)'
+      + (received ? ' · min ' + received + ' already received' : '');
+  hint.style.color = bad ? 'var(--danger)' : 'var(--text-muted)';
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+  document.querySelectorAll('.line-row').forEach(function (row) {
+    row.dataset.origKey = row.dataset.key;   // so a switch back reads as unswitched
+    updateHint(row);
+  });
+});
+
+window.__dirtyCheck = function () {
+  var form = document.getElementById('editForm');
+  var dirty = Array.from(form.querySelectorAll('input, select, textarea'))
+    .some(function (el) { return el.type !== 'hidden' && el.value !== el.defaultValue; });
+  return { isDirty: dirty, save: dirty ? function () { form.submit(); } : null };
+};
+</script>
+{% endblock %}

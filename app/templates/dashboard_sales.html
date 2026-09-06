@@ -1,0 +1,221 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block page_title %}Sales Dashboard{% endblock %}
+
+{% block content %}
+
+<!-- ── Stat cards ───────────────────────────────────────────────── -->
+<div class="stats-grid">
+  <div class="stat-card">
+    <div class="stat-icon stat-icon-indigo" style="float:right">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+      </svg>
+    </div>
+    <div class="stat-label">Sales (my clients)</div>
+    <div class="stat-value">{{ (stats.total_invoiced if stats.total_invoiced is not none else 0)|inr_compact }}</div>
+    <div class="stat-sub">{{ window_label }}</div>
+    {% if stats.invoice_count is not none %}
+    <div style="font-size:11px;color:var(--text-muted);margin-top:4px">{{ stats.invoice_count }} invoice(s)</div>
+    {% endif %}
+  </div>
+
+  <div class="stat-card">
+    <div class="stat-icon stat-icon-blue" style="float:right">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/>
+      </svg>
+    </div>
+    <div class="stat-label">Money Collected</div>
+    <div class="stat-value">{{ stats.total_collected|inr_compact }}</div>
+    <div class="stat-sub">{{ window_label }}</div>
+    {% if stats.payment_count is not none %}
+    <div style="font-size:11px;color:var(--text-muted);margin-top:4px">{{ stats.payment_count }} payment(s)</div>
+    {% endif %}
+  </div>
+
+  <div class="stat-card">
+    <div class="stat-icon stat-icon-amber" style="float:right">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+      </svg>
+    </div>
+    <div class="stat-label">Outstanding</div>
+    <div class="stat-value">{{ stats.outstanding|inr_compact }}</div>
+    <div class="stat-sub">Pending collection (current)</div>
+    <div style="font-size:11px;color:var(--text-muted);margin-top:4px">{{ stats.overdue_count }} invoice(s) overdue</div>
+  </div>
+
+  <div class="stat-card">
+    <div class="stat-icon stat-icon-indigo" style="float:right">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>
+        <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>
+      </svg>
+    </div>
+    <div class="stat-label">My Clients</div>
+    <div class="stat-value">{{ stats.client_count }}</div>
+    <div class="stat-sub">{{ team|length }} staff on team</div>
+  </div>
+</div>
+
+<!-- ── Chart ────────────────────────────────────────────────────── -->
+<div class="card" style="margin-top:18px">
+  <div class="card-header dash-chart-header" style="align-items:center;gap:10px;flex-wrap:wrap">
+    <span class="card-title" style="white-space:nowrap">Sales &amp; Collections</span>
+    <form id="dashWinForm" method="get" action="{{ url_for('dashboard.index') }}"
+          style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;flex:1;min-width:0">
+      <select id="dashWinSel" name="window" onchange="dashWinSelect(this.value)"
+              style="width:auto;font-size:13px;padding:5px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text-primary);cursor:pointer">
+        {% for val, lbl in [
+            ('today','Today'),('yesterday','Yesterday'),('this_week','This Week'),('last_week','Last Week'),
+            ('last_15','Last 15 Days'),('last_30','Last 30 Days'),('this_month','This Month'),
+            ('last_2_months','Last 2 Months'),('60_days','60 Days'),('90_days','90 Days'),
+            ('this_year','This Year'),('current_fy','Current FY'),('last_fy','Last FY'),
+            ('all','All Time'),('custom','Custom')
+        ] %}
+        <option value="{{ val }}"{% if window == val %} selected{% endif %}>{{ lbl }}</option>
+        {% endfor %}
+      </select>
+      <input type="date" name="from" id="dashFrom" value="{{ date_from }}" onchange="dashDateChange()"
+             style="width:auto;font-size:13px;padding:5px 8px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text-primary)">
+      <span style="color:var(--text-muted);flex-shrink:0">—</span>
+      <input type="date" name="to" id="dashTo" value="{{ date_to }}" onchange="dashDateChange()"
+             style="width:auto;font-size:13px;padding:5px 8px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text-primary)">
+      <button type="submit" class="btn btn-primary btn-sm">Apply</button>
+    </form>
+  </div>
+  <div class="card-body">
+    <div class="chart-wrap"><canvas id="revenueChart"></canvas></div>
+  </div>
+</div>
+
+<!-- ── Per-staff breakdown ──────────────────────────────────────── -->
+<div class="card" style="margin-top:18px">
+  <div class="card-header">
+    <span class="card-title">My Sales Staff — {{ window_label }}</span>
+  </div>
+  {% if team %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Staff</th>
+          <th style="text-align:right">Clients</th>
+          <th style="text-align:right">Sales</th>
+          <th style="text-align:right">Collected</th>
+          <th style="text-align:right">Outstanding</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for m in team %}
+        <tr>
+          <td class="fw-700">
+            {{ m.name }}{% if not m.is_active %} <span style="font-size:11px;color:var(--text-muted)">(inactive)</span>{% endif %}
+          </td>
+          <td style="text-align:right">{{ m.client_count }}</td>
+          <td style="text-align:right;font-weight:600">{{ m.sales|inr_compact }}</td>
+          <td style="text-align:right;color:var(--success);font-weight:600">{{ m.collected|inr_compact }}</td>
+          <td style="text-align:right;color:{{ 'var(--danger)' if m.outstanding > 0 else 'var(--text-muted)' }}">{{ m.outstanding|inr_compact }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr style="border-top:2px solid var(--border);font-weight:700">
+          <td>Team total</td>
+          <td style="text-align:right">{{ team|sum(attribute='client_count') }}</td>
+          <td style="text-align:right">{{ team|sum(attribute='sales')|inr_compact }}</td>
+          <td style="text-align:right;color:var(--success)">{{ team|sum(attribute='collected')|inr_compact }}</td>
+          <td style="text-align:right">{{ team|sum(attribute='outstanding')|inr_compact }}</td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state" style="padding:30px">
+    <p>No sales staff assigned to your team yet. Ask an administrator to add staff under your account.</p>
+  </div>
+  {% endif %}
+</div>
+
+{% include "_region_coverage_map.html" %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+/* Period picker — resolve preset → dates, auto-submit */
+function _winDates(w) {
+  const t = new Date(); t.setHours(0,0,0,0);
+  const fmt = d => d.toISOString().slice(0,10);
+  const add = (d,n) => { const r=new Date(d); r.setDate(r.getDate()+n); return r; };
+  const dow = t.getDay()===0 ? 6 : t.getDay()-1;
+  const y=t.getFullYear(), mo=t.getMonth();
+  const cfy  = mo>=3 ? `${y}-04-01`   : `${y-1}-04-01`;
+  const lfyS = mo>=3 ? `${y-1}-04-01` : `${y-2}-04-01`;
+  const lfyE = mo>=3 ? `${y}-03-31`   : `${y-1}-03-31`;
+  switch(w) {
+    case 'all':           return ['',''];
+    case 'today':         return [fmt(t),fmt(t)];
+    case 'yesterday':     { const d=add(t,-1); return [fmt(d),fmt(d)]; }
+    case 'this_week':     return [fmt(add(t,-dow)),fmt(t)];
+    case 'last_week':     return [fmt(add(t,-dow-7)),fmt(add(t,-dow-1))];
+    case 'last_15':       return [fmt(add(t,-14)),fmt(t)];
+    case 'last_30':       return [fmt(add(t,-29)),fmt(t)];
+    case 'this_month':    return [fmt(new Date(y,mo,1)),fmt(t)];
+    case 'last_2_months': return [fmt(add(t,-60)),fmt(t)];
+    case '60_days':       return [fmt(add(t,-59)),fmt(t)];
+    case '90_days':       return [fmt(add(t,-89)),fmt(t)];
+    case 'this_year':     return [`${y}-01-01`,fmt(t)];
+    case 'current_fy':    return [cfy,fmt(t)];
+    case 'last_fy':       return [lfyS,lfyE];
+    default:              return ['',''];
+  }
+}
+function dashWinSelect(w) {
+  if (w === 'custom') return;
+  const [df, dt] = _winDates(w);
+  document.getElementById('dashFrom').value = df;
+  document.getElementById('dashTo').value   = dt;
+  document.getElementById('dashWinForm').submit();
+}
+function dashDateChange() {
+  document.getElementById('dashWinSel').value = 'custom';
+}
+
+/* Chart */
+const chartData = {{ stats.chart | tojson }};
+const labels = chartData.map(d => {
+  const [y, mo, day] = d.month.split('-');
+  return new Date(y, mo-1, day).toLocaleString('default', {day:'numeric', month:'short'});
+});
+const ctx = document.getElementById('revenueChart');
+if (ctx && typeof Chart !== 'undefined') {
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Sales', data: chartData.map(d => d.sales || 0), type: 'line',
+          borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,.1)', borderWidth: 2.5,
+          fill: true, tension: 0.4, pointRadius: 4, pointBackgroundColor: '#10b981',
+          pointBorderColor: '#fff', pointBorderWidth: 2, yAxisID: 'y' },
+        { label: 'Collected', data: chartData.map(d => d.revenue || 0), type: 'bar',
+          backgroundColor: 'rgba(99,102,241,.18)', borderColor: '#6366F1', borderWidth: 2,
+          borderRadius: 5, yAxisID: 'y' }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { display: true, position: 'top', labels: { font: { size: 12 }, usePointStyle: true, padding: 15 } } },
+      scales: {
+        x: { grid: { display: false }, ticks: { font: { size: 11 } } },
+        y: { grid: { color: 'rgba(0,0,0,.05)' }, ticks: { font: { size: 11 },
+             callback: v => (typeof formatINRCompact === 'function' ? formatINRCompact(v) : v) } }
+      }
+    }
+  });
+}
+</script>
+{% endblock %}

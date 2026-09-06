@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block page_title %}Settings{% endblock %}
+
+{% block content %}
+{% if insecure_secret %}
+<div class="card" style="margin-bottom:18px;border-left:3px solid var(--warning)">
+  <div class="card-body" style="padding:14px 18px;font-size:13px">
+    <b>SECRET_KEY is still the development default.</b>
+    Keys saved here are encrypted with it, so on this server that encryption
+    protects nothing. Set a real <code>SECRET_KEY</code> in the service
+    environment, then re-enter any key you save now.
+  </div>
+</div>
+{% endif %}
+
+<form method="post" autocomplete="off">
+  {% for group, items in groups.items() %}
+  <div class="card" style="margin-bottom:18px">
+    <div class="card-header"><span class="card-title">{{ group }}</span></div>
+    <div class="card-body" style="display:flex;flex-direction:column;gap:20px">
+      {% for item in items %}
+      {% set spec = item.spec %}
+      <div>
+        <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:5px">
+          <label for="{{ spec.key }}" style="font-size:13px;font-weight:600">{{ spec.label }}</label>
+          {% if item.source == 'settings' %}
+            <span class="badge badge-paid">Set here</span>
+          {% elif item.source == 'environment' %}
+            <span class="badge badge-sent">From server environment</span>
+          {% elif item.source == 'unreadable' %}
+            <span class="badge badge-partial">Cannot be decrypted</span>
+          {% else %}
+            <span class="badge badge-draft">Not set</span>
+          {% endif %}
+          <code style="font-size:11px;color:var(--text-muted)">{{ spec.key }}</code>
+        </div>
+
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input type="{{ 'password' if spec.secret else 'text' }}"
+                 id="{{ spec.key }}" name="{{ spec.key }}"
+                 value="{{ '' if spec.secret else (item.masked or '') }}"
+                 placeholder="{{ (item.masked ~ '  —  leave blank to keep') if spec.secret and item.masked else spec.placeholder }}"
+                 autocomplete="off" spellcheck="false"
+                 style="flex:1;min-width:260px" />
+          {% if item.source == 'settings' %}
+          <button type="submit" name="clear_{{ spec.key }}" value="1"
+                  class="btn btn-secondary btn-sm"
+                  onclick="return confirm('Clear {{ spec.label }}? It will fall back to the server environment, or be unset.')">
+            Clear
+          </button>
+          {% endif %}
+        </div>
+
+        <div style="font-size:12px;color:var(--text-secondary);margin-top:6px">
+          {{ spec.help }}
+          {% if item.updated_at %}
+            <span style="color:var(--text-muted)"> · updated {{ item.updated_at }}</span>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+
+  <div style="display:flex;gap:10px;align-items:center">
+    <button type="submit" class="btn btn-primary">Save settings</button>
+    <span style="font-size:12px;color:var(--text-muted)">
+      Secrets are encrypted before they are stored and are never shown again —
+      only the last four characters.
+    </span>
+  </div>
+</form>
+
+<form method="post" action="{{ url_for('settings.test_assistant') }}" style="margin-top:22px">
+  <div class="card">
+    <div class="card-body" style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+      <button type="submit" class="btn btn-secondary">Test the assistant connection</button>
+      <span style="font-size:12px;color:var(--text-secondary)">
+        Sends one very short message to the model and reports what came back.
+        Costs a fraction of a rupee.
+      </span>
+    </div>
+  </div>
+</form>
+{% endblock %}

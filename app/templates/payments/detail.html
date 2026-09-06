@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}Payment #{{ p.id }}{% endblock %}
+{% block page_title %}Payment #{{ p.id }}{% endblock %}
+{% block chat_context %}data-chat-context='{"module": "payments", "entity": "payment", "id": {{ p.id }}, "label": {{ ('Payment #' ~ p.id)|tojson }}}'{% endblock %}
+{% block topbar_actions %}
+  {% if can_edit %}
+  <a href="{{ url_for('payments.edit_payment', payment_id=p.id) }}" class="btn btn-primary">Edit</a>
+  {% endif %}
+  <a href="{{ url_for('clients.detail', client_id=p.client_id) }}" class="btn btn-secondary"><span class="btn-label-mobile">Back to Client</span><span class="lbl-mobile-only">Back</span></a>
+  {% if can_delete %}
+  <form class="confirm-inline" method="post" action="{{ url_for('payments.delete_payment', payment_id=p.id) }}"
+        onsubmit="return confirm('Delete this payment? The client will be re-reconciled.')">
+    <button class="btn btn-danger">Delete</button>
+  </form>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="grid-collapse" style="display:grid;grid-template-columns:1fr 1fr;gap:22px;align-items:start">
+
+  <!-- Left: payment details -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Payment Details</span>
+      {% if p.is_opening_balance %}
+      <span class="badge" style="margin-left:auto;background:var(--warning-light,#fff7ed);color:#b45309;font-weight:700">Opening Balance</span>
+      {% endif %}
+    </div>
+    <div class="card-body">
+      <div class="stat-value" style="font-size:32px;color:var(--success)">{{ p.amount|inr }}</div>
+      <div class="info-list" style="margin-top:16px">
+        <div class="info-row">
+          <span class="info-label">Client</span>
+          <span class="info-value fw-700">
+            <a href="{{ url_for('clients.detail', client_id=p.client_id) }}" style="color:var(--accent);text-decoration:none">{{ p.client_name }}</a>
+          </span>
+        </div>
+        <div class="info-row"><span class="info-label">Date</span><span class="info-value">{{ p.payment_date or '—' }}</span></div>
+        <div class="info-row"><span class="info-label">Method</span><span class="info-value" style="text-transform:capitalize">{{ (p.method or '—').replace('_',' ') }}</span></div>
+        <div class="info-row"><span class="info-label">Company</span><span class="info-value">{{ company_name or '— unassigned —' }}</span></div>
+        <div class="info-row"><span class="info-label">Reference</span><span class="info-value font-mono">{{ p.reference or '—' }}</span></div>
+      </div>
+      <div style="margin-top:16px">
+        <div class="info-label" style="margin-bottom:6px">Notes / Bank message</div>
+        <div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px;font-size:13px;white-space:pre-wrap;word-break:break-word">{{ p.notes or '—' }}</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right: allocations -->
+  <div class="card">
+    <div class="card-header"><span class="card-title">Applied To Invoices</span></div>
+    {% if p.is_opening_balance %}
+    <div class="card-body">
+      <p style="font-size:13px;color:var(--text-muted);margin:0">
+        This payment is assigned to the client's <strong>opening balance</strong> and is not allocated to any invoice.
+      </p>
+    </div>
+    {% elif allocations %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Invoice</th><th class="col-mobile-hide">Date</th><th style="text-align:right">Applied</th></tr>
+        </thead>
+        <tbody>
+          {% for a in allocations %}
+          <tr>
+            <td><a href="{{ url_for('invoices.detail', invoice_id=a.invoice_id) }}" style="font-weight:600;color:var(--accent);text-decoration:none">{{ a.invoice_number }}</a></td>
+            <td class="muted col-mobile-hide">{{ a.issue_date or '—' }}</td>
+            <td class="fw-700" style="text-align:right;color:var(--success)">{{ a.amount|inr }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="card-body" style="border-top:1px solid var(--border)">
+      <div class="info-row"><span class="info-label">Allocated</span><span class="info-value fw-700">{{ p.allocated|inr }}</span></div>
+      {% set _unalloc = p.amount - p.allocated %}
+      {% if _unalloc > 0.01 %}
+      <div class="info-row"><span class="info-label">Unallocated (credit)</span><span class="info-value fw-700" style="color:var(--warning)">{{ _unalloc|inr }}</span></div>
+      {% endif %}
+    </div>
+    {% else %}
+    <div class="empty-state" style="padding:30px">
+      <p>Not applied to any invoice — held as credit on the client's account.</p>
+    </div>
+    {% endif %}
+  </div>
+
+</div>
+{% endblock %}

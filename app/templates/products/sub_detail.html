@@ -1,0 +1,272 @@
+{% extends "base.html" %}
+{% block title %}{{ sub.name }} — {{ product.name }}{% endblock %}
+{% block page_title %}{{ sub.name }}{% endblock %}
+{% block topbar_actions %}
+  <a href="{{ url_for('products.edit_sub_product', product_id=product.id, sub_id=sub.id) }}" class="btn btn-secondary">Edit</a>
+  <a href="{{ url_for('products.product_detail', product_id=product.id) }}" class="btn btn-secondary">↑ <span class="btn-label-mobile">{{ product.name }}</span></a>
+  <a href="{{ url_for('products.list_products') }}" class="btn btn-secondary"><span class="btn-label-mobile">Back to Catalog</span><span class="lbl-mobile-only">Back</span></a>
+{% endblock %}
+
+{% block content %}
+<div class="grid-collapse" style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px">
+
+  <!-- Info card -->
+  <div class="card">
+    <div class="card-header"><span class="card-title">Details</span></div>
+    <div class="card-body" style="padding:0">
+      <table style="width:100%;border-collapse:collapse">
+        {% macro row(label, value) %}
+        <tr>
+          <td style="padding:10px 20px;color:var(--text-muted);font-size:13px;width:40%;border-bottom:1px solid var(--border)">{{ label }}</td>
+          <td style="padding:10px 20px;font-weight:600;border-bottom:1px solid var(--border)">{{ value }}</td>
+        </tr>
+        {% endmacro %}
+        {{ row('Parent Product', product.name) }}
+        {{ row('SKU', sub.sku or (product.sku ~ ' (parent)' if product.sku else '—')) }}
+        {% if sub.use_parent_price %}
+        {{ row('Unit Price', product.unit_price|inr ~ ' (parent)') }}
+        {% else %}
+        {{ row('Unit Price', sub.unit_price|inr) }}
+        {% endif %}
+        {{ row('Tax Rate', (sub.tax_rate or product.tax_rate) ~ '%') }}
+        {% set eff_min = sub.min_quantity or product.min_quantity or 0 %}
+        {{ row('Min Quantity', eff_min | indian if eff_min else '—') }}
+        {{ row('Pcs / Box', (product.pcs_per_carton | indian) ~ ' (inherited)' if product.pcs_per_carton else '—') }}
+        {{ row('Status', 'Active' if sub.is_active else 'Inactive') }}
+        {% if sub.description %}
+        <tr>
+          <td style="padding:10px 20px;color:var(--text-muted);font-size:13px">Description</td>
+          <td style="padding:10px 20px">{{ sub.description }}</td>
+        </tr>
+        {% endif %}
+      </table>
+    </div>
+  </div>
+
+  <!-- Stock summary card -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Stock</span>
+      <button class="unit-toggle" onclick="toggleStockUnit()">
+        <span class="unit-knob"></span>
+        <span class="unit-opt">Boxes</span>
+        <span class="unit-opt">Pcs</span>
+      </button>
+    </div>
+    <div class="card-body">
+      {% set eff_min = sub.min_quantity or product.min_quantity or 0 %}
+      <div class="grid-collapse-2" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+        <div style="text-align:center;padding:14px;background:var(--bg-alt);border-radius:var(--radius-sm)">
+          <div style="font-size:22px;font-weight:700;color:{% if eff_min > 0 and sub.stock_qty < eff_min %}var(--danger){% elif eff_min > 0 and sub.stock_qty <= (eff_min * 1.2) %}var(--warning){% else %}var(--success){% endif %}">
+            {{ stock_val(sub.stock_qty, product.pcs_per_carton) }}
+          </div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px">Available{% if eff_min > 0 %} / min {{ stock_val(eff_min, product.pcs_per_carton) }}{% endif %}</div>
+        </div>
+        <div style="text-align:center;padding:14px;background:var(--bg-alt);border-radius:var(--radius-sm)">
+          <div style="font-size:22px;font-weight:700;color:var(--warning)">{{ stock_val(sub.production_qty, product.pcs_per_carton) }}</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px">In Production</div>
+        </div>
+        <div style="text-align:center;padding:14px;background:var(--bg-alt);border-radius:var(--radius-sm)">
+          <div style="font-size:22px;font-weight:700;color:var(--primary)">{{ stock_val(sub.in_transit_qty, product.pcs_per_carton) }}</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px">In Transit</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Stock action form -->
+<div class="card" style="margin-bottom:18px">
+  <div class="card-header"><span class="card-title">Stock Actions</span></div>
+  <div class="card-body">
+    <form method="post" action="{{ url_for('products.sub_stock_action', product_id=product.id, sub_id=sub.id) }}">
+      <input type="hidden" name="from_page" value="sub">
+      <div class="form-grid form-grid-2" style="margin-bottom:16px">
+        <div class="form-group">
+          <label>Action For</label>
+          <select name="bucket">
+            <option value="warehouse">🏭 Warehouse</option>
+            <option value="production">⚙️ Production</option>
+            <option value="dispatch">🚢 Dispatch / Transit</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Increase or Decrease</label>
+          <select name="direction">
+            <option value="increase">▲ Increase</option>
+            <option value="decrease">▼ Decrease</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Quantity *</label>
+          <input type="number" name="qty" step="0.01" min="0.01" placeholder="0" required>
+        </div>
+        <div class="form-group">
+          <label>Notes</label>
+          <input type="text" name="notes" placeholder="Optional…">
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary btn-sm">Apply</button>
+    </form>
+  </div>
+</div>
+
+<!-- 3-tab stock history -->
+<div class="card">
+  <div class="card-header" style="gap:0;padding:0">
+    <div style="display:flex;width:100%">
+      <button class="stock-tab-btn active" onclick="switchTab('warehouse')"
+              style="flex:1;padding:12px 16px;background:none;border:none;border-bottom:2px solid var(--primary);font-weight:600;font-size:13px;cursor:pointer;color:var(--primary)">
+        🏭 Warehouse
+      </button>
+      <button class="stock-tab-btn" onclick="switchTab('production')"
+              style="flex:1;padding:12px 16px;background:none;border:none;border-bottom:2px solid transparent;font-weight:600;font-size:13px;cursor:pointer;color:var(--text-muted)">
+        ⚙️ Production
+      </button>
+      <button class="stock-tab-btn" onclick="switchTab('transit')"
+              style="flex:1;padding:12px 16px;background:none;border:none;border-bottom:2px solid transparent;font-weight:600;font-size:13px;cursor:pointer;color:var(--text-muted)">
+        🚢 Transit
+      </button>
+    </div>
+  </div>
+
+  <!-- Warehouse tab -->
+  <div id="tab-warehouse" class="stock-tab-pane">
+    {% if warehouse_history %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Date</th><th>Action</th><th style="text-align:right">Qty</th><th>Notes</th></tr></thead>
+        <tbody>
+          {% for m in warehouse_history %}
+          <tr>
+            <td class="muted font-mono" style="font-size:12px">{{ m.created_at[:16] if m.created_at else '—' }}</td>
+            <td>
+              {% if m.movement_type == 'opening' %}
+                <span class="badge" style="background:rgba(99,102,241,.15);color:#6366f1">Opening Stock</span>
+              {% elif m.movement_type == 'sale' %}
+                <span class="badge" style="background:rgba(239,68,68,.12);color:var(--danger)">▼ Sale</span>
+                {% if m.invoice_number %}<span class="muted" style="font-size:12px;margin-left:6px">{{ m.client_name or '' }} — {{ m.invoice_number }}</span>{% endif %}
+              {% elif m.movement_type == 'sale_cancelled' %}
+                <span class="badge badge-active">▲ Sale Reversed</span>
+                {% if m.invoice_number %}<span class="muted" style="font-size:12px;margin-left:6px">{{ m.invoice_number }}</span>{% endif %}
+              {% elif m.movement_type in ('arrival', 'transit_arrival', 'warehouse_add') %}
+                {% if m.dispatch_name %}
+                  <span class="badge" style="background:rgba(16,185,129,.15);color:#10b981">Dispatch Received</span>
+                  <span class="muted" style="font-size:12px;margin-left:6px">{{ m.dispatch_name }}</span>
+                {% else %}
+                  <span class="badge badge-active">{{ '▲ Added' if m.movement_type == 'warehouse_add' else 'Correction / Added' }}</span>
+                {% endif %}
+              {% elif m.movement_type == 'warehouse_deduct' %}
+                <span class="badge" style="background:rgba(239,68,68,.12);color:var(--danger)">▼ Reduced</span>
+              {% elif m.movement_type == 'add' %}
+                <span class="badge badge-active">Correction / Added</span>
+              {% elif m.movement_type == 'palm_purchase' %}
+                <span class="badge" style="background:rgba(16,185,129,.15);color:#10b981">▲ Palm Purchase</span>
+                {% if m.palm_purchase_id %}<span class="muted" style="font-size:12px;margin-left:6px">PP #{{ m.palm_purchase_id }}</span>{% endif %}
+              {% elif m.movement_type == 'palm_purchase_reversed' %}
+                <span class="badge" style="background:rgba(239,68,68,.12);color:var(--danger)">▼ Palm Purchase Reversed</span>
+              {% elif m.movement_type.endswith('correction_out') %}
+                <span class="badge" style="background:rgba(239,68,68,.12);color:var(--danger)">▼ Eco Correction Out</span>
+              {% elif m.movement_type.endswith('correction_in') %}
+                <span class="badge" style="background:rgba(16,185,129,.15);color:#10b981">▲ Eco Correction In</span>
+              {% else %}
+                <span class="badge">{{ m.movement_type }}</span>
+              {% endif %}
+            </td>
+            <td style="text-align:right;font-weight:700;color:{% if m.movement_type in ('sale','warehouse_deduct','palm_purchase_reversed') or m.movement_type.endswith('correction_out') %}#ef9a9a{% else %}var(--success){% endif %}">
+              {% if m.movement_type in ('sale','warehouse_deduct','palm_purchase_reversed') or m.movement_type.endswith('correction_out') %}-{% else %}+{% endif %}{{ stock_val(m.quantity, product.pcs_per_carton) }}
+            </td>
+            <td class="muted" style="font-size:12px">{{ m.notes or '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty-state" style="padding:28px"><p>No warehouse history yet.</p></div>
+    {% endif %}
+  </div>
+
+  <!-- Production tab -->
+  <div id="tab-production" class="stock-tab-pane" style="display:none">
+    {% if production_history %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Date</th><th>Action</th><th style="text-align:right">Qty</th><th>Notes</th></tr></thead>
+        <tbody>
+          {% for m in production_history %}
+          <tr>
+            <td class="muted font-mono" style="font-size:12px">{{ m.created_at[:16] if m.created_at else '—' }}</td>
+            <td>
+              {% if m.movement_type == 'production_deduct' %}
+                <span class="badge" style="background:rgba(239,68,68,.12);color:var(--danger)">▼ Reduced</span>
+              {% else %}
+                <span class="badge" style="background:rgba(245,158,11,.15);color:#d97706">▲ {{ 'Added' if m.movement_type == 'production_add' else 'Sent to Production' }}</span>
+              {% endif %}
+            </td>
+            <td style="text-align:right;font-weight:700;color:var(--warning)">{{ stock_val(m.quantity, product.pcs_per_carton) }}</td>
+            <td class="muted" style="font-size:12px">{{ m.notes or '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty-state" style="padding:28px"><p>No production history yet.</p></div>
+    {% endif %}
+  </div>
+
+  <!-- Transit tab -->
+  <div id="tab-transit" class="stock-tab-pane" style="display:none">
+    {% if transit_history %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Date</th><th>Action</th><th style="text-align:right">Qty</th><th>Expected Arrival</th><th>Notes</th></tr></thead>
+        <tbody>
+          {% for m in transit_history %}
+          <tr>
+            <td class="muted font-mono" style="font-size:12px">{{ m.created_at[:16] if m.created_at else '—' }}</td>
+            <td>
+              {% if m.movement_type == 'dispatch_deduct' %}
+                <span class="badge" style="background:rgba(239,68,68,.12);color:var(--danger)">▼ Reduced</span>
+              {% elif m.movement_type == 'dispatch_add' %}
+                <span class="badge" style="background:rgba(99,102,241,.15);color:#6366f1">▲ Added</span>
+              {% else %}
+                <span class="badge" style="background:rgba(99,102,241,.15);color:#6366f1">Dispatched</span>
+                {% if m.dispatch_name %}<span class="muted" style="font-size:12px;margin-left:6px">{{ m.dispatch_name }}</span>{% endif %}
+              {% endif %}
+            </td>
+            <td style="text-align:right;font-weight:700;color:var(--primary)">{{ stock_val(m.quantity, product.pcs_per_carton) }}</td>
+            <td class="muted" style="font-size:12px">{{ m.expected_arrival or '—' }}</td>
+            <td class="muted" style="font-size:12px">{{ m.notes or '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty-state" style="padding:28px"><p>No transit history yet.</p></div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function switchTab(name) {
+  document.querySelectorAll('.stock-tab-pane').forEach(p => p.style.display = 'none');
+  document.querySelectorAll('.stock-tab-btn').forEach(b => {
+    b.style.borderBottomColor = 'transparent';
+    b.style.color = 'var(--text-muted)';
+  });
+  const pane = document.getElementById('tab-' + name);
+  const btn  = [...document.querySelectorAll('.stock-tab-btn')]
+                 .find(b => b.getAttribute('onclick').includes("'" + name + "'"));
+  if (pane) pane.style.display = '';
+  if (btn)  { btn.style.borderBottomColor = 'var(--primary)'; btn.style.color = 'var(--primary)'; }
+}
+</script>
+<style>
+.stock-tab-btn:hover { background: var(--bg-alt); }
+</style>
+{% endblock %}

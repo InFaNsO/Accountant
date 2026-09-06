@@ -4,11 +4,11 @@
 {% block topbar_actions %}
   <a href="{{ url_for('payments.import_payments') }}" class="btn btn-secondary">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:15px;height:15px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-    Import from Statement
+    <span class="btn-label-mobile">Import from Statement</span>
   </a>
   <a href="{{ url_for('payments.new_payment') }}" class="btn btn-primary">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-    Record Payment
+    <span class="btn-label-mobile">Record Payment</span>
   </a>
 {% endblock %}
 
@@ -23,38 +23,49 @@
     <table id="paymentTable">
       <thead>
         <tr>
+          <th class="col-mobile-hide">#</th>
           <th>Date</th>
+          <th class="col-mobile-hide">Details</th>
           <th>Client</th>
-          <th>Invoice</th>
-          <th>Method</th>
-          <th>Reference</th>
+          <th class="col-mobile-hide">Company</th>
+          <th class="col-mobile-hide">Applied to</th>
           <th style="text-align:right">Amount</th>
-          <th></th>
         </tr>
       </thead>
       <tbody>
         {% for p in payments %}
-        <tr>
-          <td>{{ p.payment_date }}</td>
+        {% set _cos = companies_by_client.get(p.client_id, []) %}
+        <tr style="border-left:4px solid var(--success)">
+          <td class="col-mobile-hide"><a href="{{ url_for('payments.detail', payment_id=p.id) }}" style="color:var(--accent);text-decoration:none;font-weight:700;font-family:monospace" title="View / edit payment">#{{ p.id }}</a></td>
+          <td class="muted"><a href="{{ url_for('payments.detail', payment_id=p.id) }}" style="color:inherit;text-decoration:none" title="View / edit payment">{{ p.payment_date or '—' }}</a></td>
+          <td class="col-mobile-hide">
+            <span style="font-weight:600">{{ p.notes or p.method or 'Payment' }}</span>
+            {% if p.is_opening_balance %}<span class="badge" style="margin-left:6px">opening</span>{% endif %}
+          </td>
           <td class="fw-700">
             <a href="{{ url_for('clients.detail', client_id=p.client_id) }}"
                style="color:var(--accent);text-decoration:none;font-weight:700">{{ p.client_name }}</a>
           </td>
-          <td>
-            {% if p.invoice_id %}
-              <a href="{{ url_for('invoices.detail', invoice_id=p.invoice_id) }}" style="font-weight:600;color:var(--accent);text-decoration:none;font-family:'SF Mono','Fira Code',monospace">{{ p.invoice_number }}</a>
+          <td class="col-mobile-hide">
+            {% if can_assign and _cos|length > 1 %}
+              <select class="pay-co-select{% if not p.company_id %} unassigned{% endif %}"
+                      data-prev="{{ p.company_id or '' }}"
+                      onchange="assignPaymentCompanyRow({{ p.client_id }}, {{ p.id }}, this)">
+                <option value="" {% if not p.company_id %}selected{% endif %}>— unassigned —</option>
+                {% for co in _cos %}
+                <option value="{{ co.id }}" {% if p.company_id == co.id %}selected{% endif %}>{{ co.name }}</option>
+                {% endfor %}
+              </select>
+            {% elif p.company_name %}
+              {{ p.company_name }}
+            {% elif _cos|length == 1 %}
+              {{ _cos[0].name }}
             {% else %}
-              <span class="muted" style="font-size:12px;font-style:italic">{{ p.invoice_number }}</span>
+              <span class="muted">—</span>
             {% endif %}
           </td>
-          <td><span class="badge badge-sent" style="text-transform:capitalize">{{ p.method.replace('_',' ') }}</span></td>
-          <td class="muted font-mono">{{ p.reference or '—' }}</td>
-          <td class="text-right fw-700" style="color:var(--success)">{{ p.amount|inr }}</td>
-          <td>
-            <form class="confirm-inline" method="post" action="{{ url_for('payments.delete_payment', payment_id=p.id) }}" onsubmit="return confirm('Delete this payment record?')">
-              <button class="btn btn-danger btn-sm">Delete</button>
-            </form>
-          </td>
+          <td class="muted col-mobile-hide">{{ p.invoice_number or '—' }}</td>
+          <td class="fw-700" style="text-align:right;color:var(--success)">{{ p.amount|inr }}</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -68,4 +79,38 @@
   </div>
   {% endif %}
 </div>
+
+<style>
+  .pay-co-select {
+    width:auto; min-width:120px; max-width:200px; font-size:12.5px;
+    padding:4px 6px; border:1px solid var(--border); border-radius:var(--radius-sm);
+    background:var(--surface); color:var(--text-primary); cursor:pointer;
+  }
+  .pay-co-select.unassigned { border-color:var(--warning); }
+</style>
+
+<script>
+// Assign / re-assign a payment's company from the all-payments table. Persists
+// via the same endpoint the client page uses; the row's dropdown already shows
+// the chosen value, so we only flash success / revert on failure.
+function assignPaymentCompanyRow(clientId, paymentId, sel) {
+  const companyId = sel.value;              // '' clears the assignment
+  const prev = sel.dataset.prev || '';
+  sel.disabled = true;
+  fetch(`/clients/${clientId}/payments/${paymentId}/company`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ company_id: companyId }),
+  })
+    .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(() => {
+      sel.disabled = false;
+      sel.dataset.prev = companyId;
+      sel.classList.toggle('unassigned', !companyId);
+      sel.style.outline = '2px solid var(--success)';
+      setTimeout(() => { sel.style.outline = ''; }, 700);
+    })
+    .catch(() => { sel.disabled = false; sel.value = prev; alert('Failed to assign company — please retry.'); });
+}
+</script>
 {% endblock %}

@@ -4,7 +4,7 @@
 {% block topbar_actions %}
   <a href="{{ url_for('invoices.new_invoice') }}" class="btn btn-primary">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-    New Invoice
+    <span class="btn-label-mobile">New Invoice</span>
   </a>
 {% endblock %}
 
@@ -16,10 +16,9 @@
       <select id="statusFilter" onchange="filterByStatus(this.value)" style="width:140px">
         <option value="">All statuses</option>
         <option value="draft">Draft</option>
-        <option value="sent">Sent</option>
+        <option value="issued">Issued</option>
         <option value="partial">Partial</option>
         <option value="paid">Paid</option>
-        <option value="overdue">Overdue</option>
         <option value="cancelled">Cancelled</option>
       </select>
       <input type="search" placeholder="Search…" style="width:200px" oninput="filterInvoices(this.value)">
@@ -32,30 +31,40 @@
         <tr>
           <th>Invoice #</th>
           <th>Client</th>
-          <th>Issue Date</th>
-          <th>Due Date</th>
+          <th class="col-mobile-hide">Issue Date</th>
+          <th class="col-mobile-hide">Due Date</th>
           <th>Total</th>
-          <th>Balance</th>
+          <th class="col-mobile-hide">Balance</th>
           <th>Status</th>
-          <th></th>
+          <th class="col-mobile-hide"></th>
         </tr>
       </thead>
       <tbody>
         {% for inv in invoices %}
-        <tr data-status="{{ inv.status }}">
+        {% set _paid = inv.status == 'paid' or inv.amount_paid >= inv.total and inv.total > 0 %}
+        {% set _overdue = inv.due_date and inv.due_date < today and inv.status not in ('paid','cancelled') %}
+        {% set _pct_unpaid = ((inv.total - inv.amount_paid) / inv.total) if inv.total > 0 else 0 %}
+        {% if inv.status == 'cancelled' %}{% set _rc = '' %}
+        {% elif _paid %}{% set _rc = 'var(--success)' %}
+        {% elif _overdue %}{% set _rc = '#b91c1c' %}
+        {% elif _pct_unpaid > 0.5 %}{% set _rc = 'var(--danger)' %}
+        {% else %}{% set _rc = 'var(--warning)' %}{% endif %}
+        <tr data-status="{{ inv.status }}"{% if _rc %} style="border-left:4px solid {{ _rc }}"{% endif %}>
           <td><a href="{{ url_for('invoices.detail', invoice_id=inv.id) }}" style="font-weight:700;color:var(--accent);text-decoration:none;font-family:'SF Mono','Fira Code',monospace">{{ inv.invoice_number }}</a></td>
           <td>
-            <div class="fw-700">{{ inv.client_name }}</div>
+            <a href="{{ url_for('clients.detail', client_id=inv.client_id) }}" style="font-weight:700;color:var(--accent);text-decoration:none">{{ inv.client_name }}</a>
             {% if inv.client_company %}<div class="muted" style="font-size:12px">{{ inv.client_company }}</div>{% endif %}
           </td>
-          <td class="muted">{{ inv.issue_date }}</td>
-          <td class="muted">{{ inv.due_date or '—' }}</td>
+          <td class="muted col-mobile-hide">{{ inv.issue_date }}</td>
+          <td class="muted col-mobile-hide">{{ inv.due_date or '—' }}</td>
           <td class="fw-700">{{ inv.total|inr }}</td>
-          <td {% if (inv.total - inv.amount_paid) > 0 %}style="color:var(--danger);font-weight:600"{% else %}style="color:var(--success);font-weight:600"{% endif %}>
+          <td class="col-mobile-hide" onclick="showClientLedger({{ inv.client_id }}, {{ inv.client_name|tojson }})"
+              style="cursor:pointer;{% if (inv.total - inv.amount_paid) > 0 %}color:var(--danger);font-weight:600{% else %}color:var(--success);font-weight:600{% endif %}"
+              title="View client ledger">
             {{ (inv.total - inv.amount_paid)|inr }}
           </td>
           <td><span class="badge badge-{{ inv.status }}">{{ inv.status }}</span></td>
-          <td style="text-align:right">
+          <td style="text-align:right" class="col-mobile-hide">
             <a href="{{ url_for('invoices.detail', invoice_id=inv.id) }}" class="btn btn-secondary btn-sm">View</a>
           </td>
         </tr>

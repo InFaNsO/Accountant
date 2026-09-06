@@ -1,11 +1,17 @@
 {% extends "base.html" %}
 {% block title %}{{ dispatch.name }}{% endblock %}
 {% block page_title %}{{ dispatch.name }}{% endblock %}
+{% block chat_context %}data-chat-context='{"module": "transit", "entity": "dispatch", "id": {{ dispatch.id }}, "label": {{ (dispatch.name)|tojson }}}'{% endblock %}
 {% block topbar_actions %}
-  {% if dispatch.status != 'received' %}
-  <form method="post" action="{{ url_for('transit.receive', dispatch_id=dispatch.id) }}" id="receiveForm">
-    <button class="btn btn-primary" onclick="fillAll()">Receive All</button>
+  {% if dispatch.status == 'draft' %}
+  <form method="post" action="{{ url_for('transit.activate', dispatch_id=dispatch.id) }}" style="display:inline">
+    <button class="btn btn-primary" onclick="return confirm('Activate this dispatch? Stock will move from production to in-transit.')">Activate</button>
   </form>
+  {% elif dispatch.status != 'received' %}
+  <button class="btn btn-primary" onclick="fillAll(); document.getElementById('receiveForm').submit()"><span class="btn-label-mobile">Receive All</span><span class="lbl-mobile-only">Receive</span></button>
+  {% endif %}
+  {% if current_user.has_permission('transit', 'edit') and dispatch.status != 'received' %}
+  <a href="{{ url_for('transit.edit_dispatch', dispatch_id=dispatch.id) }}" class="btn btn-secondary">Edit</a>
   {% endif %}
   <form method="post" action="{{ url_for('transit.delete_dispatch', dispatch_id=dispatch.id) }}" style="display:inline"
         onsubmit="return confirm('Delete {{ dispatch.name }}? Unreceived quantities will be reversed.')">
@@ -14,9 +20,19 @@
   <a href="{{ url_for('transit.list_transit') }}" class="btn btn-secondary">Back</a>
 {% endblock %}
 {% block content %}
+{% set can_receive = dispatch.status not in ('received', 'draft') %}
+
+{% if dispatch.status == 'draft' %}
+<div class="card" style="margin-bottom:18px;border-left:3px solid var(--warning)">
+  <div class="card-body" style="padding:14px 20px;font-size:13px;color:var(--text-secondary)">
+    <strong style="color:var(--warning)">Draft</strong> — no stock has moved from production to transit yet.
+    Click <strong>Activate</strong> to commit this dispatch (production stock must be available).
+  </div>
+</div>
+{% endif %}
 
 <!-- Header -->
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px">
+<div class="grid-collapse" style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px">
   <div class="card">
     <div class="card-header"><span class="card-title">Dispatch Info</span></div>
     <div class="card-body" style="padding:0">
@@ -30,7 +46,9 @@
         <tr>
           <td style="padding:10px 20px;color:var(--text-muted);font-size:13px;border-bottom:1px solid var(--border)">Status</td>
           <td style="padding:10px 20px;border-bottom:1px solid var(--border)">
-            {% if dispatch.status == 'in_transit' %}
+            {% if dispatch.status == 'draft' %}
+              <span class="badge" style="background:rgba(245,158,11,.15);color:#d97706">Draft</span>
+            {% elif dispatch.status == 'in_transit' %}
               <span class="badge" style="background:rgba(99,102,241,.15);color:#6366f1">In Transit</span>
             {% elif dispatch.status == 'partially_received' %}
               <span class="badge" style="background:rgba(245,158,11,.15);color:#d97706">Partially Received</span>
@@ -48,7 +66,7 @@
   <div class="card">
     <div class="card-header"><span class="card-title">Summary</span></div>
     <div class="card-body">
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+      <div class="grid-collapse-2" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
         <div style="text-align:center;padding:16px;background:var(--bg-alt);border-radius:var(--radius-sm)">
           <div style="font-size:26px;font-weight:700;color:var(--primary)">{{ items|length }}</div>
           <div style="font-size:12px;color:var(--text-muted);margin-top:2px">Product Lines</div>
@@ -56,7 +74,7 @@
         {% set total_qty = items|sum(attribute='quantity') %}
         {% set total_recv = items|sum(attribute='qty_received') %}
         <div style="text-align:center;padding:16px;background:var(--bg-alt);border-radius:var(--radius-sm)">
-          <div style="font-size:26px;font-weight:700;color:var(--success)">{{ total_recv|round(2) }}</div>
+          <div style="font-size:26px;font-weight:700;color:var(--success)">{{ total_recv | indian }}</div>
           <div style="font-size:12px;color:var(--text-muted);margin-top:2px">Received</div>
         </div>
         <div style="text-align:center;padding:16px;background:var(--bg-alt);border-radius:var(--radius-sm)">
@@ -71,7 +89,14 @@
 
 <!-- Items -->
 <div class="card">
-  <div class="card-header"><span class="card-title">Dispatch Items</span></div>
+  <div class="card-header">
+    <span class="card-title">Dispatch Items</span>
+    <button class="unit-toggle" onclick="toggleStockUnit()">
+      <span class="unit-knob"></span>
+      <span class="unit-opt">Boxes</span>
+      <span class="unit-opt">Pcs</span>
+    </button>
+  </div>
   {% if items %}
   <form method="post" action="{{ url_for('transit.receive', dispatch_id=dispatch.id) }}" id="receiveForm">
   <div class="table-wrap">
@@ -85,30 +110,35 @@
           <th style="text-align:right">Price (₹)</th>
           <th style="text-align:right">CBM</th>
           <th style="text-align:right">Gross Wt (kg)</th>
-          {% if dispatch.status != 'received' %}<th style="text-align:center;min-width:140px">Receive Qty</th>{% endif %}
+          {% if can_receive %}<th style="text-align:center;min-width:140px">Receive Qty</th>{% endif %}
         </tr>
       </thead>
       <tbody>
         {% for it in items %}
         {% set remaining = it.quantity - (it.qty_received or 0) %}
         {% set pct = ((it.qty_received or 0) / it.quantity * 100)|round(0)|int if it.quantity > 0 else 0 %}
-        <tr>
+        <tr class="cost-line" data-name="{{ it.display_name }}" data-qty="{{ it.quantity }}"
+            data-cbm="{{ it.cbm or 0 }}" data-weight="{{ it.gross_weight or 0 }}">
           <td class="fw-700">{{ it.display_name }}</td>
-          <td style="text-align:right">{{ it.quantity }}</td>
-          <td style="text-align:right;color:var(--success);font-weight:600">{{ it.qty_received or 0 }}</td>
+          <td style="text-align:right">{{ stock_val(it.quantity, it.pcs_per_carton) }}</td>
+          <td style="text-align:right;color:var(--success);font-weight:600">{{ stock_val(it.qty_received or 0, it.pcs_per_carton) }}</td>
           <td style="text-align:right;font-weight:700;color:{% if remaining <= 0 %}var(--success){% else %}var(--text){% endif %}">
-            {{ remaining|round(2) }}
+            {{ stock_val(remaining, it.pcs_per_carton) }}
           </td>
           <td style="text-align:right">{% if it.price %}{{ it.price|inr }}{% else %}<span class="muted">—</span>{% endif %}</td>
           <td style="text-align:right">{% if it.cbm %}{{ it.cbm }}{% else %}<span class="muted">—</span>{% endif %}</td>
           <td style="text-align:right">{% if it.gross_weight %}{{ it.gross_weight }}{% else %}<span class="muted">—</span>{% endif %}</td>
-          {% if dispatch.status != 'received' %}
+          {% if can_receive %}
           <td style="text-align:center">
             {% if remaining > 0 %}
+            <div style="display:inline-flex;flex-direction:column;align-items:flex-end;gap:2px">
             <input type="number" name="recv_{{ it.id }}" id="recv_{{ it.id }}"
                    step="0.01" min="0" max="{{ remaining }}" placeholder="0"
                    data-max="{{ remaining }}"
-                   style="width:80px;text-align:right;display:inline-block">
+                   oninput="validateRecv(this)"
+                   style="width:90px;text-align:right;display:inline-block">
+            <span class="recv-hint" style="font-size:11px;color:var(--danger);display:none">Max {{ remaining }}</span>
+            </div>
             {% else %}
             <span class="muted" style="font-size:12px">Done</span>
             {% endif %}
@@ -119,7 +149,7 @@
       </tbody>
     </table>
   </div>
-  {% if dispatch.status != 'received' %}
+  {% if can_receive %}
   <div style="padding:16px 20px;display:flex;gap:10px;border-top:1px solid var(--border)">
     <button type="submit" class="btn btn-primary">Save Received Quantities</button>
     <button type="button" class="btn btn-secondary" onclick="fillAll()">Fill All Remaining</button>
@@ -130,6 +160,43 @@
   <div class="empty-state" style="padding:30px"><p>No items on this dispatch.</p></div>
   {% endif %}
 </div>
+
+{% if items %}
+<!-- Costing (shipping cost allocation — client-side calculator) -->
+<div class="card" style="margin-top:18px">
+  <div class="card-header"><span class="card-title">Costing</span></div>
+  <div class="card-body">
+    <div style="display:flex;gap:32px;flex-wrap:wrap;margin-bottom:16px">
+      <div>
+        <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);margin-bottom:8px">Method</div>
+        <label style="display:block;font-size:13px;margin-bottom:4px;cursor:pointer"><input type="radio" name="costMode" value="rate" checked onchange="costModeChanged()"> Rate × weight/CBM</label>
+        <label style="display:block;font-size:13px;cursor:pointer"><input type="radio" name="costMode" value="container" onchange="costModeChanged()"> Full container split</label>
+      </div>
+      <div>
+        <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);margin-bottom:8px">Basis</div>
+        <label style="display:block;font-size:13px;margin-bottom:4px;cursor:pointer"><input type="radio" name="costBasis" value="weight" checked> By weight (kg)</label>
+        <label style="display:block;font-size:13px;cursor:pointer"><input type="radio" name="costBasis" value="cbm"> By CBM</label>
+      </div>
+    </div>
+
+    <div id="rateInputs" style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end;margin-bottom:16px">
+      <div class="form-group" style="margin:0">
+        <label>Rate (₹ per kg / CBM)</label>
+        <input type="number" id="costRate" step="0.0001" min="0" placeholder="e.g. 120" style="width:200px">
+      </div>
+    </div>
+
+    <div id="containerInputs" style="display:none;gap:14px;flex-wrap:wrap;align-items:flex-end;margin-bottom:16px">
+      <div class="form-group" style="margin:0"><label>Container Cost (₹)</label><input type="number" id="ctrCost" step="0.01" min="0" placeholder="0" style="width:170px"></div>
+      <div class="form-group" style="margin:0"><label>Duty (₹)</label><input type="number" id="ctrDuty" step="0.01" min="0" placeholder="0" style="width:150px"></div>
+      <div class="form-group" style="margin:0"><label>Other Charges (₹)</label><input type="number" id="ctrOther" step="0.01" min="0" placeholder="0" style="width:170px"></div>
+    </div>
+
+    <button type="button" class="btn btn-primary" onclick="calculateCosting()">Calculate</button>
+    <div id="costingResult" style="margin-top:18px"></div>
+  </div>
+</div>
+{% endif %}
 
 {% if warnings %}
 <div class="card" style="margin-top:18px;border-left:3px solid var(--warning)">
@@ -145,10 +212,103 @@
 {% endblock %}
 {% block scripts %}
 <script>
+function validateRecv(inp) {
+  const max  = parseFloat(inp.dataset.max);
+  const val  = parseFloat(inp.value) || 0;
+  const hint = inp.parentNode.querySelector('.recv-hint');
+  if (val > max) {
+    inp.style.outline = '2px solid var(--danger)';
+    inp.style.background = 'rgba(239,68,68,.07)';
+    if (hint) hint.style.display = '';
+  } else {
+    inp.style.outline = '';
+    inp.style.background = '';
+    if (hint) hint.style.display = 'none';
+  }
+}
+
 function fillAll() {
   document.querySelectorAll('input[data-max]').forEach(inp => {
     inp.value = inp.dataset.max;
+    validateRecv(inp);
   });
+}
+
+/* ── Costing calculator ───────────────────────────────────────────────────── */
+function costModeChanged() {
+  var mode = document.querySelector('input[name="costMode"]:checked').value;
+  document.getElementById('rateInputs').style.display      = mode === 'rate'      ? 'flex' : 'none';
+  document.getElementById('containerInputs').style.display = mode === 'container' ? 'flex' : 'none';
+}
+
+function _costInr(x) {
+  return '₹' + (Math.round(x * 100) / 100).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+function _round4(x) { return Math.round(x * 10000) / 10000; }
+
+function _costLines() {
+  return Array.prototype.map.call(document.querySelectorAll('tr.cost-line'), function (tr) {
+    return {
+      name:   tr.dataset.name,
+      qty:    parseFloat(tr.dataset.qty)    || 0,
+      cbm:    parseFloat(tr.dataset.cbm)    || 0,
+      weight: parseFloat(tr.dataset.weight) || 0,
+    };
+  });
+}
+
+function calculateCosting() {
+  var mode  = document.querySelector('input[name="costMode"]:checked').value;   // rate | container
+  var basis = document.querySelector('input[name="costBasis"]:checked').value;  // weight | cbm
+  var basisLabel = basis === 'weight' ? 'kg' : 'CBM';
+  var lines = _costLines();
+  var basisOf = function (l) { return basis === 'weight' ? l.weight : l.cbm; };
+  var totalBasis = lines.reduce(function (s, l) { return s + basisOf(l); }, 0);
+
+  var rows = [], totalCost = 0;
+  if (mode === 'rate') {
+    var rate = parseFloat(document.getElementById('costRate').value) || 0;
+    lines.forEach(function (l) {
+      var cost = rate * basisOf(l);
+      rows.push({ l: l, basis: basisOf(l), cost: cost });
+      totalCost += cost;
+    });
+  } else {
+    var total = (parseFloat(document.getElementById('ctrCost').value)  || 0)
+              + (parseFloat(document.getElementById('ctrDuty').value)  || 0)
+              + (parseFloat(document.getElementById('ctrOther').value) || 0);
+    lines.forEach(function (l) {
+      var share = totalBasis > 0 ? total * basisOf(l) / totalBasis : 0;
+      rows.push({ l: l, basis: basisOf(l), cost: share });
+      totalCost += share;
+    });
+  }
+
+  var html = '<div class="table-wrap"><table><thead><tr>' +
+    '<th>Product</th>' +
+    '<th style="text-align:right">' + basisLabel + '</th>' +
+    '<th style="text-align:right">Qty (pcs)</th>' +
+    '<th style="text-align:right">Shipping Cost</th>' +
+    '<th style="text-align:right">Per Piece</th></tr></thead><tbody>';
+  rows.forEach(function (r) {
+    var per = r.l.qty > 0 ? r.cost / r.l.qty : 0;
+    html += '<tr><td class="fw-700">' + r.l.name + '</td>' +
+      '<td style="text-align:right">' + _round4(r.basis) + '</td>' +
+      '<td style="text-align:right">' + r.l.qty.toLocaleString('en-IN') + '</td>' +
+      '<td style="text-align:right">' + _costInr(r.cost) + '</td>' +
+      '<td style="text-align:right;font-weight:700">' + (r.l.qty > 0 ? _costInr(per) : '—') + '</td></tr>';
+  });
+  html += '</tbody><tfoot><tr style="border-top:2px solid var(--border)">' +
+    '<td class="fw-700">Total</td>' +
+    '<td style="text-align:right">' + _round4(totalBasis) + '</td>' +
+    '<td></td>' +
+    '<td style="text-align:right" class="fw-700">' + _costInr(totalCost) + '</td>' +
+    '<td></td></tr></tfoot></table></div>';
+  if (totalBasis <= 0) {
+    html += '<p class="muted" style="font-size:12px;margin-top:8px">No ' + basisLabel +
+            ' values on these line items — enter CBM / gross weight on the dispatch to split costs by ' + basisLabel + '.</p>';
+  }
+  document.getElementById('costingResult').innerHTML = html;
 }
 </script>
 {% endblock %}

@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Users{% endblock %}
+{% block page_title %}User Management{% endblock %}
+{% block topbar_actions %}
+  <a href="{{ url_for('users.new_user') }}" class="btn btn-primary">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    <span class="btn-label-mobile">New User</span>
+  </a>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="card-header"><span class="card-title">All Users ({{ users|length }})</span></div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Email</th>
+          <th>Role</th>
+          <th>Status</th>
+          <th>Created</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in users %}
+        <tr>
+          <td class="fw-700">{{ u.name }}</td>
+          <td class="muted">{{ u.email }}</td>
+          <td>
+            {% if u.role == 'god' %}
+              <span class="badge" style="background:rgba(139,92,246,.15);color:#7c3aed">⚡ God</span>
+            {% else %}
+              <span class="badge badge-sent">User</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if u.is_active %}
+              <span class="badge badge-active">Active</span>
+            {% else %}
+              <span class="badge badge-inactive">Inactive</span>
+            {% endif %}
+          </td>
+          <td class="muted">{{ u.created_at[:10] }}</td>
+          <td style="text-align:right;display:flex;gap:6px;justify-content:flex-end">
+            <a href="{{ url_for('users.edit_user', user_id=u.id) }}" class="btn btn-secondary btn-sm">Edit</a>
+            {% if u.role != 'god' %}
+            <form method="post" action="{{ url_for('users.delete_user_route', user_id=u.id) }}" class="col-mobile-hide"
+                  onsubmit="return confirm('Delete {{ u.name }}?')">
+              <button class="btn btn-danger btn-sm">Delete</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

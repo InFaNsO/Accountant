@@ -1,14 +1,20 @@
 {% extends "base.html" %}
 {% block title %}{{ product.name }}{% endblock %}
 {% block page_title %}{{ product.name }}{% endblock %}
+{% block chat_context %}data-chat-context='{"module": "products", "entity": "product", "id": {{ product.id }}, "label": {{ (product.name)|tojson }}}'{% endblock %}
 {% block topbar_actions %}
-  <a href="{{ url_for('products.new_sub_product', product_id=product.id) }}" class="btn btn-secondary">+ Sub-Product</a>
+  {% if subs %}
+  <a href="{{ url_for('products.new_sub_product', product_id=product.id) }}" class="btn btn-secondary">+ <span class="btn-label-mobile">Sub-Product</span><span class="lbl-mobile-only">Sub</span></a>
+  {% endif %}
+  {% if not product.eco_parent_id and not product.has_eco_range %}
+  <button onclick="document.getElementById('eco-range-modal').style.display='flex'" class="btn btn-secondary">+ <span class="btn-label-mobile">Eco Range</span><span class="lbl-mobile-only">Eco</span></button>
+  {% endif %}
   <a href="{{ url_for('products.edit_product', product_id=product.id) }}" class="btn btn-secondary">Edit</a>
   <a href="{{ url_for('products.list_products') }}" class="btn btn-secondary">Back</a>
 {% endblock %}
 
 {% block content %}
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px">
+<div class="grid-collapse" style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px">
 
   <!-- Info card -->
   <div class="card">
@@ -25,8 +31,33 @@
         {{ row('SKU', product.sku or '—') }}
         {{ row('Unit Price', product.unit_price|inr) }}
         {{ row('Tax Rate', product.tax_rate ~ '%') }}
-        {{ row('Min Quantity', product.min_quantity if product.min_quantity else '—') }}
+        {{ row('Min Quantity', product.min_quantity | indian if product.min_quantity else '—') }}
+        {{ row('Pcs / Box', product.pcs_per_carton | indian if product.pcs_per_carton else '—') }}
         {{ row('Status', 'Active' if product.is_active else 'Inactive') }}
+        {% if eco_product %}
+        <tr>
+          <td style="padding:10px 20px;color:var(--text-muted);font-size:13px">Eco Range</td>
+          <td style="padding:10px 20px">
+            <a href="{{ url_for('products.product_detail', product_id=eco_product.id) }}"
+               style="color:var(--success);font-weight:600;text-decoration:none">
+              {{ eco_product.name }}{% if eco_product.sku %} [{{ eco_product.sku }}]{% endif %}
+            </a>
+            <span style="font-size:11px;color:var(--text-muted);margin-left:6px">{{ eco_product.unit_price|inr }}</span>
+          </td>
+        </tr>
+        {% endif %}
+        {% if main_product %}
+        <tr>
+          <td style="padding:10px 20px;color:var(--text-muted);font-size:13px">Main Product</td>
+          <td style="padding:10px 20px">
+            <a href="{{ url_for('products.product_detail', product_id=main_product.id) }}"
+               style="color:var(--primary);font-weight:600;text-decoration:none">
+              {{ main_product.name }}
+            </a>
+            <span style="font-size:11px;background:rgba(16,185,129,.15);color:#10b981;padding:2px 7px;border-radius:10px;margin-left:6px">Eco Product</span>
+          </td>
+        </tr>
+        {% endif %}
         {% if product.description %}
         <tr>
           <td style="padding:10px 20px;color:var(--text-muted);font-size:13px">Description</td>
@@ -37,23 +68,30 @@
     </div>
   </div>
 
-  <!-- Stock card -->
+  <!-- Stock summary card -->
   <div class="card">
-    <div class="card-header"><span class="card-title">Stock (Parent)</span></div>
+    <div class="card-header">
+      <span class="card-title">Stock{% if subs %} (Parent){% endif %}</span>
+      <button class="unit-toggle" onclick="toggleStockUnit()">
+        <span class="unit-knob"></span>
+        <span class="unit-opt">Boxes</span>
+        <span class="unit-opt">Pcs</span>
+      </button>
+    </div>
     <div class="card-body">
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+      <div class="grid-collapse-2" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
         <div style="text-align:center;padding:14px;background:var(--bg-alt);border-radius:var(--radius-sm)">
-          <div style="font-size:22px;font-weight:700;color:{% if product.min_quantity > 0 and product.stock_qty < product.min_quantity %}var(--danger){% else %}var(--success){% endif %}">
-            {{ product.stock_qty }}
+          <div style="font-size:22px;font-weight:700;color:{% if product.min_quantity > 0 and product.stock_qty < product.min_quantity %}var(--danger){% elif product.min_quantity > 0 and product.stock_qty <= (product.min_quantity * 1.2) %}var(--warning){% else %}var(--success){% endif %}">
+            {{ stock_val(product.stock_qty, product.pcs_per_carton) }}
           </div>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:2px">Available</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px">Available{% if product.min_quantity > 0 %} / min {{ stock_val(product.min_quantity, product.pcs_per_carton) }}{% endif %}</div>
         </div>
         <div style="text-align:center;padding:14px;background:var(--bg-alt);border-radius:var(--radius-sm)">
-          <div style="font-size:22px;font-weight:700;color:var(--warning)">{{ product.production_qty or 0 }}</div>
+          <div style="font-size:22px;font-weight:700;color:var(--warning)">{{ stock_val(product.production_qty or 0, product.pcs_per_carton) }}</div>
           <div style="font-size:11px;color:var(--text-muted);margin-top:2px">In Production</div>
         </div>
         <div style="text-align:center;padding:14px;background:var(--bg-alt);border-radius:var(--radius-sm)">
-          <div style="font-size:22px;font-weight:700;color:var(--primary)">{{ product.in_transit_qty or 0 }}</div>
+          <div style="font-size:22px;font-weight:700;color:var(--primary)">{{ stock_val(product.in_transit_qty or 0, product.pcs_per_carton) }}</div>
           <div style="font-size:11px;color:var(--text-muted);margin-top:2px">In Transit</div>
         </div>
       </div>
@@ -61,24 +99,35 @@
   </div>
 </div>
 
-<!-- Sub-products -->
+<!-- Sub-products table (only when subs exist) -->
 {% if subs %}
 <div class="card" style="margin-bottom:18px">
   <div class="card-header">
-    <span class="card-title">Sub-Products ({{ subs|length }})</span>
-    <a href="{{ url_for('products.new_sub_product', product_id=product.id) }}" class="btn btn-secondary btn-sm">+ Add</a>
+    <div>
+      <span class="card-title">Sub-Products ({{ subs|length }})</span>
+      <span style="font-size:11px;color:var(--text-muted);margin-left:10px">Double-click Name or Price to edit · Click name to view details</span>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button id="subsSaveBtn" class="btn btn-primary btn-sm" onclick="saveAllSubs()" style="display:none">Save Changes</button>
+      {% if eco_pairs and current_user.has_permission('products', 'edit') %}
+      <button type="button" class="btn btn-secondary btn-sm" onclick="openCorrection()"
+              title="Move stock between the Normal and Eco range">⇄ Correction</button>
+      {% endif %}
+      <a href="{{ url_for('products.new_sub_product', product_id=product.id) }}" class="btn btn-secondary btn-sm">+ Add</a>
+    </div>
   </div>
   <div class="table-wrap">
     <table id="subsTable">
       <thead>
         <tr>
           <th>Name</th>
+          <th>SKU</th>
           <th style="text-align:right">Stock</th>
           <th style="text-align:right">In Transit</th>
           <th style="text-align:right">In Production</th>
           <th style="text-align:right">Price (₹)</th>
           <th style="text-align:right">Tax %</th>
-          <th style="text-align:center;width:120px"></th>
+          <th style="width:60px"></th>
         </tr>
       </thead>
       <tbody>
@@ -90,42 +139,36 @@
           'var(--success)'
         %}
         <tr id="sub-row-{{ s.id }}" data-sub-id="{{ s.id }}" data-product-id="{{ product.id }}">
-          <!-- view mode -->
-          <td class="view-cell fw-700">{{ s.name }}</td>
-          <td class="view-cell" style="text-align:right">
-            <span style="font-weight:700;color:{{ stock_color }}">{{ s.stock_qty }}</span>
-            {% if min_qty > 0 %}<div style="font-size:10px;color:var(--text-muted)">min {{ min_qty }}</div>{% endif %}
+          <td class="fw-700">
+            <div style="display:flex;align-items:center;gap:6px">
+              <a href="{{ url_for('products.sub_detail', product_id=product.id, sub_id=s.id) }}"
+                 class="sub-name-link"
+                 style="color:var(--text);text-decoration:none;font-weight:700"
+                 title="View sub-product detail">{{ s.name }}</a>
+              <span class="sub-edit-hint sub-editable"
+                    data-field="name" data-val="{{ s.name }}"
+                    title="Double-click to rename"
+                    ondblclick="cellEdit(this)"
+                    style="font-size:10px;color:var(--text-muted);cursor:cell;padding:1px 4px;border-radius:3px;border:1px dashed transparent">✎</span>
+            </div>
           </td>
-          <td class="view-cell" style="text-align:right;color:var(--primary);font-weight:600">{{ s.in_transit_qty or '—' }}</td>
-          <td class="view-cell" style="text-align:right;color:var(--warning);font-weight:600">{{ s.production_qty or '—' }}</td>
-          <td class="view-cell" style="text-align:right">
-            {% if s.use_parent_price %}<span class="muted">↑ parent</span>
-            {% else %}{{ s.unit_price|inr }}{% endif %}
+          <td class="sub-editable" data-field="sku" data-val="{{ s.sku or '' }}" title="Double-click to edit" ondblclick="cellEdit(this)"
+              style="color:var(--text-muted);font-size:12px;font-family:monospace">{{ s.sku or '—' }}</td>
+          <td style="text-align:right">
+            <span style="font-weight:700;color:{{ stock_color }}">{{ stock_val(s.stock_qty, product.pcs_per_carton) }}</span>
+            {% if min_qty > 0 %}<div style="font-size:10px;color:var(--text-muted)">min {{ stock_val(min_qty, product.pcs_per_carton) }}</div>{% endif %}
           </td>
-          <td class="view-cell" style="text-align:right;color:var(--text-muted)">{{ s.tax_rate }}%</td>
-
-          <!-- edit mode (hidden) -->
-          <td class="edit-cell" style="display:none"><input type="text" class="ef-name" value="{{ s.name }}" style="width:100%"></td>
-          <td class="edit-cell" style="display:none;text-align:right"><span style="color:{{ stock_color }};font-weight:700">{{ s.stock_qty }}</span></td>
-          <td class="edit-cell" style="display:none;text-align:right;color:var(--primary)">{{ s.in_transit_qty or '—' }}</td>
-          <td class="edit-cell" style="display:none;text-align:right;color:var(--warning)">{{ s.production_qty or '—' }}</td>
-          <td class="edit-cell" style="display:none"><input type="number" class="ef-price" value="{{ '' if s.use_parent_price else s.unit_price }}" step="0.01" min="0" placeholder="parent" style="width:100%;text-align:right"></td>
-          <td class="edit-cell" style="display:none"><input type="number" class="ef-tax" value="{{ s.tax_rate }}" step="0.01" min="0" max="100" style="width:70px;text-align:right"></td>
-
-          <td style="text-align:center;white-space:nowrap">
-            <!-- view actions -->
-            <span class="view-actions">
-              <button class="btn btn-secondary btn-sm" onclick="startEdit({{ s.id }})">Edit</button>
-              <form method="post" action="{{ url_for('products.delete_sub_product', product_id=product.id, sub_id=s.id) }}"
-                    style="display:inline" onsubmit="return confirm('Delete {{ s.name }}?')">
-                <button class="btn btn-danger btn-sm">Del</button>
-              </form>
-            </span>
-            <!-- edit actions -->
-            <span class="edit-actions" style="display:none">
-              <button class="btn btn-primary btn-sm" onclick="saveEdit({{ s.id }})">Save</button>
-              <button class="btn btn-secondary btn-sm" onclick="discardEdit({{ s.id }})">Discard</button>
-            </span>
+          <td style="text-align:right;color:var(--primary);font-weight:600">{% if s.in_transit_qty %}{{ stock_val(s.in_transit_qty, product.pcs_per_carton) }}{% else %}—{% endif %}</td>
+          <td style="text-align:right;color:var(--warning);font-weight:600">{% if s.production_qty %}{{ stock_val(s.production_qty, product.pcs_per_carton) }}{% else %}—{% endif %}</td>
+          <td style="text-align:right" class="sub-editable" data-field="price" data-val="{{ '' if s.use_parent_price else s.unit_price }}" title="Double-click to edit" ondblclick="cellEdit(this)">
+            {% if s.use_parent_price %}<span class="muted">↑ parent</span>{% else %}<span style="font-weight:600">{{ s.unit_price|inr }}</span>{% endif %}
+          </td>
+          <td style="text-align:right;color:var(--text-muted)">{{ s.tax_rate }}%</td>
+          <td style="text-align:center">
+            <form method="post" action="{{ url_for('products.delete_sub_product', product_id=product.id, sub_id=s.id) }}"
+                  style="display:inline" onsubmit="return confirm('Delete {{ s.name }}?')">
+              <button class="btn btn-danger btn-sm">Del</button>
+            </form>
           </td>
         </tr>
         {% endfor %}
@@ -133,49 +176,327 @@
     </table>
   </div>
 </div>
+
+<!-- No subs: show stock action form + tabbed history -->
 {% else %}
+
 <div class="card" style="margin-bottom:18px">
   <div class="card-header">
-    <span class="card-title">Sub-Products</span>
+    <span class="card-title">Stock Actions</span>
     <a href="{{ url_for('products.new_sub_product', product_id=product.id) }}" class="btn btn-secondary btn-sm">+ Add Sub-Product</a>
   </div>
-  <div class="empty-state" style="padding:30px">
-    <p style="color:var(--text-muted)">No sub-products. Sub-products let you track variants (sizes, grades, types) under this product.</p>
+  <div class="card-body">
+    <form method="post" action="{{ url_for('products.stock_action', product_id=product.id) }}">
+      <div class="form-grid form-grid-2" style="margin-bottom:16px">
+        <div class="form-group">
+          <label>Action For</label>
+          <select name="bucket">
+            <option value="warehouse">🏭 Warehouse</option>
+            <option value="production">⚙️ Production</option>
+            <option value="dispatch">🚢 Dispatch / Transit</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Increase or Decrease</label>
+          <select name="direction">
+            <option value="increase">▲ Increase</option>
+            <option value="decrease">▼ Decrease</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Quantity *</label>
+          <input type="number" name="qty" step="0.01" min="0.01" placeholder="0" required>
+        </div>
+        <div class="form-group">
+          <label>Notes</label>
+          <input type="text" name="notes" placeholder="Optional…">
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary btn-sm">Apply</button>
+    </form>
+  </div>
+</div>
+
+<!-- 3-tab stock history -->
+<div class="card">
+  <div class="card-header" style="gap:0;padding:0">
+    <div style="display:flex;width:100%">
+      <button class="stock-tab-btn active" onclick="switchTab('warehouse')"
+              style="flex:1;padding:12px 16px;background:none;border:none;border-bottom:2px solid var(--primary);font-weight:600;font-size:13px;cursor:pointer;color:var(--primary)">
+        🏭 Warehouse
+      </button>
+      <button class="stock-tab-btn" onclick="switchTab('production')"
+              style="flex:1;padding:12px 16px;background:none;border:none;border-bottom:2px solid transparent;font-weight:600;font-size:13px;cursor:pointer;color:var(--text-muted)">
+        ⚙️ Production
+      </button>
+      <button class="stock-tab-btn" onclick="switchTab('transit')"
+              style="flex:1;padding:12px 16px;background:none;border:none;border-bottom:2px solid transparent;font-weight:600;font-size:13px;cursor:pointer;color:var(--text-muted)">
+        🚢 Transit
+      </button>
+    </div>
+  </div>
+
+  <!-- Warehouse tab -->
+  <div id="tab-warehouse" class="stock-tab-pane">
+    {% if warehouse_history %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Date</th><th>Action</th><th style="text-align:right">Qty</th><th>Notes</th></tr></thead>
+        <tbody>
+          {% for m in warehouse_history %}
+          <tr>
+            <td class="muted font-mono" style="font-size:12px">{{ m.created_at[:16] if m.created_at else '—' }}</td>
+            <td>
+              {% if m.movement_type == 'opening' %}
+                <span class="badge" style="background:rgba(99,102,241,.15);color:#6366f1">Opening Stock</span>
+              {% elif m.movement_type == 'sale' %}
+                <span class="badge" style="background:rgba(239,68,68,.12);color:var(--danger)">▼ Sale</span>
+                {% if m.invoice_number %}<span class="muted" style="font-size:12px;margin-left:6px">{{ m.client_name or '' }} — {{ m.invoice_number }}</span>{% endif %}
+              {% elif m.movement_type == 'sale_cancelled' %}
+                <span class="badge badge-active">▲ Sale Reversed</span>
+                {% if m.invoice_number %}<span class="muted" style="font-size:12px;margin-left:6px">{{ m.invoice_number }}</span>{% endif %}
+              {% elif m.movement_type in ('arrival', 'transit_arrival', 'warehouse_add') %}
+                {% if m.dispatch_name %}
+                  <span class="badge" style="background:rgba(16,185,129,.15);color:#10b981">Dispatch Received</span>
+                  <span class="muted" style="font-size:12px;margin-left:6px">{{ m.dispatch_name }}</span>
+                {% else %}
+                  <span class="badge badge-active">{{ '▲ Added' if m.movement_type == 'warehouse_add' else 'Correction / Added' }}</span>
+                {% endif %}
+              {% elif m.movement_type == 'warehouse_deduct' %}
+                <span class="badge" style="background:rgba(239,68,68,.12);color:var(--danger)">▼ Reduced</span>
+              {% elif m.movement_type == 'add' %}
+                <span class="badge badge-active">Correction / Added</span>
+              {% elif m.movement_type == 'palm_purchase' %}
+                <span class="badge" style="background:rgba(16,185,129,.15);color:#10b981">▲ Palm Purchase</span>
+                {% if m.palm_purchase_id %}<span class="muted" style="font-size:12px;margin-left:6px">PP #{{ m.palm_purchase_id }}</span>{% endif %}
+              {% elif m.movement_type == 'palm_purchase_reversed' %}
+                <span class="badge" style="background:rgba(239,68,68,.12);color:var(--danger)">▼ Palm Purchase Reversed</span>
+              {% elif m.movement_type.endswith('correction_out') %}
+                <span class="badge" style="background:rgba(239,68,68,.12);color:var(--danger)">▼ Eco Correction Out</span>
+              {% elif m.movement_type.endswith('correction_in') %}
+                <span class="badge" style="background:rgba(16,185,129,.15);color:#10b981">▲ Eco Correction In</span>
+              {% else %}
+                <span class="badge">{{ m.movement_type }}</span>
+              {% endif %}
+            </td>
+            <td style="text-align:right;font-weight:700;color:{% if m.movement_type in ('sale','warehouse_deduct','palm_purchase_reversed') or m.movement_type.endswith('correction_out') %}#ef9a9a{% else %}var(--success){% endif %}">
+              {% if m.movement_type in ('sale','warehouse_deduct','palm_purchase_reversed') or m.movement_type.endswith('correction_out') %}-{% else %}+{% endif %}{{ stock_val(m.quantity, product.pcs_per_carton) }}
+            </td>
+            <td class="muted" style="font-size:12px">{{ m.notes or '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty-state" style="padding:28px"><p>No warehouse history yet.</p></div>
+    {% endif %}
+  </div>
+
+  <!-- Production tab -->
+  <div id="tab-production" class="stock-tab-pane" style="display:none">
+    {% if production_history %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Date</th><th>Action</th><th style="text-align:right">Qty</th><th>Notes</th></tr></thead>
+        <tbody>
+          {% for m in production_history %}
+          <tr>
+            <td class="muted font-mono" style="font-size:12px">{{ m.created_at[:16] if m.created_at else '—' }}</td>
+            <td>
+              {% if m.movement_type == 'production_deduct' %}
+                <span class="badge" style="background:rgba(239,68,68,.12);color:var(--danger)">▼ Reduced</span>
+              {% else %}
+                <span class="badge" style="background:rgba(245,158,11,.15);color:#d97706">▲ {{ 'Added' if m.movement_type == 'production_add' else 'Sent to Production' }}</span>
+              {% endif %}
+            </td>
+            <td style="text-align:right;font-weight:700;color:var(--warning)">{{ stock_val(m.quantity, product.pcs_per_carton) }}</td>
+            <td class="muted" style="font-size:12px">{{ m.notes or '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty-state" style="padding:28px"><p>No production history yet.</p></div>
+    {% endif %}
+  </div>
+
+  <!-- Transit tab -->
+  <div id="tab-transit" class="stock-tab-pane" style="display:none">
+    {% if transit_history %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Date</th><th>Action</th><th style="text-align:right">Qty</th><th>Expected Arrival</th><th>Notes</th></tr></thead>
+        <tbody>
+          {% for m in transit_history %}
+          <tr>
+            <td class="muted font-mono" style="font-size:12px">{{ m.created_at[:16] if m.created_at else '—' }}</td>
+            <td>
+              {% if m.movement_type == 'dispatch_deduct' %}
+                <span class="badge" style="background:rgba(239,68,68,.12);color:var(--danger)">▼ Reduced</span>
+              {% elif m.movement_type == 'dispatch_add' %}
+                <span class="badge" style="background:rgba(99,102,241,.15);color:#6366f1">▲ Added</span>
+              {% else %}
+                <span class="badge" style="background:rgba(99,102,241,.15);color:#6366f1">Dispatched</span>
+                {% if m.dispatch_name %}<span class="muted" style="font-size:12px;margin-left:6px">{{ m.dispatch_name }}</span>{% endif %}
+              {% endif %}
+            </td>
+            <td style="text-align:right;font-weight:700;color:var(--primary)">{{ stock_val(m.quantity, product.pcs_per_carton) }}</td>
+            <td class="muted" style="font-size:12px">{{ m.expected_arrival or '—' }}</td>
+            <td class="muted" style="font-size:12px">{{ m.notes or '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty-state" style="padding:28px"><p>No transit history yet.</p></div>
+    {% endif %}
   </div>
 </div>
 {% endif %}
 
-<!-- Stock history -->
-{% if movements %}
-<div class="card">
-  <div class="card-header"><span class="card-title">Stock History (last 30)</span></div>
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Date</th>
-          <th>Type</th>
-          <th style="text-align:right">Qty</th>
-          <th>Notes</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for m in movements %}
-        <tr>
-          <td class="muted font-mono" style="font-size:12px">{{ m.created_at[:16] if m.created_at else '—' }}</td>
-          <td>
-            {% if m.movement_type == 'add' %}<span class="badge badge-active">Added</span>
-            {% elif m.movement_type == 'production' %}<span class="badge" style="background:rgba(245,158,11,.15);color:#d97706">Production</span>
-            {% elif m.movement_type == 'dispatch' %}<span class="badge" style="background:rgba(99,102,241,.15);color:#6366f1">Dispatched</span>
-            {% elif m.movement_type == 'arrival' %}<span class="badge" style="background:rgba(16,185,129,.15);color:#10b981">Arrived</span>
-            {% else %}<span class="badge">{{ m.movement_type }}</span>{% endif %}
-          </td>
-          <td style="text-align:right;font-weight:700">{{ m.quantity }}</td>
-          <td class="muted">{{ m.notes or '—' }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+{% if not product.eco_parent_id and not product.has_eco_range %}
+<!-- Eco Range creation modal -->
+<div id="eco-range-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;align-items:center;justify-content:center">
+  <div style="background:var(--bg);border-radius:var(--radius);padding:28px;width:100%;max-width:420px;box-shadow:0 8px 32px rgba(0,0,0,.2)">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+      <h3 style="margin:0;font-size:16px">Create Eco Range</h3>
+      <button onclick="document.getElementById('eco-range-modal').style.display='none'"
+              style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text-muted);line-height:1">&times;</button>
+    </div>
+    <p style="font-size:13px;color:var(--text-muted);margin:0 0 18px">
+      Creates <strong>Eco {{ product.name }}</strong>{% if subs %} with {{ subs|length }} eco sub-product(s) mirroring your current sub-products{% endif %}.
+      Stock starts at zero — add it from the eco product page. Min quantity is shared with this product.
+    </p>
+    <form method="post" action="{{ url_for('products.create_eco_range', product_id=product.id) }}">
+      <div class="form-group" style="margin-bottom:14px">
+        <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px">Eco SKU <span style="font-weight:400;color:var(--text-muted)">(optional)</span></label>
+        <input type="text" name="sku"
+               placeholder="{{ 'E-' + product.sku if product.sku else 'Auto-generated' }}"
+               style="width:100%;box-sizing:border-box">
+        {% if product.sku %}
+        <div style="font-size:11px;color:var(--text-muted);margin-top:4px">Defaults to E-{{ product.sku }}</div>
+        {% endif %}
+      </div>
+      <div class="form-group" style="margin-bottom:20px">
+        <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px">Eco Unit Price (₹) *</label>
+        <input type="number" name="unit_price" step="0.01" min="0" placeholder="0.00" required
+               style="width:100%;box-sizing:border-box">
+        <div style="font-size:11px;color:var(--text-muted);margin-top:4px">Main product price: {{ product.unit_price|inr }}</div>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button type="button" onclick="document.getElementById('eco-range-modal').style.display='none'" class="btn btn-secondary">Cancel</button>
+        <button type="submit" class="btn btn-primary">Create Eco Range</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+{% if eco_pairs %}
+<!-- ── Eco ⇄ Normal correction popup ─────────────────────────────────────────
+     Applies straight to stock — there is no draft to save. Whatever leaves the
+     Normal side must be matched by what leaves the Eco side, so the range mix
+     changes but the total on hand does not. -->
+<div id="corr-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;align-items:center;justify-content:center"
+     onclick="if(event.target===this)closeCorrection()">
+  <div style="background:var(--bg);border-radius:var(--radius);width:min(880px,96vw);max-height:92vh;display:flex;flex-direction:column;box-shadow:0 12px 48px rgba(0,0,0,.4);overflow:hidden">
+    <form method="post" action="{{ url_for('products.eco_correction', product_id=corr.product_id) }}" id="corrForm"
+          style="display:flex;flex-direction:column;min-height:0">
+      {# Opened from the eco twin? Come back here, not to the main product. #}
+      <input type="hidden" name="return_to" value="{{ product.id }}">
+
+      <div style="padding:16px 20px 12px;border-bottom:1px solid var(--border);flex-shrink:0">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:16px">
+          <div style="min-width:0">
+            <h3 style="margin:0 0 2px;font-size:15px">Eco ⇄ Normal Correction</h3>
+            <div style="font-size:11px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+              {{ corr.main_name }} ⇄ {{ corr.eco_name }} · applies immediately, nothing is saved
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
+            <select name="bucket" id="corr-bucket" onchange="corrBucketChanged()"
+                    style="width:auto;min-width:132px;padding:6px 10px;font-size:13px">
+              {% for key, b in correction_buckets.items() %}
+              <option value="{{ key }}">{{ b[1] }}</option>
+              {% endfor %}
+            </select>
+            <button type="button" onclick="closeCorrection()"
+                    style="background:none;border:none;font-size:22px;cursor:pointer;color:var(--text-muted);line-height:1">&times;</button>
+          </div>
+        </div>
+        <div id="corr-unit-note" style="font-size:11px;color:var(--text-muted);margin-top:8px"></div>
+      </div>
+
+      <div style="overflow:auto;flex:1;min-height:0">
+        <table style="width:100%;border-collapse:collapse;table-layout:fixed">
+          <colgroup>
+            <col><col style="width:74px"><col style="width:74px">
+            <col style="width:210px"><col style="width:74px"><col style="width:80px">
+          </colgroup>
+          <thead style="position:sticky;top:0;background:var(--bg);z-index:1;box-shadow:0 1px 0 var(--border)">
+            <tr>
+              <th></th>
+              <th colspan="2" style="padding:7px 8px;text-align:center;font-size:11px;font-weight:800;letter-spacing:.08em">NORMAL</th>
+              <th style="padding:7px 8px;text-align:center;font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;border-left:2px solid var(--border);border-right:2px solid var(--border)">Transfer</th>
+              <th colspan="2" style="padding:7px 8px;text-align:center;font-size:11px;font-weight:800;letter-spacing:.08em;color:var(--success)">ECO</th>
+            </tr>
+            <tr style="border-bottom:2px solid var(--border)">
+              <th style="padding:5px 14px 7px;text-align:left;font-size:10px;color:var(--text-muted);text-transform:uppercase">Sub-product</th>
+              <th style="padding:5px 8px 7px;text-align:right;font-size:10px;color:var(--text-muted);text-transform:uppercase">Stock</th>
+              <th style="padding:5px 8px 7px;text-align:right;font-size:10px;color:var(--text-muted);text-transform:uppercase">After</th>
+              <th style="padding:5px 8px 7px;text-align:center;font-size:10px;color:var(--text-muted);text-transform:uppercase;border-left:2px solid var(--border);border-right:2px solid var(--border)">Move</th>
+              <th style="padding:5px 8px 7px;text-align:right;font-size:10px;color:var(--text-muted);text-transform:uppercase">After</th>
+              <th style="padding:5px 14px 7px;text-align:right;font-size:10px;color:var(--text-muted);text-transform:uppercase">Stock</th>
+            </tr>
+          </thead>
+          <tbody id="corr-rows"></tbody>
+          <tfoot>
+            <tr style="border-top:2px solid var(--border);background:var(--bg-alt)">
+              <td style="padding:9px 14px;font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:.05em">Total</td>
+              <td id="corr-tot-main" style="padding:9px 8px;text-align:right;font-family:monospace;font-weight:700;font-size:13px"></td>
+              <td id="corr-tot-main-after" style="padding:9px 8px;text-align:right;font-family:monospace;font-weight:700;font-size:13px"></td>
+              <td style="padding:7px 8px;text-align:center;white-space:nowrap;border-left:2px solid var(--border);border-right:2px solid var(--border)">
+                <span id="corr-out-normal" style="font-family:monospace;font-weight:800;font-size:14px">0</span>
+                <span id="corr-sign" style="margin:0 6px;font-weight:800;font-size:14px;color:var(--text-muted)">=</span>
+                <span id="corr-out-eco" style="font-family:monospace;font-weight:800;font-size:14px">0</span>
+                <div id="corr-badge" style="margin-top:2px;font-size:10px;font-weight:700;padding:1px 8px;border-radius:20px;display:none"></div>
+              </td>
+              <td id="corr-tot-eco-after" style="padding:9px 8px;text-align:right;font-family:monospace;font-weight:700;font-size:13px"></td>
+              <td id="corr-tot-eco" style="padding:9px 14px;text-align:right;font-family:monospace;font-weight:700;font-size:13px"></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
+      <div style="padding:12px 20px;border-top:1px solid var(--border);flex-shrink:0">
+        {# Production is work in progress, so a run can legitimately be re-graded one
+           way. Warehouse and in-transit stock is physically counted — no override there. #}
+        {# The global `input { width:100% }` rule would make this checkbox eat the
+           whole row, so its size and box are pinned explicitly. #}
+        <label id="corr-ack-wrap" style="display:none;align-items:flex-start;gap:9px;margin-bottom:10px;cursor:pointer;
+                                         background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.35);
+                                         border-radius:8px;padding:9px 12px">
+          <input type="checkbox" id="corr-ack" name="allow_unbalanced" value="1" onchange="corrUpdate()"
+                 style="width:15px;height:15px;flex:0 0 15px;min-width:0;padding:0;margin:1px 0 0;
+                        border-radius:3px;accent-color:var(--warning)">
+          <span style="flex:1;min-width:0;font-size:12px;line-height:1.45;font-weight:400">
+            <strong style="color:var(--warning);font-weight:700">Allow unbalanced production transfer</strong>
+            <span style="color:var(--text-muted)"> — totals need not match. Production quantities will change on one
+            side, and the movement note records that this was acknowledged.</span>
+          </span>
+        </label>
+        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+          <span id="corr-status" style="font-size:12px;font-weight:600;flex:1;min-width:200px"></span>
+          <button type="button" onclick="closeCorrection()" class="btn btn-secondary">Cancel</button>
+          <button type="submit" id="corr-apply" class="btn btn-primary" disabled onclick="return corrConfirm()">
+            Apply Correction →
+          </button>
+        </div>
+      </div>
+    </form>
   </div>
 </div>
 {% endif %}
@@ -183,48 +504,382 @@
 
 {% block scripts %}
 <script>
-function startEdit(subId) {
-  const row = document.getElementById('sub-row-' + subId);
-  row.querySelectorAll('.view-cell').forEach(c => c.style.display = 'none');
-  row.querySelectorAll('.edit-cell').forEach(c => c.style.display = '');
-  row.querySelector('.view-actions').style.display = 'none';
-  row.querySelector('.edit-actions').style.display = '';
-}
-
-function discardEdit(subId) {
-  const row = document.getElementById('sub-row-' + subId);
-  row.querySelectorAll('.view-cell').forEach(c => c.style.display = '');
-  row.querySelectorAll('.edit-cell').forEach(c => c.style.display = 'none');
-  row.querySelector('.view-actions').style.display = '';
-  row.querySelector('.edit-actions').style.display = 'none';
-}
-
-async function saveEdit(subId) {
-  const row = document.getElementById('sub-row-' + subId);
-  const productId = row.dataset.productId;
-  const name = row.querySelector('.ef-name').value.trim();
-  const priceVal = row.querySelector('.ef-price').value;
-  const taxVal = row.querySelector('.ef-tax').value;
-
-  if (!name) { alert('Name is required'); return; }
-
-  const payload = {
-    name,
-    unit_price: priceVal === '' ? null : parseFloat(priceVal),
-    use_parent_price: priceVal === '' ? 1 : 0,
-    tax_rate: taxVal === '' ? 0 : parseFloat(taxVal),
-  };
-
-  const res = await fetch(`/products/${productId}/sub/${subId}/inline`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+/* ── Tab switching ──────────────────────────────────────────────────────────── */
+function switchTab(name) {
+  document.querySelectorAll('.stock-tab-pane').forEach(p => p.style.display = 'none');
+  document.querySelectorAll('.stock-tab-btn').forEach(b => {
+    b.style.borderBottomColor = 'transparent';
+    b.style.color = 'var(--text-muted)';
   });
-  const json = await res.json();
-  if (!json.ok) { alert(json.error || 'Save failed'); return; }
-
-  // Reload the page to reflect updated values
-  location.reload();
+  const pane = document.getElementById('tab-' + name);
+  const btn  = [...document.querySelectorAll('.stock-tab-btn')]
+                 .find(b => b.getAttribute('onclick').includes("'" + name + "'"));
+  if (pane) pane.style.display = '';
+  if (btn)  { btn.style.borderBottomColor = 'var(--primary)'; btn.style.color = 'var(--primary)'; }
 }
+
+/* ── Inline sub-product cell editing ────────────────────────────────────────── */
+const dirtySubs = new Set();
+
+function cellEdit(cell) {
+  if (cell.querySelector('input')) return;
+  // If this is the pencil icon span, find the associated name cell
+  const row    = cell.closest('tr');
+  const field  = cell.dataset.field;
+  const val    = cell.dataset.val !== undefined ? String(cell.dataset.val) : '';
+  const origHTML = cell.innerHTML;
+  let cancelled  = false;
+
+  const inp = document.createElement('input');
+  inp.type  = field === 'price' ? 'number' : 'text';
+  if (inp.type === 'number') { inp.step = '0.01'; inp.min = '0'; inp.style.textAlign = 'right'; }
+  inp.value = val;
+  inp.style.cssText = 'width:100%;background:var(--bg);border:1.5px solid var(--primary);border-radius:4px;padding:4px 6px;box-sizing:border-box;font-size:inherit';
+
+  cell.textContent = '';
+  cell.appendChild(inp);
+  inp.focus();
+  if (inp.type === 'text') inp.select();
+
+  inp.addEventListener('keydown', e => {
+    if (e.key === 'Enter')  { e.preventDefault(); inp.blur(); }
+    if (e.key === 'Escape') { cancelled = true; cell.innerHTML = origHTML; }
+  });
+  inp.addEventListener('blur', () => {
+    if (cancelled) return;
+    const newVal = inp.value.trim();
+    cell.dataset.val = newVal;
+    refreshSubCell(cell, field, newVal);
+    // For name field: also update the link text in the same row
+    if (field === 'name') {
+      const link = row.querySelector('.sub-name-link');
+      if (link) link.textContent = newVal || '—';
+      cell.textContent = '✎';
+    }
+    markSubDirty(row);
+  });
+}
+
+function refreshSubCell(cell, field, val) {
+  if (field === 'name') {
+    cell.textContent = '✎';
+  } else if (field === 'sku') {
+    cell.textContent = val || '—';
+  } else if (field === 'price') {
+    if (val === '' || val === null || val === undefined) {
+      cell.innerHTML = '<span class="muted">↑ parent</span>';
+    } else {
+      cell.innerHTML = '<span style="font-weight:600">' + formatINR(parseFloat(val)) + '</span>';
+    }
+  }
+}
+
+function markSubDirty(row) {
+  dirtySubs.add(row);
+  row.classList.add('row-dirty');
+  document.getElementById('subsSaveBtn').style.display = '';
+}
+
+function showSubError(row, msg) {
+  let errRow = row.nextElementSibling;
+  if (!errRow || !errRow.classList.contains('row-err')) {
+    errRow = document.createElement('tr');
+    errRow.className = 'row-err';
+    const td = document.createElement('td');
+    td.colSpan = 7;
+    td.style.cssText = 'color:var(--danger);font-size:12px;padding:4px 16px';
+    errRow.appendChild(td);
+    row.after(errRow);
+  }
+  errRow.querySelector('td').textContent = msg;
+  setTimeout(() => { if (errRow.parentNode) errRow.remove(); }, 5000);
+}
+
+async function saveAllSubs() {
+  const btn = document.getElementById('subsSaveBtn');
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
+
+  for (const row of [...dirtySubs]) {
+    const subId     = row.dataset.subId;
+    const productId = row.dataset.productId;
+    const nameEditCell = row.querySelector('[data-field="name"]');
+    const priceCell    = row.querySelector('[data-field="price"]');
+    // Get name from the link element (the actual visible text)
+    const nameLink  = row.querySelector('.sub-name-link');
+    const name      = nameLink ? nameLink.textContent.trim() : (nameEditCell ? nameEditCell.dataset.val.trim() : '');
+    const priceVal  = priceCell ? priceCell.dataset.val.trim() : '';
+
+    if (!name) { showSubError(row, 'Name is required'); continue; }
+
+    const skuCell = row.querySelector('[data-field="sku"]');
+    const skuVal  = skuCell ? skuCell.dataset.val.trim() : null;
+
+    const payload = {
+      name,
+      sku:              skuVal === '' ? null : skuVal,
+      unit_price:       priceVal === '' ? null : parseFloat(priceVal),
+      use_parent_price: priceVal === '' ? 1 : 0,
+    };
+    try {
+      const res  = await fetch(`/products/${productId}/sub/${subId}/inline`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const json = await res.json();
+      if (!json.ok) { showSubError(row, json.error || 'Save failed'); }
+      else { dirtySubs.delete(row); row.classList.remove('row-dirty'); }
+    } catch { showSubError(row, 'Network error'); }
+  }
+
+  btn.disabled    = false;
+  btn.textContent = 'Save Changes';
+  if (dirtySubs.size === 0) btn.style.display = 'none';
+}
+
+/* ── Dirty check registration ──────────────────────────────────────────────── */
+window.__dirtyCheck = () => ({
+  isDirty: dirtySubs.size > 0,
+  label: 'Sub-product changes',
+  save: saveAllSubs,
+});
 </script>
+
+{% if eco_pairs %}
+<script>
+/* ── Eco ⇄ Normal correction popup ───────────────────────────────────────────
+   Strictly balanced: what leaves Normal must equal what leaves Eco, so the
+   total on hand never changes — only which range holds it. Applies on submit;
+   there is no draft. */
+const CORR_PAIRS = {{ eco_pairs|tojson }};
+
+/* Entry follows the page's pcs/box toggle; the posted value is always pieces. */
+function corrBoxMode() { return document.documentElement.classList.contains('show-boxes'); }
+function corrToPieces(v, pcs) { return (corrBoxMode() && pcs > 0) ? v * pcs : v; }
+function corrToDisplay(v, pcs) { return (corrBoxMode() && pcs > 0) ? v / pcs : v; }
+
+function corrFmt(v) {
+  if (v == null || isNaN(v)) return '0';
+  var neg = v < 0; v = Math.abs(v);
+  var r = Math.round(v * 100) / 100, ip = Math.floor(r + 1e-9);
+  var frac = Math.round((r - ip) * 100);
+  var s = (typeof formatIndian === 'function') ? formatIndian(ip) : String(ip);
+  if (frac > 0) s += '.' + String(frac).padStart(2, '0');
+  return (neg ? '-' : '') + s;
+}
+/* Both units, so the row obeys the global Boxes/Pcs toggle like every other table. */
+function corrDual(pieces, pcs) {
+  return '<span class="u-pcs">' + corrFmt(pieces) + '</span>' +
+         '<span class="u-box">' + (pcs > 0 ? corrFmt(pieces / pcs) : '—') + '</span>';
+}
+
+function corrBucket() { return document.getElementById('corr-bucket').value; }
+
+/* keep=true re-renders in a new unit without losing what was typed (pieces are
+   canonical); the bucket selector passes keep=false because entered quantities
+   only make sense against the bucket they were typed for. */
+function corrRenderRows(keep) {
+  var bucket = corrBucket(), box = corrBoxMode();
+  document.getElementById('corr-unit-note').textContent =
+    'Quantities in ' + (box ? 'boxes' : 'pieces') + ' — matches the page toggle.';
+
+  var prev = {};
+  if (keep) {
+    document.querySelectorAll('#corr-rows .corr-row').forEach(function (row) {
+      var pieces = row.querySelector('.corr-qty-pieces').value;
+      if (pieces !== '') prev[row.dataset.key] = { dir: row.querySelector('.corr-dir').value, pieces: pieces };
+    });
+  }
+
+  document.getElementById('corr-rows').innerHTML = CORR_PAIRS.map(function (p) {
+    var key  = p.main_sub_id === null ? 'p' : p.main_sub_id;
+    var main = p.main[bucket] || 0, eco = p.eco[bucket] || 0;
+    /* Nothing on either side in this bucket → nothing can move, so lock the row
+       rather than let someone type into a dead line. */
+    var empty = main <= 0 && eco <= 0;
+    var lock  = (!p.paired || empty);
+    var dis   = lock ? ' disabled' : '';
+    var muted = lock ? ';opacity:.5' : '';
+    var note  = !p.paired ? 'No eco twin' : (empty ? 'Nothing in this bucket' : '');
+    return '' +
+      '<tr class="corr-row" data-key="' + key + '" data-pcs="' + (p.pcs || 0) + '"' +
+      ' data-main="' + main + '" data-eco="' + eco + '" style="border-bottom:1px solid var(--border)' + muted + '">' +
+        '<td style="padding:5px 14px;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
+          '<span style="font-weight:600">' + p.name + '</span>' +
+          (p.sku ? '<span style="color:var(--text-muted);font-size:10px;font-family:monospace;margin-left:7px">' + p.sku + '</span>' : '') +
+          (note ? '<span style="color:var(--warning);font-size:10px;margin-left:7px">· ' + note + '</span>' : '') +
+        '</td>' +
+        '<td style="padding:5px 8px;text-align:right;font-family:monospace;font-size:12.5px">' + corrDual(main, p.pcs) + '</td>' +
+        '<td class="corr-after-main" style="padding:5px 8px;text-align:right;font-family:monospace;font-size:12.5px;font-weight:600">—</td>' +
+        '<td style="padding:4px 8px;text-align:center;white-space:nowrap;border-left:2px solid var(--border);border-right:2px solid var(--border)">' +
+          '<span class="corr-arrow" style="display:inline-block;width:14px;font-size:14px;font-weight:700;color:transparent">→</span>' +
+          '<select class="corr-dir" name="dir_' + key + '" onchange="corrChanged(this)" style="width:86px;margin:0 5px;padding:3px 4px;font-size:12px"' + dis + '>' +
+            '<option value="">—</option>' +
+            '<option value="to_eco">→ Eco</option>' +
+            '<option value="to_main">← Normal</option>' +
+          '</select>' +
+          '<input type="number" class="corr-qty" min="0" step="0.01" placeholder="0" ' +
+                 'style="width:64px;text-align:right;padding:3px 5px;font-size:12px" oninput="corrChanged(this)"' + dis + '>' +
+          '<input type="hidden" class="corr-qty-pieces" name="qty_' + key + '" value="">' +
+        '</td>' +
+        '<td class="corr-after-eco" style="padding:5px 8px;text-align:right;font-family:monospace;font-size:12.5px;font-weight:600">—</td>' +
+        '<td style="padding:5px 14px;text-align:right;font-family:monospace;font-size:12.5px">' + corrDual(eco, p.pcs) + '</td>' +
+      '</tr>';
+  }).join('');
+
+  Object.keys(prev).forEach(function (key) {
+    var row = document.querySelector('#corr-rows .corr-row[data-key="' + key + '"]');
+    if (!row) return;
+    var pcs = parseFloat(row.dataset.pcs) || 0;
+    row.querySelector('.corr-dir').value = prev[key].dir;
+    row.querySelector('.corr-qty-pieces').value = prev[key].pieces;
+    row.querySelector('.corr-qty').value = corrFmt(corrToDisplay(parseFloat(prev[key].pieces), pcs)).replace(/,/g, '');
+  });
+  corrUpdate();
+}
+
+/* Visible input is in the current unit; the hidden field carries pieces. */
+function corrChanged(el) {
+  var row = el.closest('tr');
+  var pcs = parseFloat(row.dataset.pcs) || 0;
+  var sel = row.querySelector('.corr-dir');
+  var inp = row.querySelector('.corr-qty');
+  var hid = row.querySelector('.corr-qty-pieces');
+  if (el.classList.contains('corr-dir') && !sel.value) inp.value = '';
+  var v = inp.value.trim();
+  hid.value = (v === '' || !sel.value) ? '' : corrToPieces(parseFloat(v) || 0, pcs);
+  corrUpdate();
+}
+
+function corrUpdate() {
+  var outNormal = 0, outEco = 0, moves = 0, bad = false;
+  /* Totals are summed in DISPLAY units (converted per row) — pack size differs
+     between sub-products, so dividing a piece-total by one pack size would lie. */
+  var dMain = 0, dEco = 0, dMainAfter = 0, dEcoAfter = 0, dOutN = 0, dOutE = 0, noPcs = false;
+
+  document.querySelectorAll('#corr-rows .corr-row').forEach(function (row) {
+    var pcs  = parseFloat(row.dataset.pcs) || 0;
+    var main = parseFloat(row.dataset.main) || 0;
+    var eco  = parseFloat(row.dataset.eco) || 0;
+    var dir  = row.querySelector('.corr-dir').value;
+    var hid  = row.querySelector('.corr-qty-pieces').value;
+    var qty  = hid === '' ? 0 : (parseFloat(hid) || 0);
+    if (qty <= 0) dir = '';
+
+    var afterMain = main - (dir === 'to_eco' ? qty : 0) + (dir === 'to_main' ? qty : 0);
+    var afterEco  = eco  + (dir === 'to_eco' ? qty : 0) - (dir === 'to_main' ? qty : 0);
+    var rowBad = (dir === 'to_eco' && qty > main + 0.0001) || (dir === 'to_main' && qty > eco + 0.0001);
+    if (rowBad) bad = true;
+    row.style.background = rowBad ? 'rgba(239,68,68,.07)' : '';
+
+    var am = row.querySelector('.corr-after-main'), ae = row.querySelector('.corr-after-eco');
+    am.innerHTML = dir ? corrDual(afterMain, pcs) : '—';
+    ae.innerHTML = dir ? corrDual(afterEco, pcs)  : '—';
+    am.style.color = !dir ? 'var(--text-muted)' : (afterMain < -0.0001 ? 'var(--danger)' : 'var(--accent)');
+    ae.style.color = !dir ? 'var(--text-muted)' : (afterEco  < -0.0001 ? 'var(--danger)' : 'var(--success)');
+
+    var arrow = row.querySelector('.corr-arrow');
+    arrow.textContent = dir === 'to_main' ? '←' : '→';
+    arrow.style.color = dir === 'to_eco' ? 'var(--accent)'
+                      : (dir === 'to_main' ? 'var(--success)' : 'transparent');
+
+    if (corrBoxMode() && !(pcs > 0)) noPcs = true;
+    dMain += corrToDisplay(main, pcs);           dEco += corrToDisplay(eco, pcs);
+    dMainAfter += corrToDisplay(afterMain, pcs); dEcoAfter += corrToDisplay(afterEco, pcs);
+    if (dir && qty > 0) {
+      moves++;
+      if (dir === 'to_eco') { outNormal += qty; dOutN += corrToDisplay(qty, pcs); }
+      else                  { outEco    += qty; dOutE += corrToDisplay(qty, pcs); }
+    }
+  });
+
+  var star = noPcs ? ' <span style="color:var(--text-muted);font-size:10px">*</span>' : '';
+  document.getElementById('corr-tot-main').innerHTML = corrFmt(dMain) + star;
+  document.getElementById('corr-tot-eco').innerHTML  = corrFmt(dEco) + star;
+  document.getElementById('corr-tot-main-after').innerHTML = moves ? corrFmt(dMainAfter) + star : '—';
+  document.getElementById('corr-tot-eco-after').innerHTML  = moves ? corrFmt(dEcoAfter) + star  : '—';
+  document.getElementById('corr-out-normal').textContent = corrFmt(dOutN);
+  document.getElementById('corr-out-eco').textContent    = corrFmt(dOutE);
+
+  /* Balance is judged in pieces (the stored unit); only the label is in display units. */
+  var diff = Math.abs(outNormal - outEco), balanced = diff < 0.0001 && moves > 0;
+  var diffDisp = Math.abs(dOutN - dOutE);
+
+  /* Only production may be left unbalanced, and only when explicitly acknowledged.
+     The server re-checks both conditions — this is convenience, not the guard. */
+  var prod  = corrBucket() === 'production';
+  var acked = prod && document.getElementById('corr-ack').checked;
+  var okUnbalanced = acked && moves > 0;
+  var sign = document.getElementById('corr-sign');
+  sign.textContent = (moves === 0 || balanced) ? '=' : '≠';
+  sign.style.color = balanced ? 'var(--success)'
+                   : (moves === 0 ? 'var(--text-muted)'
+                   : (okUnbalanced ? 'var(--warning)' : 'var(--danger)'));
+
+  var badge = document.getElementById('corr-badge');
+  if (moves === 0) { badge.style.display = 'none'; }
+  else {
+    var warn = !balanced && okUnbalanced;
+    badge.style.display = 'inline-block';
+    badge.textContent = balanced ? 'Balanced' : 'Off by ' + corrFmt(diffDisp);
+    badge.style.background = balanced ? 'rgba(16,185,129,.14)' : (warn ? 'rgba(245,158,11,.14)' : 'rgba(239,68,68,.12)');
+    badge.style.color      = balanced ? 'var(--success)'       : (warn ? 'var(--warning)'       : 'var(--danger)');
+  }
+
+  var status = document.getElementById('corr-status');
+  if (moves === 0)          { status.textContent = 'Pick a direction and quantity to begin.'; status.style.color = 'var(--text-muted)'; }
+  else if (bad)             { status.textContent = '✗ A row moves more stock than that side holds.'; status.style.color = 'var(--danger)'; }
+  else if (balanced)        { status.textContent = '✓ Balanced — total stock unchanged, only the range moves.'; status.style.color = 'var(--success)'; }
+  else if (okUnbalanced)    { status.textContent = '⚠ Unbalanced by ' + corrFmt(diffDisp) + ' — acknowledged, production totals will change.'; status.style.color = 'var(--warning)'; }
+  else if (prod)            { status.textContent = '✗ Off by ' + corrFmt(diffDisp) + ' — tick the box above to allow it.'; status.style.color = 'var(--danger)'; }
+  else                      { status.textContent = '✗ Totals must match — ' + corrFmt(diffDisp) + ' out of balance.'; status.style.color = 'var(--danger)'; }
+
+  document.getElementById('corr-apply').disabled = bad || !(balanced || okUnbalanced);
+}
+
+function corrConfirm() {
+  var unbalanced = document.getElementById('corr-badge').textContent.indexOf('Off by') === 0;
+  return confirm(unbalanced
+    ? 'Apply this UNBALANCED production correction? One side\'s total will change. This cannot be undone.'
+    : 'Apply this correction? Stock moves between Normal and Eco immediately.');
+}
+
+/* Entries reset on bucket change — they were typed against a different bucket.
+   The unbalanced override is production-only, so it hides and clears elsewhere. */
+function corrBucketChanged() {
+  var prod = corrBucket() === 'production';
+  var ack  = document.getElementById('corr-ack');
+  if (!prod) ack.checked = false;
+  document.getElementById('corr-ack-wrap').style.display = prod ? 'flex' : 'none';
+  corrRenderRows(false);
+}
+
+function openCorrection() {
+  var m = document.getElementById('corr-modal');
+  /* Re-parent to <body> so the overlay can never be clipped or offset by an
+     ancestor's stacking/overflow context. */
+  if (m.parentElement !== document.body) document.body.appendChild(m);
+  m.style.display = 'flex';
+  corrBucketChanged();
+}
+function closeCorrection() { document.getElementById('corr-modal').style.display = 'none'; }
+
+/* Keep the popup honest if the global Boxes/Pcs toggle flips while it is open. */
+new MutationObserver(function () {
+  if (document.getElementById('corr-modal').style.display === 'flex') corrRenderRows(true);
+}).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape' && document.getElementById('corr-modal').style.display === 'flex') closeCorrection();
+});
+</script>
+{% endif %}
+
+<style>
+.sub-editable          { cursor: cell; }
+.sub-edit-hint:hover   { border-color: var(--border) !important; background: var(--bg-alt); }
+.sub-name-link:hover   { color: var(--accent) !important; text-decoration: underline !important; }
+.row-dirty             { background: rgba(245,158,11,.06) !important; box-shadow: inset 3px 0 0 var(--warning); }
+.stock-tab-btn:hover   { background: var(--bg-alt); }
+</style>
 {% endblock %}

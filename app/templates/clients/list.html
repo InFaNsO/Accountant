@@ -2,9 +2,22 @@
 {% block title %}Clients{% endblock %}
 {% block page_title %}Clients{% endblock %}
 {% block topbar_actions %}
+  {% if current_user.has_permission('clients', 'edit') %}
+  <a href="{{ url_for('clients.assignments') }}" class="btn btn-secondary" title="Assign clients to sales staff">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/></svg>
+    <span class="btn-label-mobile">Sales Reps</span>
+  </a>
+  {% endif %}
+  {% if can_financials %}
+  <button type="button" class="btn btn-secondary" id="reconcileBtn" onclick="reconcilePayments(this)"
+          title="Apply every client's unallocated payments to their oldest unpaid invoices">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+    <span class="btn-label-mobile">Reconcile Payments</span>
+  </button>
+  {% endif %}
   <a href="{{ url_for('clients.new_client') }}" class="btn btn-primary">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-    New Client
+    <span class="btn-label-mobile">New Client</span>
   </a>
 {% endblock %}
 
@@ -12,7 +25,7 @@
 <div class="card">
   <div class="card-header">
     <span class="card-title">All Clients ({{ clients|length }})</span>
-    <input type="search" id="clientSearch" placeholder="Search clients…" style="width:220px" oninput="filterTable(this.value,'clientTable')">
+    <input type="search" id="clientSearch" placeholder="Search by client or company…" style="width:240px" oninput="filterClients(this.value)">
   </div>
   {% if clients %}
   <div class="table-wrap">
@@ -20,26 +33,51 @@
       <thead>
         <tr>
           <th>Name / Company</th>
+          {% if can_financials %}
           <th style="text-align:right">Balance</th>
-          <th style="text-align:right">Purchases (60d)</th>
-          <th style="text-align:right">Payments (60d)</th>
+          <th class="col-mobile-hide" style="text-align:right">Purchases (60d)</th>
+          <th class="col-mobile-hide" style="text-align:right">Payments (60d)</th>
+          {% endif %}
           <th></th>
         </tr>
       </thead>
       <tbody>
         {% for c in clients %}
-        {% set ob_debt = (c.opening_balance or 0)|abs %}
-        {% set ob_paid = c.ob_paid or 0 %}
-        {% set ob_remaining = [ob_debt - ob_paid, 0]|max %}
-        {% set ob_excess = [ob_paid - ob_debt, 0]|max %}
-        {% set balance = -(ob_remaining + (c.invoice_balance or 0)) + ob_excess %}
-        <tr>
+
+        {# build lowercased search string: client name + all company names #}
+        {% set co_names = c.companies | map(attribute='name') | join(' ') %}
+        <tr class="client-row"
+            data-id="{{ c.id }}"
+            data-name="{{ c.name|lower }}"
+            data-companies="{{ co_names|lower }}">
           <td>
-            <a href="{{ url_for('clients.detail', client_id=c.id) }}"
-               style="font-weight:600;color:var(--accent);text-decoration:none;">{{ c.name }}</a>
-            {% if c.company %}<div style="font-size:12px;color:var(--text-muted)">{{ c.company }}</div>{% endif %}
+            <div style="display:flex;align-items:center;gap:6px">
+              {% if c.companies %}
+              <button class="toggle-btn" id="toggle-{{ c.id }}" onclick="toggleCompanies({{ c.id }})" title="Show companies">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width:12px;height:12px;transition:transform .18s"><polyline points="9 18 15 12 9 6"/></svg>
+              </button>
+              {% endif %}
+              <div>
+                <a href="{{ url_for('clients.detail', client_id=c.id) }}"
+                   style="font-weight:600;color:var(--accent);text-decoration:none;">{{ c.name }}</a>
+                {% if c.id in locked_clients %}
+                <span title="Invoice lock: {{ locked_clients[c.id] | join('; ') }} — drafts only" style="cursor:help">🔒</span>
+                {% endif %}
+                {% if c.companies %}
+                <div style="font-size:11px;color:var(--text-muted);margin-top:1px">{{ c.companies|length }} compan{{ 'y' if c.companies|length == 1 else 'ies' }}</div>
+                {% endif %}
+              </div>
+            </div>
           </td>
+          {% if can_financials %}
+          {% set ob = (c.opening_balance or 0) %}
+          {% set credit_ob = [0, ob * -1]|max %}
+          {% set debit_ob  = [0, ob]|max %}
+          {% set balance = (c.total_paid + credit_ob) - (c.total_invoiced + debit_ob) %}
           <td style="text-align:right">
+            <span onclick="showClientLedger({{ c.id }}, '{{ c.name|replace("'", "\\'") }}')"
+                  style="cursor:pointer;text-decoration:underline dotted"
+                  title="Click to view ledger">
             {% if balance < 0 %}
               <span style="color:var(--danger);font-weight:700;">{{ balance|inr }}</span>
               <div style="font-size:11px;color:var(--text-muted)">outstanding</div>
@@ -50,22 +88,55 @@
               <span style="color:var(--warning);font-weight:700;">{{ balance|inr }}</span>
               <div style="font-size:11px;color:var(--text-muted)">settled</div>
             {% endif %}
+            </span>
           </td>
-          <td style="text-align:right;font-weight:600;">
-            {{ c.purchases_60d|inr }}
-          </td>
-          <td style="text-align:right;font-weight:600;color:var(--success)">
-            {{ c.payments_60d|inr }}
-          </td>
+          <td class="col-mobile-hide" style="text-align:right;font-weight:600;">{{ c.purchases_60d|inr }}</td>
+          <td class="col-mobile-hide" style="text-align:right;font-weight:600;color:var(--success)">{{ c.payments_60d|inr }}</td>
+          {% endif %}
           <td style="text-align:right">
             <a href="{{ url_for('clients.detail', client_id=c.id) }}" class="btn btn-secondary btn-sm">View</a>
-            <a href="{{ url_for('clients.edit_client', client_id=c.id) }}" class="btn btn-secondary btn-sm">Edit</a>
-            <form class="confirm-inline" method="post" action="{{ url_for('clients.delete_client', client_id=c.id) }}"
+            <a href="{{ url_for('clients.edit_client', client_id=c.id) }}" class="btn btn-secondary btn-sm col-mobile-hide">Edit</a>
+            <form class="confirm-inline col-mobile-hide" method="post" action="{{ url_for('clients.delete_client', client_id=c.id) }}"
                   onsubmit="return confirm('Delete {{ c.name }}? This cannot be undone.')">
               <button class="btn btn-danger btn-sm">Delete</button>
             </form>
           </td>
         </tr>
+
+        {# Company sub-rows #}
+        {% for co in c.companies %}
+        {% set ob = (co.opening_balance or 0) %}
+        {% set credit_ob = [0, ob * -1]|max %}
+        {% set debit_ob  = [0, ob]|max %}
+        {% set balance = (co.total_paid + credit_ob) - (co.total_invoiced + debit_ob) %}
+        <tr class="company-row" data-parent="{{ c.id }}" data-name="{{ co.name|lower }}" style="display:none">
+          <td>
+            <div style="display:flex;align-items:center;gap:6px;padding-left:34px">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px;color:var(--text-muted);flex-shrink:0"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+              <span style="font-size:13px;font-weight:500">{{ co.name }}</span>
+              {% if co.tax_id %}<span style="font-size:11px;color:var(--text-muted);font-family:monospace">{{ co.tax_id }}</span>{% endif %}
+            </div>
+          </td>
+          {% if can_financials %}
+          <td style="text-align:right">
+            {% if balance < 0 %}
+              <span style="color:var(--danger);font-weight:600;font-size:13px">{{ balance|inr }}</span>
+              <div style="font-size:11px;color:var(--text-muted)">outstanding</div>
+            {% elif balance > 0 %}
+              <span style="color:var(--success);font-weight:600;font-size:13px">{{ balance|inr }}</span>
+              <div style="font-size:11px;color:var(--text-muted)">credit</div>
+            {% else %}
+              <span style="color:var(--warning);font-weight:600;font-size:13px">{{ balance|inr }}</span>
+              <div style="font-size:11px;color:var(--text-muted)">settled</div>
+            {% endif %}
+          </td>
+          <td class="col-mobile-hide" style="text-align:right;font-size:13px;font-weight:500">{{ co.purchases_60d|inr }}</td>
+          <td class="col-mobile-hide" style="text-align:right;font-size:13px;font-weight:500;color:var(--success)">{{ co.payments_60d|inr }}</td>
+          {% endif %}
+          <td></td>
+        </tr>
+        {% endfor %}
+
         {% endfor %}
       </tbody>
     </table>
@@ -83,4 +154,108 @@
   </div>
   {% endif %}
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function reconcilePayments(btn) {
+  if (!confirm("Reconcile payments for all clients?\n\nThis re-applies every unallocated payment to each client's oldest unpaid invoices and updates invoice paid-status. It does not create, edit, or delete any payment or invoice.")) return;
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.textContent = 'Reconciling…';
+  fetch('{{ url_for("clients.reconcile_all") }}', {
+    method: 'POST',
+    headers: { 'X-Requested-With': 'XMLHttpRequest' },
+  })
+    .then(r => r.json())
+    .then(d => {
+      if (d.ok) {
+        alert(`Reconciled ${d.clients_processed} client(s).\n${d.invoices_newly_paid} invoice(s) newly marked paid.\n${d.total_paid_invoices} invoice(s) now fully paid in total.`);
+        location.reload();
+      } else {
+        alert('Reconcile failed: ' + (d.error || 'unknown error'));
+        btn.disabled = false;
+        btn.innerHTML = original;
+      }
+    })
+    .catch(e => {
+      alert('Reconcile failed: ' + e);
+      btn.disabled = false;
+      btn.innerHTML = original;
+    });
+}
+
+const _expandedClients = new Set();
+
+function toggleCompanies(clientId) {
+  const rows = document.querySelectorAll(`.company-row[data-parent="${clientId}"]`);
+  const btn  = document.getElementById('toggle-' + clientId);
+  if (_expandedClients.has(clientId)) {
+    _expandedClients.delete(clientId);
+    rows.forEach(r => r.style.display = 'none');
+    if (btn) btn.classList.remove('expanded');
+  } else {
+    _expandedClients.add(clientId);
+    rows.forEach(r => r.style.display = '');
+    if (btn) btn.classList.add('expanded');
+  }
+}
+
+function filterClients(rawQ) {
+  const q = rawQ.toLowerCase().trim();
+
+  document.querySelectorAll('.client-row').forEach(row => {
+    const cid           = row.dataset.id;
+    const matchClient   = row.dataset.name.includes(q);
+    const matchCompany  = q && row.dataset.companies.includes(q);
+    const companyRows   = document.querySelectorAll(`.company-row[data-parent="${cid}"]`);
+
+    if (!q) {
+      row.style.display = '';
+      companyRows.forEach(r => r.style.display = _expandedClients.has(cid) ? '' : 'none');
+      return;
+    }
+
+    if (matchClient || matchCompany) {
+      row.style.display = '';
+      if (matchCompany) {
+        // Expand and show only matching company rows
+        companyRows.forEach(r => {
+          r.style.display = r.dataset.name.includes(q) ? '' : 'none';
+        });
+        const btn = document.getElementById('toggle-' + cid);
+        if (btn) btn.classList.add('expanded');
+      } else {
+        // Client name matched — respect current expand state
+        companyRows.forEach(r => r.style.display = _expandedClients.has(cid) ? '' : 'none');
+      }
+    } else {
+      row.style.display = 'none';
+      companyRows.forEach(r => r.style.display = 'none');
+    }
+  });
+}
+</script>
+<style>
+.toggle-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transition: background .15s;
+}
+.toggle-btn:hover { background: var(--bg-alt); }
+.toggle-btn.expanded svg { transform: rotate(90deg); }
+.company-row td { background: var(--bg-alt); border-bottom: 1px solid var(--border); }
+.company-row td:first-child { border-left: 3px solid var(--border); }
+.company-row:last-of-type td { border-bottom: none; }
+</style>
 {% endblock %}

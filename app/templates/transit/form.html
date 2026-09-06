@@ -8,7 +8,7 @@
 <div class="card">
   <div class="card-header"><span class="card-title">Dispatch Details</span></div>
   <div class="card-body">
-    <form method="post" action="{{ url_for('transit.new_dispatch') }}">
+    <form id="dispatchForm" method="post" action="{{ url_for('transit.new_dispatch') }}">
       <div class="form-grid form-grid-2" style="margin-bottom:24px">
         <div class="form-group">
           <label>Dispatch Name *</label>
@@ -42,81 +42,228 @@
       <div class="table-wrap" style="margin-bottom:12px">
         <table id="itemsTable" style="table-layout:fixed;width:100%">
           <colgroup>
-            <col style="width:28%"><col style="width:10%"><col style="width:11%"><col style="width:11%"><col style="width:11%"><col style="width:11%"><col style="width:36px">
+            <col style="width:30%"><col style="width:10%"><col style="width:12%"><col style="width:12%"><col style="width:12%"><col style="width:12%"><col style="width:36px">
           </colgroup>
           <thead>
             <tr>
               <th>Product / Sub-product</th>
-              <th>In Production</th>
+              <th style="text-align:center">In Production</th>
               <th>Quantity *</th>
               <th>Price (₹)</th>
               <th>CBM</th>
-              <th>Gross Weight (kg)</th>
+              <th>Gross Wt (kg)</th>
               <th></th>
             </tr>
           </thead>
-          <tbody id="itemsBody">
-            <tr id="row_0">
-              <td>
-                <select name="product_id_0" onchange="onProductChange(this,0)" style="width:100%">
-                  <option value="">— select product —</option>
-                  {% for p in products %}
-                  <option value="{{ p.product_id }}" data-sub="{{ p.sub_product_id or '' }}" data-prod="{{ p.production_qty }}">{{ p.label }}</option>
-                  {% endfor %}
-                </select>
-                <input type="hidden" name="sub_product_id_0" id="sub_0" value="">
-              </td>
-              <td id="prod_0" style="text-align:center;color:var(--warning);font-weight:700">—</td>
-              <td><input type="number" name="quantity_0" step="0.01" min="0.01" placeholder="0" style="width:100%"></td>
-              <td><input type="number" name="price_0" step="0.01" min="0" placeholder="opt." style="width:100%"></td>
-              <td><input type="number" name="cbm_0" step="0.001" min="0" placeholder="opt." style="width:100%"></td>
-              <td><input type="number" name="gross_weight_0" step="0.01" min="0" placeholder="opt." style="width:100%"></td>
-              <td><button type="button" onclick="removeRow(0)" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:18px;padding:0 6px">×</button></td>
-            </tr>
-          </tbody>
+          <tbody id="itemsBody"></tbody>
         </table>
       </div>
       <button type="button" class="btn btn-secondary btn-sm" onclick="addRow()" style="margin-bottom:24px">+ Add Product</button>
 
       <div class="form-actions">
-        <button type="submit" class="btn btn-primary">Create Dispatch</button>
+        <button type="submit" name="status" value="in_transit" class="btn btn-primary">Create Dispatch</button>
+        <button type="submit" name="status" value="draft" class="btn btn-secondary">Save as Draft</button>
         <a href="{{ url_for('transit.list_transit') }}" class="btn btn-secondary">Cancel</a>
       </div>
     </form>
   </div>
 </div>
+
+<!-- Qty error modal -->
+<div id="qtyModal" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.45);align-items:center;justify-content:center">
+  <div style="background:var(--bg);border-radius:var(--radius);padding:28px;max-width:540px;width:100%;box-shadow:0 8px 40px rgba(0,0,0,.3)">
+    <div style="font-size:16px;font-weight:700;margin-bottom:4px;color:var(--danger)">Quantity Exceeds Production Stock</div>
+    <div style="font-size:13px;color:var(--text-muted);margin-bottom:18px">These products exceed their available production quantity. Correct them below or cancel to go back.</div>
+    <div id="qtyModalList"></div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px">
+      <button type="button" class="btn btn-secondary" onclick="qtyModalClose()">Cancel</button>
+      <button type="button" class="btn btn-primary" onclick="qtyModalApply()">Update & Save</button>
+    </div>
+  </div>
+</div>
 {% endblock %}
+
 {% block scripts %}
 <script>
-const PRODUCTS = {{ products | tojson }};
-let rowCount = 1;
+const CATALOG = {{ products | tojson }};
+let rowCount = 0;
 
-function onProductChange(sel, idx) {
-  const opt = sel.options[sel.selectedIndex];
-  document.getElementById('sub_' + idx).value  = opt ? (opt.dataset.sub  || '') : '';
-  document.getElementById('prod_' + idx).textContent = opt ? (opt.dataset.prod || '—') : '—';
+/* ── Shared dropdown (fixed position, never clipped) ─────────────────────── */
+let _cbInput = null;
+const _cbDD  = (() => {
+  const el = document.createElement('div');
+  el.id    = 'cbSharedDropdown';
+  el.style.cssText =
+    'display:none;position:fixed;z-index:9500;background:var(--bg);' +
+    'border:1px solid var(--border);border-radius:var(--radius-sm);' +
+    'box-shadow:0 8px 32px rgba(0,0,0,.22);overflow-y:auto;' +
+    'max-height:310px;min-width:380px';
+  el._cursor  = -1;
+  el._matches = [];
+  document.body.appendChild(el);
+  return el;
+})();
+
+function _cbPos(inp) {
+  const r = inp.getBoundingClientRect();
+  _cbDD.style.top   = (r.bottom + 3) + 'px';
+  _cbDD.style.left  = r.left + 'px';
+  _cbDD.style.width = Math.max(r.width, 400) + 'px';
+}
+window.addEventListener('scroll', () => { if (_cbInput) _cbPos(_cbInput); }, true);
+window.addEventListener('resize', () => { if (_cbInput) _cbPos(_cbInput); });
+
+function cbRender(inp, matches) {
+  _cbInput       = inp;
+  _cbDD._matches = matches;
+  _cbDD._cursor  = -1;
+  if (!matches.length) {
+    _cbDD.innerHTML = '<div style="padding:10px 14px;color:var(--text-muted);font-size:13px;font-style:italic">No products found</div>';
+  } else {
+    _cbDD.innerHTML = matches.map((p, i) => {
+      const sku  = (p.label.match(/\[([^\]]+)\]/) || ['',''])[1];
+      const name = p.label.replace(/\s*\[[^\]]+\]/, '');
+      return `<div class="cb-option" data-idx="${i}" onmousedown="cbSelectShared(event,this)">
+        <div style="font-weight:600;font-size:13px">${name}</div>
+        <div style="font-size:11px;color:var(--text-muted);display:flex;gap:8px;margin-top:2px">
+          ${sku ? `<span style="font-family:monospace;background:var(--bg-alt);padding:1px 5px;border-radius:3px">${sku}</span>` : ''}
+          ${p.production_qty > 0 ? `<span style="color:var(--warning);font-weight:600">In production: ${p.production_qty}</span>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+  }
+  _cbPos(inp);
+  _cbDD.style.display = '';
 }
 
-function addRow() {
+// Keys (pid:sid) already chosen on other rows — excluded from the dropdown.
+function _selectedKeys(excludeInput) {
+  const keys = new Set();
+  document.querySelectorAll('#itemsBody tr').forEach(tr => {
+    if (tr.querySelector('.cb-inp') === excludeInput) return;
+    const pid = (tr.querySelector('[name^="product_id_"]')     || {}).value;
+    const sid = (tr.querySelector('[name^="sub_product_id_"]') || {}).value;
+    if (pid || sid) keys.add((pid || '') + ':' + (sid || ''));
+  });
+  return keys;
+}
+function _availableCatalog(excludeInput) {
+  const sel = _selectedKeys(excludeInput);
+  return CATALOG.filter(p => !sel.has((p.product_id || '') + ':' + (p.sub_product_id || '')));
+}
+
+function cbFilter(inp) {
+  const q = inp.value.toLowerCase();
+  const matches = _availableCatalog(inp).filter(p =>
+    p.label.toLowerCase().includes(q) ||
+    (p.label.match(/\[([^\]]+)\]/) || ['',''])[1].toLowerCase().includes(q)
+  );
+  cbRender(inp, matches);
+  markFormDirty();
+}
+
+function cbOpen(inp) { cbRender(inp, _availableCatalog(inp)); }
+
+function cbBlur(inp) {
+  setTimeout(() => {
+    if (_cbInput === inp) { _cbDD.style.display = 'none'; _cbInput = null; }
+  }, 180);
+}
+
+function cbSelectShared(e, optEl) {
+  e.preventDefault();
+  const idx = parseInt(optEl.dataset.idx, 10);
+  const p   = _cbDD._matches[idx];
+  if (!p || !_cbInput) return;
+  const wrap     = _cbInput.closest('.cb-wrap');
+  const row      = _cbInput.closest('tr');
+  const name     = p.label.replace(/\s*\[[^\]]+\]/, '');
+  _cbInput.value = name;
+  wrap.querySelector('[name^="product_id_"]').value     = p.product_id || '';
+  wrap.querySelector('[name^="sub_product_id_"]').value = p.sub_product_id || '';
+  const prodCell = row.querySelector('.prod-qty-cell');
+  if (prodCell) {
+    if (p.production_qty > 0) {
+      prodCell.innerHTML =
+        '<span>' + p.production_qty + '</span>' +
+        '<button type="button" class="btn btn-secondary btn-sm" title="Set quantity to production stock" ' +
+        'style="padding:0 7px;margin-left:6px;line-height:1.6" onclick="useProductionQty(this)">→</button>';
+    } else {
+      prodCell.textContent = '—';
+    }
+  }
+  const qtyInp = row.querySelector('[name^="quantity_"]');
+  if (qtyInp) { qtyInp.dataset.productionQty = p.production_qty != null ? p.production_qty : 0; validateQty(qtyInp); }
+  _cbDD.style.display = 'none'; _cbInput = null;
+  markFormDirty();
+}
+
+function cbKey(e, inp) {
+  if (e.key === 'Escape') { _cbDD.style.display = 'none'; _cbInput = null; return; }
+
+  const ddVisible = _cbDD.style.display !== 'none' && _cbInput === inp;
+
+  if (!ddVisible) {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      cbOpen(inp);
+      const opts = _cbDD.querySelectorAll('.cb-option');
+      if (opts.length) {
+        _cbDD._cursor = e.key === 'ArrowDown' ? 0 : opts.length - 1;
+        opts.forEach((o, i) => o.classList.toggle('cb-active', i === _cbDD._cursor));
+        opts[_cbDD._cursor].scrollIntoView({ block: 'nearest' });
+      }
+    }
+    return;
+  }
+
+  const opts = _cbDD.querySelectorAll('.cb-option');
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    _cbDD._cursor = Math.min(_cbDD._cursor + 1, opts.length - 1);
+    opts.forEach((o, i) => o.classList.toggle('cb-active', i === _cbDD._cursor));
+    opts[_cbDD._cursor]?.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    _cbDD._cursor = Math.max(_cbDD._cursor - 1, 0);
+    opts.forEach((o, i) => o.classList.toggle('cb-active', i === _cbDD._cursor));
+    opts[_cbDD._cursor]?.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (!opts.length) return;
+    const cursor = _cbDD._cursor >= 0 ? _cbDD._cursor : 0;
+    if (opts[cursor]) cbSelectShared(e, opts[cursor]);
+  }
+}
+
+function addRow(nameVal, pidVal, sidVal, qtyVal, priceVal, cbmVal, gwVal) {
   const i = rowCount++;
-  const opts = PRODUCTS.map(p =>
-    `<option value="${p.product_id}" data-sub="${p.sub_product_id||''}" data-prod="${p.production_qty||0}">${p.label}</option>`
-  ).join('');
   const row = document.createElement('tr');
   row.id = 'row_' + i;
   row.innerHTML = `
     <td>
-      <select name="product_id_${i}" onchange="onProductChange(this,${i})" style="width:100%">
-        <option value="">— select product —</option>${opts}
-      </select>
-      <input type="hidden" name="sub_product_id_${i}" id="sub_${i}" value="">
+      <div class="cb-wrap">
+        <input class="cb-inp" type="text"
+               name="description_${i}"
+               value="${nameVal || ''}"
+               placeholder="Type product name or SKU…"
+               autocomplete="off"
+               oninput="cbFilter(this)"
+               onfocus="cbOpen(this)"
+               onblur="cbBlur(this)"
+               onkeydown="cbKey(event,this)"
+               style="width:100%">
+        <input type="hidden" name="product_id_${i}"     value="${pidVal || ''}">
+        <input type="hidden" name="sub_product_id_${i}" value="${sidVal || ''}">
+      </div>
     </td>
-    <td id="prod_${i}" style="text-align:center;color:var(--warning);font-weight:700">—</td>
-    <td><input type="number" name="quantity_${i}" step="0.01" min="0.01" placeholder="0" style="width:100%"></td>
-    <td><input type="number" name="price_${i}" step="0.01" min="0" placeholder="opt." style="width:100%"></td>
-    <td><input type="number" name="cbm_${i}" step="0.001" min="0" placeholder="opt." style="width:100%"></td>
-    <td><input type="number" name="gross_weight_${i}" step="0.01" min="0" placeholder="opt." style="width:100%"></td>
-    <td><button type="button" onclick="removeRow(${i})" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:18px;padding:0 6px">×</button></td>`;
+    <td class="prod-qty-cell" style="text-align:center;font-weight:700;color:var(--warning)">—</td>
+    <td><input type="number" name="quantity_${i}" step="0.01" min="0.01" value="${qtyVal || ''}" placeholder="0" style="width:100%" data-production-qty="0" oninput="markFormDirty();validateQty(this)"><div class="qty-hint"></div></td>
+    <td><input type="number" name="price_${i}"        step="0.01" min="0"    value="${priceVal || ''}" placeholder="opt." style="width:100%" oninput="markFormDirty()"></td>
+    <td><input type="number" name="cbm_${i}"          step="0.001" min="0"   value="${cbmVal   || ''}" placeholder="opt." style="width:100%" oninput="markFormDirty()"></td>
+    <td><input type="number" name="gross_weight_${i}" step="0.01" min="0"    value="${gwVal    || ''}" placeholder="opt." style="width:100%" oninput="markFormDirty()"></td>
+    <td><button type="button" onclick="removeRow(${i})"
+                style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:18px;padding:0 6px">×</button></td>`;
   document.getElementById('itemsBody').appendChild(row);
 }
 
@@ -124,5 +271,116 @@ function removeRow(i) {
   const row = document.getElementById('row_' + i);
   if (row && document.getElementById('itemsBody').children.length > 1) row.remove();
 }
+
+// Start with one blank row
+addRow();
+
+// Set a line's quantity to its available production stock (the "→" button).
+function useProductionQty(btn) {
+  const row = btn.closest('tr');
+  const qtyInp = row.querySelector('[name^="quantity_"]');
+  if (!qtyInp) return;
+  qtyInp.value = qtyInp.dataset.productionQty || 0;
+  validateQty(qtyInp);
+  markFormDirty();
+}
+
+/* ── Dirty tracking ───────────────────────────────────────────────────────── */
+let _formDirty = false;
+function markFormDirty() { _formDirty = true; }
+function _submitAsDraft() {
+  _formDirty = false;
+  const b = document.querySelector('#dispatchForm button[value="draft"]');
+  if (b) b.click();
+}
+window.__dirtyCheck = () => ({
+  isDirty: _formDirty,
+  label: 'Dispatch',
+  save: null,
+  saveDraft: _submitAsDraft,
+});
+/* ── Inline qty validation ────────────────────────────────────────────────── */
+function validateQty(inp) {
+  const row    = inp.closest('tr');
+  const pidInp = row.querySelector('[name^="product_id_"]');
+  const sidInp = row.querySelector('[name^="sub_product_id_"]');
+  if (!pidInp?.value && !sidInp?.value) return; // no product selected yet
+  const prodQty = parseFloat(inp.dataset.productionQty);
+  const val     = parseFloat(inp.value) || 0;
+  const hint    = inp.parentNode.querySelector('.qty-hint');
+  if (val > prodQty) {
+    inp.style.outline = '2px solid var(--danger)';
+    if (hint) { hint.style.display = ''; hint.textContent = `Exceeds production stock (${prodQty})`; }
+  } else {
+    inp.style.outline = '';
+    if (hint) { hint.style.display = 'none'; hint.textContent = ''; }
+  }
+}
+
+/* ── Submit: check all rows, show modal if any are over production qty ─────── */
+document.getElementById('dispatchForm').addEventListener('submit', function(e) {
+  _formDirty = false;
+  // Drafts may exceed production stock — skip the over-quantity gate for them.
+  if (e.submitter && e.submitter.value === 'draft') return;
+  const bad = [];
+  document.querySelectorAll('#itemsBody tr').forEach(row => {
+    const qtyInp  = row.querySelector('[name^="quantity_"]');
+    const nameInp = row.querySelector('.cb-inp');
+    const pidInp  = row.querySelector('[name^="product_id_"]');
+    const sidInp  = row.querySelector('[name^="sub_product_id_"]');
+    if (!qtyInp || (!pidInp?.value && !sidInp?.value)) return;
+    const prodQty = parseFloat(qtyInp.dataset.productionQty);
+    const val     = parseFloat(qtyInp.value) || 0;
+    if (val > prodQty) bad.push({ name: nameInp?.value || 'Unknown', available: prodQty, entered: val, qtyInp });
+  });
+  if (bad.length) {
+    e.preventDefault();
+    _formDirty = true;
+    showQtyModal(bad);
+  }
+});
+
+/* ── Qty error modal ──────────────────────────────────────────────────────── */
+function showQtyModal(errors) {
+  const list = document.getElementById('qtyModalList');
+  list.innerHTML = errors.map((err, i) => `
+    <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border)">
+      <div style="flex:1;font-size:14px;font-weight:600">${err.name}</div>
+      <div style="font-size:12px;color:var(--text-muted);white-space:nowrap">
+        Available: <strong style="color:var(--warning)">${err.available}</strong>
+      </div>
+      <input type="number" class="modal-qty-inp" step="0.01" min="0.01" max="${err.available}"
+             value="${err.entered}" style="width:88px"
+             oninput="this.style.outline=parseFloat(this.value)>parseFloat(this.max)||parseFloat(this.value)<=0?'2px solid var(--danger)':''">
+    </div>`
+  ).join('');
+  document.getElementById('qtyModal')._errors = errors;
+  document.getElementById('qtyModal').style.display = 'flex';
+}
+
+function qtyModalApply() {
+  const modal  = document.getElementById('qtyModal');
+  const inputs = modal.querySelectorAll('.modal-qty-inp');
+  const errors = modal._errors;
+  let ok = true;
+  inputs.forEach((inp, i) => {
+    const val = parseFloat(inp.value) || 0;
+    const max = errors[i].available;
+    if (val <= 0 || val > max) { inp.style.outline = '2px solid var(--danger)'; ok = false; }
+    else { inp.style.outline = ''; errors[i].qtyInp.value = val; validateQty(errors[i].qtyInp); }
+  });
+  if (ok) { modal.style.display = 'none'; _formDirty = false; document.getElementById('dispatchForm').submit(); }
+}
+
+function qtyModalClose() {
+  document.getElementById('qtyModal').style.display = 'none';
+}
 </script>
+
+<style>
+.cb-option { padding:10px 14px; cursor:pointer; border-bottom:1px solid var(--border); }
+.cb-option:last-child { border-bottom:none; }
+.cb-option:hover, .cb-option.cb-active { background:var(--bg-alt); }
+.qty-hint { font-size:11px; color:var(--danger); margin-top:2px; display:none; }
+</style>
 {% endblock %}

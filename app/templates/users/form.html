@@ -1,0 +1,300 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit User' if action == 'edit' else 'New User' }}{% endblock %}
+{% block page_title %}{{ 'Edit User' if action == 'edit' else 'New User' }}{% endblock %}
+{% block topbar_actions %}
+  <a href="{{ url_for('users.list_users') }}" class="btn btn-secondary">Cancel</a>
+{% endblock %}
+
+{% block content %}
+<form method="post">
+  <!-- Basic info -->
+  <div class="card" style="margin-bottom:18px">
+    <div class="card-header"><span class="card-title">Account Details</span></div>
+    <div class="card-body">
+      <div class="form-grid form-grid-3">
+        <div class="form-group">
+          <label for="name">Name *</label>
+          <input type="text" id="name" name="name" value="{{ user.get('name','') }}" required>
+        </div>
+        <div class="form-group">
+          <label for="email">Email *</label>
+          <input type="email" id="email" name="email" value="{{ user.get('email','') }}" required
+                 {{ 'readonly' if user.get('role') == 'god' }}>
+        </div>
+        <div class="form-group">
+          <label for="password">Password {{ '(leave blank to keep)' if action == 'edit' else '*' }}</label>
+          <input type="password" id="password" name="password"
+                 {{ 'required' if action == 'new' }}
+                 placeholder="{{ '••••••••' if action == 'edit' else 'Set password' }}">
+        </div>
+        {% if user.get('role') != 'god' %}
+        <div class="form-group">
+          <label for="role">Role</label>
+          <select id="role" name="role" onchange="onRoleChange()">
+            <option value="user" {{ 'selected' if user.get('role','user') == 'user' }}>User</option>
+            <option value="sales" {{ 'selected' if user.get('role') == 'sales' }}>Sales Manager</option>
+          </select>
+        </div>
+        <div class="form-group" style="display:flex;align-items:center;gap:10px;padding-top:24px">
+          <input type="checkbox" id="is_active" name="is_active" value="1"
+                 style="width:auto" {{ 'checked' if user.get('is_active', 1) }}>
+          <label for="is_active" style="margin:0;font-size:14px">Active account</label>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Permissions grid -->
+  {% if user.get('role') != 'god' %}
+  <div class="card" style="margin-bottom:18px">
+    <div class="card-header">
+      <span class="card-title">Module Permissions</span>
+      <div style="display:flex;gap:8px">
+        <button type="button" class="btn btn-secondary btn-sm" onclick="setAll(true)">Grant All</button>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="setAll(false)">Revoke All</button>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:160px">Module</th>
+            <th style="text-align:center;width:80px">View</th>
+            <th style="text-align:center;width:80px">Create</th>
+            <th style="text-align:center;width:80px">Edit</th>
+            <th style="text-align:center;width:80px">Delete</th>
+            <th style="text-align:center;width:90px">All</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for module in modules %}
+          {% set mp = perms.get(module, {}) %}
+          <tr>
+            <td class="fw-700" style="text-transform:capitalize">{{ module }}</td>
+            {% for action in ['view','create','edit','delete'] %}
+            <td style="text-align:center">
+              <input type="checkbox" name="perm_{{ module }}_{{ action }}"
+                     class="perm-cb mod-{{ module }}"
+                     value="1" style="width:auto"
+                     {{ 'checked' if mp.get(action) }}>
+            </td>
+            {% endfor %}
+            <td style="text-align:center">
+              <input type="checkbox" class="row-all" data-module="{{ module }}"
+                     style="width:auto" title="Toggle all for {{ module }}"
+                     {{ 'checked' if mp.get('view') and mp.get('create') and mp.get('edit') and mp.get('delete') and (module != 'clients' or (mp.get('financials') and mp.get('locks_view') and mp.get('locks_edit'))) }}>
+            </td>
+          </tr>
+          {% if module == 'clients' %}
+          <!-- Clients-only extras: one sub-line each, checkboxes aligned to columns -->
+          {% for extra in client_extras %}
+          <tr style="background:var(--bg-subtle, rgba(0,0,0,.02))">
+            <td style="padding-left:28px;font-size:12.5px;color:var(--text-muted)" title="{{ extra.desc }}">
+              ↳ {{ extra.label }}
+            </td>
+            {% for action in ['view','create','edit','delete'] %}
+            <td style="text-align:center">
+              {% if action in extra.actions %}
+              <input type="checkbox" name="perm_clients_{{ extra.actions[action] }}"
+                     class="perm-cb mod-clients" id="perm_clients_{{ extra.actions[action] }}"
+                     value="1" style="width:auto"
+                     title="{{ extra.label }} — {{ action }}"
+                     {{ 'checked' if mp.get(extra.actions[action]) }}>
+              {% else %}
+              <span style="color:var(--border)">—</span>
+              {% endif %}
+            </td>
+            {% endfor %}
+            <td style="text-align:center"><span style="color:var(--border)">—</span></td>
+          </tr>
+          {% endfor %}
+          {% endif %}
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% else %}
+  <div class="card" style="margin-bottom:18px">
+    <div class="card-body">
+      <p style="color:var(--text-muted);font-size:14px">⚡ The god account has unrestricted access to all modules.</p>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Dashboard sections -->
+  {% if user.get('role') != 'god' %}
+  <div class="card" style="margin-bottom:18px">
+    <div class="card-header">
+      <span class="card-title">Dashboard Sections</span>
+      <div style="display:flex;gap:8px">
+        <button type="button" class="btn btn-secondary btn-sm" onclick="setAllDash(true)">Grant All</button>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="setAllDash(false)">Revoke All</button>
+      </div>
+    </div>
+    <div class="card-body">
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px">
+        {% for section_key, section_label in dash_sections %}
+        <label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-size:13px;padding:9px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);transition:border-color .15s">
+          <input type="checkbox" name="dash_{{ section_key }}" class="dash-cb" value="1"
+                 style="width:auto;flex-shrink:0"
+                 {{ 'checked' if section_key in user_dash_sections }}>
+          {{ section_label }}
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% else %}
+  <div class="card" style="margin-bottom:18px">
+    <div class="card-body">
+      <p style="color:var(--text-muted);font-size:14px">⚡ The god account sees all dashboard sections.</p>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Sales team (sales managers only; fills users.manager_id on save) -->
+  {% if user.get('role') != 'god' %}
+  <div class="card" style="margin-bottom:18px;{{ '' if user.get('role') == 'sales' else 'display:none' }}" id="salesTeamCard">
+    <div class="card-header">
+      <span class="card-title">Sales Team <span id="stCount" class="badge" style="margin-left:6px">{{ team_ids|length }}</span></span>
+    </div>
+    <div class="card-body">
+      <p style="font-size:12.5px;color:var(--text-muted);margin:0 0 10px">
+        Staff on this manager's team. The manager sees data for their own clients plus every client
+        managed by these staff members — including their sales and payments.
+      </p>
+      {% if team_candidates %}
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px">
+        {% for u in team_candidates %}
+        <label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-size:13px;padding:8px 11px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg)">
+          <input type="checkbox" name="team_staff" value="{{ u.id }}" class="st-cb"
+                 style="width:auto;flex-shrink:0" onchange="updateTeamCount()"
+                 {{ 'checked' if u.id in team_ids }}>
+          <span>
+            {{ u.name }}
+            <span style="display:block;font-size:11.5px;color:var(--text-muted)">
+              {{ 'Sales Manager' if u.role == 'sales' else 'User' }}{{ '' if u.is_active else ' · inactive' }}
+              {% if u.manager_id and u.id not in team_ids %} · has a manager{% endif %}
+            </span>
+          </span>
+        </label>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p style="font-size:13px;color:var(--text-muted)">No other users yet — create the staff accounts first.</p>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Managed clients (fills clients.sales_rep_id on save) -->
+  {% if user.get('role') != 'god' %}
+  <div class="card" style="margin-bottom:18px">
+    <div class="card-header">
+      <span class="card-title">Managed Clients <span id="mcCount" class="badge" style="margin-left:6px">{{ managed_ids|length }}</span></span>
+      <input type="text" id="mcFilter" placeholder="Search clients…" oninput="filterManagedClients()"
+             style="margin-left:auto;width:200px;font-size:13px;padding:6px 10px">
+    </div>
+    <div class="card-body">
+      <p style="font-size:12.5px;color:var(--text-muted);margin:0 0 10px">
+        Tick the clients this staff member manages. Saving updates each client's Sales Rep field —
+        unticked clients go back to “handled directly”, and ticking a client already with another rep moves them over.
+      </p>
+      <div id="mcList" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:8px;max-height:340px;overflow-y:auto">
+        {% for c in all_clients %}
+        <label class="mc-item" data-search="{{ (c.name ~ ' ' ~ (c.city or '') ~ ' ' ~ (c.state or ''))|lower }}"
+               style="display:flex;align-items:flex-start;gap:9px;cursor:pointer;font-size:13px;padding:8px 11px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg)">
+          <input type="checkbox" name="managed_clients" value="{{ c.id }}" class="mc-cb"
+                 style="width:auto;flex-shrink:0;margin-top:2px" onchange="updateManagedCount()"
+                 {{ 'checked' if c.id in managed_ids }}>
+          <span>
+            {{ c.name }}
+            <span style="display:block;font-size:11.5px;color:var(--text-muted)">
+              {{ [c.city, c.state]|select|join(', ') or '—' }}
+              {% if c.rep_name and c.id not in managed_ids %} · with {{ c.rep_name }}{% endif %}
+            </span>
+          </span>
+        </label>
+        {% endfor %}
+      </div>
+      <div id="mcEmpty" style="display:none;font-size:13px;color:var(--text-muted);padding:10px 0">No matching clients.</div>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">{{ 'Save Changes' if action == 'edit' else 'Create User' }}</button>
+    <a href="{{ url_for('users.list_users') }}" class="btn btn-secondary">Cancel</a>
+  </div>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Row-level "toggle all" checkboxes
+document.querySelectorAll('.row-all').forEach(rowCb => {
+  const module = rowCb.dataset.module;
+  const cbs = document.querySelectorAll(`.mod-${module}`);
+
+  rowCb.addEventListener('change', () => {
+    cbs.forEach(cb => cb.checked = rowCb.checked);
+  });
+
+  cbs.forEach(cb => cb.addEventListener('change', () => {
+    rowCb.checked = [...cbs].every(c => c.checked);
+  }));
+});
+
+function setAll(val) {
+  document.querySelectorAll('.perm-cb, .row-all').forEach(cb => cb.checked = val);
+}
+
+function setAllDash(val) {
+  document.querySelectorAll('.dash-cb').forEach(cb => cb.checked = val);
+}
+
+// Managed clients: search filter + live selected count
+function filterManagedClients() {
+  const q = document.getElementById('mcFilter').value.trim().toLowerCase();
+  let shown = 0;
+  document.querySelectorAll('.mc-item').forEach(item => {
+    const hit = !q || item.dataset.search.includes(q);
+    item.style.display = hit ? '' : 'none';
+    if (hit) shown++;
+  });
+  document.getElementById('mcEmpty').style.display = shown ? 'none' : '';
+}
+function updateManagedCount() {
+  document.getElementById('mcCount').textContent =
+    document.querySelectorAll('.mc-cb:checked').length;
+}
+
+// Sales-manager role: show the team card and apply default module access
+const SALES_DENIED = {{ sales_denied|tojson }};
+function updateTeamCount() {
+  const el = document.getElementById('stCount');
+  if (el) el.textContent = document.querySelectorAll('.st-cb:checked').length;
+}
+function onRoleChange() {
+  const roleSel = document.getElementById('role');
+  if (!roleSel) return;
+  const isSales = roleSel.value === 'sales';
+  const teamCard = document.getElementById('salesTeamCard');
+  if (teamCard) teamCard.style.display = isSales ? '' : 'none';
+  if (isSales) {
+    // Defaults, not a hard block — boxes stay editable after this runs.
+    SALES_DENIED.forEach(m => {
+      document.querySelectorAll(`.mod-${m}`).forEach(cb => cb.checked = false);
+      const rowAll = document.querySelector(`.row-all[data-module="${m}"]`);
+      if (rowAll) rowAll.checked = false;
+    });
+    ['clients', 'invoices', 'payments'].forEach(m => {
+      const view = document.querySelector(`input[name="perm_${m}_view"]`);
+      if (view) view.checked = true;
+    });
+  }
+}
+</script>
+{% endblock %}

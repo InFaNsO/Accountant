@@ -48,7 +48,7 @@
         <div class="form-group">
           <label for="tax_rate">Tax Rate (%)</label>
           <input type="number" id="tax_rate" name="tax_rate"
-                 value="{{ product.get('tax_rate', 0) }}" step="0.01" min="0" max="100" placeholder="18">
+                 value="{{ product.get('tax_rate', 18) }}" step="0.01" min="0" max="100" placeholder="18">
         </div>
 
         <div class="form-group">
@@ -56,6 +56,14 @@
           <input type="number" id="min_quantity" name="min_quantity"
                  value="{{ product.get('min_quantity', 0) }}" step="0.01" min="0" placeholder="0">
           <small class="muted">Alert when stock falls below this</small>
+        </div>
+
+        <div class="form-group">
+          <label for="pcs_per_carton">Pieces per Box *</label>
+          <input type="number" id="pcs_per_carton" name="pcs_per_carton"
+                 value="{{ product.get('pcs_per_carton', '') or '' }}" step="1" min="1" required
+                 placeholder="e.g. 12, 24, 48">
+          <small class="muted">Required — inherited by all sub-products for box ↔ pieces conversion</small>
         </div>
 
         <div class="form-group">

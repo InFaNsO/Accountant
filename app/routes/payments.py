@@ -1,19 +1,49 @@
-from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
+from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, abort
+from flask_login import login_required, current_user
 from ..services import payment_service, invoice_service, client_service
+from ..services.auth_service import permission_required, get_scoped_client_ids, get_own_scoped_client_ids
 
 bp = Blueprint("payments", __name__, url_prefix="/payments")
 
 
+def _scope():
+    """Client ids the current user may see, or None for unrestricted.
+    Sales managers get their team's clients; anyone else with clients
+    assigned directly to them (clients.sales_rep_id) gets just those."""
+    scope = get_scoped_client_ids(current_user)
+    return scope if scope is not None else get_own_scoped_client_ids(current_user)
+
+
 @bp.route("/")
+@login_required
+@permission_required("payments", "view")
 def list_payments():
     payments = payment_service.get_all_payments()
-    return render_template("payments/list.html", payments=payments)
+    scope = _scope()
+    if scope is not None:
+        payments = [p for p in payments if p["client_id"] in scope]
+    # Per-client company lists, so each row's Company cell can offer the same
+    # assign / re-assign dropdown as the client page's payments section.
+    companies_by_client = {}
+    for co in client_service.get_all_companies_with_client():
+        companies_by_client.setdefault(co["client_id"], []).append({"id": co["id"], "name": co["name"]})
+    can_assign = current_user.has_permission("clients", "financials")
+    return render_template("payments/list.html", payments=payments,
+                           companies_by_client=companies_by_client, can_assign=can_assign)
 
 
 @bp.route("/new", methods=["GET", "POST"])
+@login_required
+@permission_required("payments", "create")
 def new_payment():
-    clients  = client_service.get_all_clients()
-    invoices = invoice_service.get_all_invoices()
+    scope = _scope()
+    clients       = client_service.get_all_clients_with_companies()
+    invoices      = invoice_service.get_all_invoices()
+    all_companies = client_service.get_all_companies_with_client()
+    if scope is not None:
+        clients       = [c for c in clients if c["id"] in scope]
+        invoices      = [i for i in invoices if i["client_id"] in scope]
+        all_companies = [co for co in all_companies if co["client_id"] in scope]
 
     # Pre-fill from query string (e.g. coming from invoice detail)
     prefill = {}
@@ -35,14 +65,16 @@ def new_payment():
         if not data.get("client_id") or not data.get("amount"):
             flash("Client and amount are required.", "error")
             return render_template("payments/form.html",
-                                   clients=clients, invoices=invoices, prefill=data)
+                                   clients=clients, invoices=invoices, all_companies=all_companies, prefill=data)
+        if scope is not None and int(data["client_id"]) not in scope:
+            abort(403)
         try:
             payment_service.create_payment(data)
             flash("Payment recorded and allocated.", "success")
         except Exception as e:
             flash(f"Error recording payment: {e}", "error")
             return render_template("payments/form.html",
-                                   clients=clients, invoices=invoices, prefill=data)
+                                   clients=clients, invoices=invoices, all_companies=all_companies, prefill=data)
 
         inv_id = data.get("invoice_id")
         if inv_id:
@@ -50,23 +82,117 @@ def new_payment():
         return redirect(url_for("clients.detail", client_id=data["client_id"]))
 
     return render_template("payments/form.html",
-                           clients=clients, invoices=invoices, prefill=prefill)
+                           clients=clients, invoices=invoices, all_companies=all_companies, prefill=prefill)
+
+
+@bp.route("/<int:payment_id>")
+@login_required
+@permission_required("payments", "view")
+def detail(payment_id):
+    p = payment_service.get_payment(payment_id)
+    if not p:
+        flash("Payment not found.", "error")
+        return redirect(url_for("payments.list_payments"))
+    scope = _scope()
+    if scope is not None and p["client_id"] not in scope:
+        abort(403)
+    allocations = payment_service.get_payment_allocations(payment_id)
+    companies   = client_service.get_companies(p["client_id"])
+    company_name = next((c["name"] for c in companies if c["id"] == p["company_id"]), None)
+    can_edit   = current_user.has_permission("payments", "edit")
+    can_delete = current_user.has_permission("payments", "delete")
+    return render_template("payments/detail.html", p=p, allocations=allocations,
+                           company_name=company_name, can_edit=can_edit, can_delete=can_delete)
+
+
+@bp.route("/<int:payment_id>/edit", methods=["GET", "POST"])
+@login_required
+@permission_required("payments", "edit")
+def edit_payment(payment_id):
+    p = payment_service.get_payment(payment_id)
+    if not p:
+        flash("Payment not found.", "error")
+        return redirect(url_for("payments.list_payments"))
+    scope = _scope()
+    if scope is not None and p["client_id"] not in scope:
+        abort(403)
+    companies = client_service.get_companies(p["client_id"])
+
+    if request.method == "POST":
+        data = request.form.to_dict()
+        if not data.get("amount") or not data.get("payment_date"):
+            flash("Amount and payment date are required.", "error")
+            return render_template("payments/edit.html", p={**dict(p), **data}, companies=companies)
+        try:
+            payment_service.update_payment(payment_id, data)
+            flash("Payment updated.", "success")
+        except Exception as e:
+            flash(f"Error updating payment: {e}", "error")
+            return render_template("payments/edit.html", p={**dict(p), **data}, companies=companies)
+        return redirect(url_for("payments.detail", payment_id=payment_id))
+
+    return render_template("payments/edit.html", p=dict(p), companies=companies)
+
+
+@bp.route("/<int:payment_id>/toggle-opening-balance", methods=["POST"])
+@login_required
+@permission_required("payments", "edit")
+def toggle_opening_balance(payment_id):
+    p = payment_service.get_payment(payment_id)
+    if not p:
+        flash("Payment not found.", "error")
+        return redirect(url_for("payments.list_payments"))
+    scope = _scope()
+    if scope is not None and p["client_id"] not in scope:
+        abort(403)
+    new_flag = 0 if (p["is_opening_balance"] or 0) else 1
+    payment_service.set_payment_opening_balance(payment_id, new_flag)
+    flash(
+        "Payment marked as opening-balance (excluded from invoice allocation)."
+        if new_flag else "Payment unmarked — it will be allocated to invoices again.",
+        "success",
+    )
+    return redirect(request.referrer or url_for("payments.list_payments"))
 
 
 @bp.route("/<int:payment_id>/delete", methods=["POST"])
+@login_required
+@permission_required("payments", "delete")
 def delete_payment(payment_id):
-    pmt = payment_service.get_payment(payment_id)
-    invoice_id = pmt["invoice_id"] if pmt else None
+    scope = _scope()
+    if scope is not None:
+        p = payment_service.get_payment(payment_id)
+        if p and p["client_id"] not in scope:
+            abort(403)
+    allocs = payment_service.get_payment_allocations(payment_id)
+    first_invoice = allocs[0]["invoice_id"] if allocs else None
     payment_service.delete_payment(payment_id)
     flash("Payment deleted.", "success")
-    if invoice_id:
-        return redirect(url_for("invoices.detail", invoice_id=invoice_id))
+    if first_invoice:
+        return redirect(url_for("invoices.detail", invoice_id=first_invoice))
     return redirect(url_for("payments.list_payments"))
+
+
+# ── Client companies list for JS (used by payment form) ──────────────────────
+@bp.route("/api/client-companies/<int:client_id>")
+@login_required
+@permission_required("payments", "view")
+def api_client_companies(client_id):
+    scope = _scope()
+    if scope is not None and client_id not in scope:
+        abort(403)
+    companies = client_service.get_companies(client_id)
+    return jsonify([{"id": c["id"], "name": c["name"]} for c in companies])
 
 
 # ── Client invoice list for JS (used by payment form) ────────────────────────
 @bp.route("/api/client-invoices/<int:client_id>")
+@login_required
+@permission_required("payments", "view")
 def api_client_invoices(client_id):
+    scope = _scope()
+    if scope is not None and client_id not in scope:
+        abort(403)
     invoices = invoice_service.get_all_invoices()
     client_invs = [
         {
@@ -85,11 +211,16 @@ def api_client_invoices(client_id):
 
 # ── Batch import ──────────────────────────────────────────────────────────────
 @bp.route("/import", methods=["GET", "POST"])
+@login_required
+@permission_required("payments", "create")
 def import_payments():
     import io, xlrd
     from datetime import datetime
 
+    scope = _scope()
     clients = client_service.get_all_clients()
+    if scope is not None:
+        clients = [c for c in clients if c["id"] in scope]
 
     if request.method == "POST" and "statement" in request.files:
         f = request.files["statement"]
@@ -155,6 +286,8 @@ def import_payments():
             idx = key.split("_", 1)[1]
             client_id = val.strip()
             if not client_id:
+                continue
+            if scope is not None and int(client_id) not in scope:
                 continue
             amount    = request.form.get(f"amount_{idx}", "0")
             date      = request.form.get(f"date_{idx}", "")

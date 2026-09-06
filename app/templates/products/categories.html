@@ -2,10 +2,10 @@
 {% block title %}Categories{% endblock %}
 {% block page_title %}Product Categories{% endblock %}
 {% block topbar_actions %}
-  <a href="{{ url_for('products.list_products') }}" class="btn btn-secondary">Back to Products</a>
+  <a href="{{ url_for('products.list_products') }}" class="btn btn-secondary"><span class="btn-label-mobile">Back to Products</span><span class="lbl-mobile-only">Back</span></a>
   <a href="{{ url_for('products.new_category') }}" class="btn btn-primary">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-    New Category
+    <span class="btn-label-mobile">New Category</span><span class="lbl-mobile-only">New</span>
   </a>
 {% endblock %}
 
@@ -31,7 +31,7 @@
           <td class="muted">{{ cat.description or '—' }}</td>
           <td style="text-align:right;white-space:nowrap">
             <a href="{{ url_for('products.edit_category', cat_id=cat.id) }}" class="btn btn-secondary btn-sm">Edit</a>
-            <form method="post" action="{{ url_for('products.delete_category', cat_id=cat.id) }}"
+            <form method="post" action="{{ url_for('products.delete_category', cat_id=cat.id) }}" class="col-mobile-hide"
                   style="display:inline" onsubmit="return confirm('Delete category {{ cat.name }}? Products in this category will become uncategorised.')">
               <button class="btn btn-danger btn-sm">Delete</button>
             </form>

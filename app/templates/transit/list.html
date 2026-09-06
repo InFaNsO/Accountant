@@ -4,14 +4,32 @@
 {% block topbar_actions %}
   <a href="{{ url_for('transit.new_dispatch') }}" class="btn btn-primary">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-    New Dispatch
+    <span class="btn-label-mobile">New Dispatch</span>
   </a>
 {% endblock %}
 {% block content %}
+<style>
+  .status-toggle { display:inline-flex; align-items:center; gap:6px; cursor:pointer; user-select:none;
+    border:1px solid var(--border); border-radius:16px; padding:3px 11px 3px 7px; font-size:12px; font-weight:600; }
+  .status-toggle .tickbox { display:inline-flex; width:16px; height:16px; align-items:center; justify-content:center;
+    border-radius:50%; font-size:10px; font-weight:800; color:#fff; }
+  .status-toggle.on  { border-color:var(--success); color:var(--success); background:rgba(16,185,129,.08); }
+  .status-toggle.on  .tickbox { background:var(--success); }
+  .status-toggle.off { border-color:var(--danger); color:var(--text-muted); background:rgba(239,68,68,.05); }
+  .status-toggle.off .tickbox { background:var(--danger); }
+</style>
 <div class="card">
-  <div class="card-header">
-    <span class="card-title">All Dispatches ({{ dispatches|length }})</span>
-    <input type="search" placeholder="Search…" style="width:200px" oninput="filterTable(this.value,'dispTable')">
+  <div class="card-header" style="flex-wrap:wrap;gap:10px">
+    <span class="card-title">Dispatches (<span id="dispCount">{{ dispatches|length }}</span>)</span>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-left:auto">
+      <span class="status-toggle on"  data-status="draft"              onclick="toggleStatus(this)" title="Toggle Draft"><span class="tickbox">✓</span>Draft</span>
+      <span class="status-toggle on"  data-status="in_transit"         onclick="toggleStatus(this)" title="Toggle In Transit"><span class="tickbox">✓</span>In Transit</span>
+      <span class="status-toggle on"  data-status="partially_received" onclick="toggleStatus(this)" title="Toggle Partial"><span class="tickbox">✓</span>Partial</span>
+      <span class="status-toggle off" data-status="received"           onclick="toggleStatus(this)" title="Toggle Received"><span class="tickbox">✕</span>Received</span>
+      <button type="button" class="btn btn-secondary btn-sm" onclick="setAllStatuses(true)">Select all</button>
+      <button type="button" class="btn btn-secondary btn-sm" onclick="setAllStatuses(false)">Remove all</button>
+      <input type="search" id="dispSearch" placeholder="Search…" style="width:170px" oninput="applyFilters()">
+    </div>
   </div>
   {% if dispatches %}
   <div class="table-wrap">
@@ -19,30 +37,32 @@
       <thead>
         <tr>
           <th>Dispatch Name</th>
-          <th>Supplier</th>
-          <th>Dispatch Date</th>
+          <th class="col-mobile-hide">Supplier</th>
+          <th class="col-mobile-hide">Dispatch Date</th>
           <th>Expected Arrival</th>
-          <th style="text-align:center">Items</th>
+          <th style="text-align:center" class="col-mobile-hide">Items</th>
           <th>Status</th>
           <th></th>
         </tr>
       </thead>
       <tbody>
         {% for d in dispatches %}
-        <tr>
+        <tr data-status="{{ d.status }}">
           <td class="fw-700">
             <a href="{{ url_for('transit.detail', dispatch_id=d.id) }}" style="color:var(--accent);text-decoration:none">{{ d.name }}</a>
           </td>
-          <td class="muted">{{ d.supplier_name or '—' }}</td>
-          <td class="muted">{{ d.dispatch_date or '—' }}</td>
+          <td class="muted col-mobile-hide">{{ d.supplier_name or '—' }}</td>
+          <td class="muted col-mobile-hide">{{ d.dispatch_date or '—' }}</td>
           <td>
             {% if d.expected_arrival %}
               <span style="font-weight:600">{{ d.expected_arrival }}</span>
             {% else %}—{% endif %}
           </td>
-          <td style="text-align:center" class="muted">{{ d.item_count }}</td>
+          <td style="text-align:center" class="muted col-mobile-hide">{{ d.item_count }}</td>
           <td>
-            {% if d.status == 'in_transit' %}
+            {% if d.status == 'draft' %}
+              <span class="badge" style="background:rgba(245,158,11,.15);color:#d97706">Draft</span>
+            {% elif d.status == 'in_transit' %}
               <span class="badge" style="background:rgba(99,102,241,.15);color:#6366f1">In Transit</span>
             {% elif d.status == 'partially_received' %}
               <span class="badge" style="background:rgba(245,158,11,.15);color:#d97706">Partial</span>
@@ -54,7 +74,10 @@
           </td>
           <td style="text-align:right;white-space:nowrap">
             <a href="{{ url_for('transit.detail', dispatch_id=d.id) }}" class="btn btn-secondary btn-sm">View</a>
-            <form method="post" action="{{ url_for('transit.delete_dispatch', dispatch_id=d.id) }}" style="display:inline"
+            {% if current_user.has_permission('transit', 'edit') and d.status != 'received' %}
+            <a href="{{ url_for('transit.edit_dispatch', dispatch_id=d.id) }}" class="btn btn-secondary btn-sm col-mobile-hide">Edit</a>
+            {% endif %}
+            <form method="post" action="{{ url_for('transit.delete_dispatch', dispatch_id=d.id) }}" style="display:inline" class="col-mobile-hide"
                   onsubmit="return confirm('Delete {{ d.name }}? Quantities will be reversed.')">
               <button class="btn btn-danger btn-sm">Delete</button>
             </form>
@@ -66,10 +89,58 @@
   </div>
   {% else %}
   <div class="empty-state">
+    {% if status != 'all' %}
+    <h3>No dispatches match this filter</h3>
+    <p>No dispatches with this status. Try <a href="{{ url_for('transit.list_transit', status='all') }}">All</a>, or create a new dispatch.</p>
+    {% else %}
     <h3>No dispatches yet</h3>
     <p>Create a dispatch when goods leave the supplier and are in transit to the warehouse.</p>
-    <a href="{{ url_for('transit.new_dispatch') }}" class="btn btn-primary">Create First Dispatch</a>
+    {% endif %}
+    <a href="{{ url_for('transit.new_dispatch') }}" class="btn btn-primary">New Dispatch</a>
   </div>
   {% endif %}
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function _activeStatuses() {
+  var set = {};
+  document.querySelectorAll('.status-toggle.on').forEach(function (el) { set[el.dataset.status] = true; });
+  return set;
+}
+
+// Combined status (tick/cross) + search filter
+function applyFilters() {
+  var searchEl = document.getElementById('dispSearch');
+  var q = (searchEl ? searchEl.value : '').toLowerCase().trim();
+  var active = _activeStatuses();
+  var visible = 0;
+  document.querySelectorAll('#dispTable tbody tr').forEach(function (tr) {
+    var okStatus = !!active[tr.dataset.status || ''];
+    var okText   = !q || tr.textContent.toLowerCase().indexOf(q) >= 0;
+    var show = okStatus && okText;
+    tr.style.display = show ? '' : 'none';
+    if (show) visible++;
+  });
+  var cnt = document.getElementById('dispCount');
+  if (cnt) cnt.textContent = visible;
+}
+
+function _setTick(el, on) {
+  el.classList.toggle('on', on);
+  el.classList.toggle('off', !on);
+  var b = el.querySelector('.tickbox');
+  if (b) b.textContent = on ? '✓' : '✕';
+}
+
+// Clicking a status chip cycles tick ⇄ cross
+function toggleStatus(el) { _setTick(el, !el.classList.contains('on')); applyFilters(); }
+function setAllStatuses(on) {
+  document.querySelectorAll('.status-toggle').forEach(function (el) { _setTick(el, on); });
+  applyFilters();
+}
+
+document.addEventListener('DOMContentLoaded', applyFilters);
+</script>
 {% endblock %}

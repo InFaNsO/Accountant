@@ -4,7 +4,7 @@
 {% block topbar_actions %}
   <a href="{{ url_for('payments.import_payments') }}" class="btn btn-secondary">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:15px;height:15px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-    Import from Statement
+    <span class="btn-label-mobile">Import from Statement</span>
   </a>
   <a href="{{ url_for('payments.list_payments') }}" class="btn btn-secondary">Cancel</a>
 {% endblock %}
@@ -19,22 +19,44 @@
     <form method="post" action="{{ url_for('payments.new_payment') }}">
       <div class="form-grid form-grid-2">
 
-        <div class="form-group span-2">
-          <label for="client_id">Client *</label>
-          <select id="client_id" name="client_id" required onchange="loadClientInvoices(this.value)">
-            <option value="">— Select client —</option>
-            {% for c in clients %}
-            <option value="{{ c.id }}" {{ 'selected' if prefill.get('client_id')|string == c.id|string }}>
-              {{ c.name }}{% if c.company %} — {{ c.company }}{% endif %}
-            </option>
-            {% endfor %}
-          </select>
+        <!-- Client combobox -->
+        <div class="form-group">
+          <label for="client_search">Client *</label>
+          <input type="text" id="client_search"
+                 placeholder="Search by client name…"
+                 autocomplete="off"
+                 oninput="clientCbFilter(this)"
+                 onfocus="clientCbOpen(this)"
+                 onblur="clientCbBlur(this)"
+                 onkeydown="clientCbKey(event,this)">
+          <input type="hidden" id="client_id" name="client_id">
+          <div id="client_error" style="font-size:11px;color:var(--danger);margin-top:3px;display:none">Please select a client.</div>
+        </div>
+
+        <!-- Company search combobox (auto-fills client) -->
+        <div class="form-group">
+          <label for="company_search">Company <span style="font-weight:400;color:var(--text-muted)">(auto-fills client)</span></label>
+          <input type="text" id="company_search"
+                 placeholder="Search by company name…"
+                 autocomplete="off"
+                 oninput="companyCbFilter(this)"
+                 onfocus="companyCbOpen(this)"
+                 onblur="companyCbBlur(this)"
+                 onkeydown="companyCbKey(event,this)">
         </div>
 
         <div class="form-group span-2">
           <label for="invoice_id">Apply to Invoice <span style="font-weight:400;color:var(--text-muted)">(optional — leave blank to auto-allocate)</span></label>
           <select id="invoice_id" name="invoice_id">
             <option value="">Auto-allocate (oldest unpaid first)</option>
+          </select>
+        </div>
+
+        <!-- Received-from Company dropdown (appears after client selected) -->
+        <div class="form-group span-2" id="companyWrap" style="display:none">
+          <label for="company_id">Received from Company <span style="font-weight:400;color:var(--text-muted)">(optional)</span></label>
+          <select id="company_id" name="company_id">
+            <option value="">— No specific company —</option>
           </select>
         </div>
 
@@ -73,6 +95,20 @@
           <textarea id="notes" name="notes" placeholder="Optional notes…">{{ prefill.get('notes','') }}</textarea>
         </div>
 
+        <!-- Opening-balance flag -->
+        <div class="form-group span-2">
+          <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-weight:500">
+            <input type="checkbox" id="is_opening_balance" name="is_opening_balance" value="1"
+                   style="width:auto;margin-top:2px" onchange="onOpeningBalanceToggle()"
+                   {{ 'checked' if prefill.get('is_opening_balance') }}>
+            <span>This payment is for the <strong>opening balance</strong>
+              <span style="display:block;font-weight:400;font-size:12px;color:var(--text-muted)">
+                It will be assigned to the old balance only — never allocated to invoices, and skipped by reconciliation.
+              </span>
+            </span>
+          </label>
+        </div>
+
         <!-- Allocation preview -->
         <div class="form-group span-2" id="allocationPreview" style="display:none">
           <div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px">
@@ -93,17 +129,190 @@
 
 {% block scripts %}
 <script>
+// ── Data ───────────────────────────────────────────────────────────────────────
+const CLIENT_LIST = [{% for c in clients %}{"id":{{ c.id }},"name":{{ c.name|tojson }},"companies":[{% for co in c.companies %}{{ co.name|tojson }}{% if not loop.last %},{% endif %}{% endfor %}]}{% if not loop.last %},{% endif %}{% endfor %}];
+const ALL_COMPANIES = [{% for co in all_companies %}{"id":{{ co.id }},"name":{{ co.name|tojson }},"client_id":{{ co.client_id }},"client_name":{{ co.client_name|tojson }}}{% if not loop.last %},{% endif %}{% endfor %}];
+
 const prefillClientId  = "{{ prefill.get('client_id','') }}";
 const prefillInvoiceId = "{{ prefill.get('invoice_id','') }}";
 
-document.addEventListener('DOMContentLoaded', () => {
-  const dateInput = document.getElementById('payment_date');
-  if (!dateInput.value) dateInput.value = new Date().toISOString().slice(0,10);
-  if (prefillClientId) loadClientInvoices(prefillClientId);
-  document.getElementById('amount').addEventListener('input', updatePreview);
+// ── Shared dropdown factory ────────────────────────────────────────────────────
+function _makeDD(zIndex) {
+  const el = document.createElement('div');
+  el.style.cssText =
+    `display:none;position:fixed;z-index:${zIndex};background:var(--bg);` +
+    'border:1px solid var(--border);border-radius:var(--radius-sm);' +
+    'box-shadow:0 8px 32px rgba(0,0,0,.22);overflow-y:auto;max-height:310px;min-width:280px';
+  el._cursor = -1; el._matches = [];
+  document.body.appendChild(el);
+  return el;
+}
+function _ddPos(dd, inp) {
+  const r = inp.getBoundingClientRect();
+  dd.style.top   = (r.bottom + 3) + 'px';
+  dd.style.left  = r.left + 'px';
+  dd.style.width = Math.max(r.width, 280) + 'px';
+}
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Client combobox ────────────────────────────────────────────────────────────
+const _clientDD    = _makeDD(9600);
+let   _clientInput = null;
+
+function _clientMatches(q) {
+  if (!q) return CLIENT_LIST;
+  return CLIENT_LIST.filter(c =>
+    c.name.toLowerCase().includes(q) ||
+    c.companies.some(n => n.toLowerCase().includes(q))
+  );
+}
+function clientCbRender(inp, matches) {
+  _clientInput = inp; _clientDD._matches = matches; _clientDD._cursor = -1;
+  _clientDD.innerHTML = matches.length
+    ? matches.map((c, i) => `<div class="cb-option" data-idx="${i}" onmousedown="clientCbSelect(event,this)">
+        <div style="font-weight:600;font-size:13px">${escHtml(c.name)}</div>
+        ${c.companies.length ? `<div style="font-size:11px;color:var(--text-muted)">${escHtml(c.companies.join(', '))}</div>` : ''}
+      </div>`).join('')
+    : '<div style="padding:10px 14px;color:var(--text-muted);font-size:13px;font-style:italic">No clients found</div>';
+  _ddPos(_clientDD, inp);
+  _clientDD.style.display = '';
+}
+function clientCbOpen(inp)   { clientCbRender(inp, _clientMatches(inp.value.toLowerCase())); }
+function clientCbFilter(inp) {
+  document.getElementById('client_id').value = '';
+  clientCbRender(inp, _clientMatches(inp.value.toLowerCase()));
+}
+function clientCbBlur(inp) {
+  setTimeout(() => { if (_clientInput === inp) { _clientDD.style.display = 'none'; _clientInput = null; } }, 180);
+}
+function clientCbSelect(e, optEl) {
+  e.preventDefault();
+  const c = _clientDD._matches[parseInt(optEl.dataset.idx, 10)];
+  if (!c || !_clientInput) return;
+  _clientInput.value = c.name;
+  document.getElementById('client_id').value = c.id;
+  document.getElementById('client_error').style.display = 'none';
+  _clientDD.style.display = 'none'; _clientInput = null;
+  loadClientInvoices(c.id); // auto-selects first company inside
+}
+function clientCbKey(e, inp) {
+  if (_clientDD.style.display === 'none' || _clientInput !== inp) {
+    clientCbOpen(inp);
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const opts = _clientDD.querySelectorAll('.cb-option');
+      if (opts.length) {
+        _clientDD._cursor = e.key === 'ArrowDown' ? 0 : opts.length - 1;
+        opts[_clientDD._cursor].classList.add('cb-active');
+        opts[_clientDD._cursor].scrollIntoView({ block: 'nearest' });
+      }
+    }
+    return;
+  }
+  const opts = _clientDD.querySelectorAll('.cb-option');
+  if (!opts.length) return;
+  if (e.key === 'Escape') { _clientDD.style.display = 'none'; _clientInput = null; return; }
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    _clientDD._cursor = Math.min(_clientDD._cursor + 1, opts.length - 1);
+    opts.forEach((o, i) => o.classList.toggle('cb-active', i === _clientDD._cursor));
+    opts[_clientDD._cursor]?.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    _clientDD._cursor = Math.max(_clientDD._cursor - 1, 0);
+    opts.forEach((o, i) => o.classList.toggle('cb-active', i === _clientDD._cursor));
+    opts[_clientDD._cursor]?.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (_clientDD._cursor >= 0 && opts[_clientDD._cursor]) clientCbSelect(e, opts[_clientDD._cursor]);
+  }
+}
+
+// ── Company combobox (searches all companies → auto-fills client) ──────────────
+const _companyDD    = _makeDD(9610);
+let   _companyInput = null;
+
+function _companyMatches(q) {
+  if (!q) return ALL_COMPANIES;
+  return ALL_COMPANIES.filter(co =>
+    co.name.toLowerCase().includes(q) || co.client_name.toLowerCase().includes(q)
+  );
+}
+function companyCbRender(inp, matches) {
+  _companyInput = inp; _companyDD._matches = matches; _companyDD._cursor = -1;
+  _companyDD.innerHTML = matches.length
+    ? matches.map((co, i) => `<div class="cb-option" data-idx="${i}" onmousedown="companyCbSelect(event,this)">
+        <div style="font-weight:600;font-size:13px">${escHtml(co.name)}</div>
+        <div style="font-size:11px;color:var(--text-muted)">${escHtml(co.client_name)}</div>
+      </div>`).join('')
+    : '<div style="padding:10px 14px;color:var(--text-muted);font-size:13px;font-style:italic">No companies found</div>';
+  _ddPos(_companyDD, inp);
+  _companyDD.style.display = '';
+}
+function companyCbOpen(inp)   { companyCbRender(inp, _companyMatches(inp.value.toLowerCase())); }
+function companyCbFilter(inp) { companyCbRender(inp, _companyMatches(inp.value.toLowerCase())); }
+function companyCbBlur(inp) {
+  setTimeout(() => { if (_companyInput === inp) { _companyDD.style.display = 'none'; _companyInput = null; } }, 180);
+}
+function companyCbSelect(e, optEl) {
+  e.preventDefault();
+  const co = _companyDD._matches[parseInt(optEl.dataset.idx, 10)];
+  if (!co || !_companyInput) return;
+  _companyInput.value = co.name;
+  _companyDD.style.display = 'none'; _companyInput = null;
+  // Auto-fill client
+  document.getElementById('client_search').value = co.client_name;
+  document.getElementById('client_id').value = co.client_id;
+  document.getElementById('client_error').style.display = 'none';
+  // Load invoices then select this specific company
+  loadClientInvoices(co.client_id, co.id);
+}
+function companyCbKey(e, inp) {
+  if (_companyDD.style.display === 'none' || _companyInput !== inp) {
+    companyCbOpen(inp);
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const opts = _companyDD.querySelectorAll('.cb-option');
+      if (opts.length) {
+        _companyDD._cursor = e.key === 'ArrowDown' ? 0 : opts.length - 1;
+        opts[_companyDD._cursor].classList.add('cb-active');
+        opts[_companyDD._cursor].scrollIntoView({ block: 'nearest' });
+      }
+    }
+    return;
+  }
+  const opts = _companyDD.querySelectorAll('.cb-option');
+  if (!opts.length) return;
+  if (e.key === 'Escape') { _companyDD.style.display = 'none'; _companyInput = null; return; }
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    _companyDD._cursor = Math.min(_companyDD._cursor + 1, opts.length - 1);
+    opts.forEach((o, i) => o.classList.toggle('cb-active', i === _companyDD._cursor));
+    opts[_companyDD._cursor]?.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    _companyDD._cursor = Math.max(_companyDD._cursor - 1, 0);
+    opts.forEach((o, i) => o.classList.toggle('cb-active', i === _companyDD._cursor));
+    opts[_companyDD._cursor]?.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (_companyDD._cursor >= 0 && opts[_companyDD._cursor]) companyCbSelect(e, opts[_companyDD._cursor]);
+  }
+}
+
+window.addEventListener('scroll', () => {
+  if (_clientInput)  _ddPos(_clientDD,  _clientInput);
+  if (_companyInput) _ddPos(_companyDD, _companyInput);
+}, true);
+window.addEventListener('resize', () => {
+  if (_clientInput)  _ddPos(_clientDD,  _clientInput);
+  if (_companyInput) _ddPos(_companyDD, _companyInput);
 });
 
-async function loadClientInvoices(clientId) {
+// ── Invoice + company loaders ──────────────────────────────────────────────────
+async function loadClientInvoices(clientId, preselectCompanyId) {
   const sel = document.getElementById('invoice_id');
   sel.innerHTML = '<option value="">Auto-allocate (oldest unpaid first)</option>';
   if (!clientId) return;
@@ -121,13 +330,51 @@ async function loadClientInvoices(clientId) {
   });
   window._clientInvoices = invs;
   updatePreview();
+  // preselectCompanyId: undefined = auto-select first, id = select specific
+  loadClientCompanies(clientId, preselectCompanyId);
 }
 
+async function loadClientCompanies(clientId, preselectId) {
+  // preselectId: undefined = auto-select first, null = no preselect, id = select specific
+  const wrap = document.getElementById('companyWrap');
+  const sel  = document.getElementById('company_id');
+  sel.innerHTML = '<option value="">— No specific company —</option>';
+  if (!clientId) { wrap.style.display = 'none'; return; }
+  try {
+    const res       = await fetch(`/payments/api/client-companies/${clientId}`);
+    const companies = await res.json();
+    companies.forEach(co => {
+      const opt = document.createElement('option');
+      opt.value = co.id; opt.textContent = co.name;
+      sel.appendChild(opt);
+    });
+    wrap.style.display = companies.length ? '' : 'none';
+
+    if (preselectId !== null && preselectId !== undefined && preselectId !== '') {
+      sel.value = String(preselectId);
+    } else if (preselectId === undefined && companies.length > 0) {
+      sel.value = String(companies[0].id);
+    }
+  } catch(e) { wrap.style.display = 'none'; }
+}
+
+// ── Opening-balance toggle ─────────────────────────────────────────────────────
+function onOpeningBalanceToggle() {
+  const ob  = document.getElementById('is_opening_balance').checked;
+  const sel = document.getElementById('invoice_id');
+  sel.disabled = ob;
+  if (ob) sel.value = '';
+  updatePreview();
+}
+
+// ── Allocation preview ─────────────────────────────────────────────────────────
 function updatePreview() {
-  const amount = parseFloat(document.getElementById('amount').value) || 0;
+  const amount    = parseFloat(document.getElementById('amount').value) || 0;
   const invoiceId = document.getElementById('invoice_id').value;
-  const preview = document.getElementById('allocationPreview');
-  const list    = document.getElementById('allocationList');
+  const preview   = document.getElementById('allocationPreview');
+  const list      = document.getElementById('allocationList');
+  const obEl      = document.getElementById('is_opening_balance');
+  if (obEl && obEl.checked) { preview.style.display = 'none'; return; }
   if (!amount || invoiceId) { preview.style.display = 'none'; return; }
   const invs = window._clientInvoices || [];
   if (!invs.length) { preview.style.display = 'none'; return; }
@@ -151,5 +398,31 @@ function updatePreview() {
 
 document.getElementById('invoice_id').addEventListener('change', updatePreview);
 document.getElementById('amount').addEventListener('input', updatePreview);
+
+document.addEventListener('DOMContentLoaded', () => {
+  const dateInput = document.getElementById('payment_date');
+  if (!dateInput.value) dateInput.value = new Date().toISOString().slice(0,10);
+
+  if (prefillClientId) {
+    const found = CLIENT_LIST.find(c => String(c.id) === String(prefillClientId));
+    if (found) {
+      document.getElementById('client_search').value = found.name;
+      document.getElementById('client_id').value = found.id;
+      loadClientInvoices(found.id);
+    }
+  }
+});
 </script>
+
+<style>
+.cb-option {
+  padding: 8px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border, #e2e8f0);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.cb-option:last-child { border-bottom: none; }
+.cb-option:hover, .cb-option.cb-active { background: var(--bg-alt, #f8fafc); }
+</style>
 {% endblock %}

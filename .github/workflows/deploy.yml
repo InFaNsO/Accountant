@@ -1,0 +1,22 @@
+name: Deploy to DigitalOcean
+
+on:
+  push:
+    branches:
+      - main   # Auto-deploy every time you push to main
+
+jobs:
+  deploy:
+    name: SSH deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host:        ${{ secrets.DO_HOST }}
+          username:    ${{ secrets.DO_USER }}
+          key:         ${{ secrets.DO_SSH_KEY }}
+          command_timeout: 10m
+          script: |
+            bash /home/ledger/app/deploy/update.sh

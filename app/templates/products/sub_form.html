@@ -9,7 +9,7 @@
 <div class="card" style="max-width:680px">
   <div class="card-header">
     <span class="card-title">{{ 'Edit Sub-Product' if action == 'edit' else 'New Sub-Product' }}</span>
-    <span style="font-size:12px;color:var(--text-muted)">Parent: <strong>{{ product.name }}</strong></span>
+    <span style="font-size:12px;color:var(--text-muted)">Parent: <strong>{{ product.name }}</strong> &nbsp;·&nbsp; Tax: <strong>{{ product.tax_rate }}%</strong></span>
   </div>
   <div class="card-body">
     <form method="post" action="{{ url_for('products.edit_sub_product', product_id=product.id, sub_id=sub_id) if action == 'edit' else url_for('products.new_sub_product', product_id=product.id) }}">
@@ -23,25 +23,41 @@
 
         <div class="form-group">
           <label for="sku">SKU / Code</label>
-          <input type="text" id="sku" name="sku" value="{{ sub.get('sku','') }}" placeholder="CEM-53-50KG-A">
+          {% if product.sku and action != 'edit' %}
+          <div style="display:flex;align-items:center;gap:0">
+            <span style="padding:0 10px;height:36px;line-height:36px;background:var(--bg-alt);border:1px solid var(--border);border-right:none;border-radius:var(--radius-sm) 0 0 var(--radius-sm);font-size:13px;color:var(--text-muted);white-space:nowrap">{{ product.sku }}-</span>
+            <input type="text" id="sku" name="sku_suffix" value="{{ sub.get('sku_suffix','') }}"
+                   placeholder="50KG" style="border-radius:0 var(--radius-sm) var(--radius-sm) 0;flex:1">
+          </div>
+          <small class="muted">Full SKU will be <strong>{{ product.sku }}-{suffix}</strong></small>
+          <input type="hidden" name="sku_has_prefix" value="1">
+          {% else %}
+          <input type="text" id="sku" name="sku" value="{{ sub.get('sku','') }}" placeholder="{{ product.sku ~ '-50KG' if product.sku else 'CEM-53-50KG' }}">
+          {% endif %}
         </div>
 
         <div class="form-group">
-          <label for="tax_rate">Tax Rate (%)</label>
-          <input type="number" id="tax_rate" name="tax_rate"
-                 value="{{ sub.get('tax_rate', 0) }}" step="0.01" min="0" max="100" placeholder="18">
+          <label>Tax Rate</label>
+          <input type="text" value="{{ product.tax_rate }}%" disabled style="background:var(--bg-alt);color:var(--text-muted);cursor:not-allowed">
+          <small class="muted">Inherited from parent product</small>
+        </div>
+
+        <div class="form-group">
+          <label>Pieces per Box</label>
+          <input type="text" value="{{ product.pcs_per_carton | indian if product.pcs_per_carton else '—' }}" disabled style="background:var(--bg-alt);color:var(--text-muted);cursor:not-allowed">
+          <small class="muted">Inherited from parent product</small>
         </div>
 
         <div class="form-group span-2" style="flex-direction:row;align-items:center;gap:10px">
           <input type="checkbox" id="use_parent_price" name="use_parent_price" value="1" style="width:auto"
                  onchange="togglePrice(this.checked)"
-                 {{ 'checked' if sub.get('use_parent_price') }}>
+                 {{ 'checked' if sub.get('use_parent_price', action != 'edit') }}>
           <label for="use_parent_price" style="margin:0;cursor:pointer">
             Use parent price ({{ product.unit_price|inr }})
           </label>
         </div>
 
-        <div class="form-group" id="priceGroup" style="{{ 'display:none' if sub.get('use_parent_price') else '' }}">
+        <div class="form-group" id="priceGroup" style="{{ 'display:none' if sub.get('use_parent_price', action != 'edit') else '' }}">
           <label for="unit_price">Unit Price (₹)</label>
           <input type="number" id="unit_price" name="unit_price"
                  value="{{ sub.get('unit_price', '') }}" step="0.01" min="0" placeholder="0.00">
