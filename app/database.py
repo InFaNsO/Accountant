@@ -619,6 +619,7 @@ def _create_schema(db):
     _add_column(db, "users",                   "chat_level",           "TEXT DEFAULT 'helper'")
 
     _create_chat_schema(db)
+    _create_settings_schema(db)
 
     db.commit()
 
@@ -715,5 +716,24 @@ def _create_chat_schema(db):
         );
         CREATE INDEX IF NOT EXISTS idx_chat_tool_calls_time
             ON chat_tool_calls(created_at);
+    """)
+    db.commit()
+
+
+def _create_settings_schema(db):
+    """Owner-editable configuration (API keys and endpoints).
+
+    Secret values are stored as Fernet ciphertext keyed off SECRET_KEY, which
+    lives in the service environment — so a copy of this file, on a laptop or
+    in a backup, does not hand over the keys.
+    """
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS app_settings (
+            key        TEXT PRIMARY KEY,
+            value      TEXT,
+            is_secret  INTEGER DEFAULT 0,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_by INTEGER
+        );
     """)
     db.commit()

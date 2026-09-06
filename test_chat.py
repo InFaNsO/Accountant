@@ -379,6 +379,70 @@ def main():
     check("one user cannot see another's inbox",
           all(i["title"] != "From the helper" for i in r.get_json()["items"]))
 
+    # ── Settings store ───────────────────────────────────────────────────
+    print("\nSettings")
+    with app.app_context():
+        from app.services import settings_service as st
+
+        st.save("GLM_API_KEY", "sk-secret-value-1234", god_id)
+        check("a saved key reads back", st.get("GLM_API_KEY") == "sk-secret-value-1234")
+        check("its source is the settings page", st.source("GLM_API_KEY") == "settings")
+        check("only the last four are shown", st.masked("GLM_API_KEY") == "•" * 8 + "1234",
+              st.masked("GLM_API_KEY"))
+
+        raw = get_db().execute(
+            "SELECT value, is_secret FROM app_settings WHERE key='GLM_API_KEY'").fetchone()
+        check("the database holds ciphertext, not the key",
+              "sk-secret-value-1234" not in raw["value"] and raw["is_secret"] == 1,
+              raw["value"][:40])
+
+        # A copied database opened with a different SECRET_KEY must not reveal it.
+        real_secret = app.secret_key
+        app.secret_key = "a-different-server-secret"
+        st._invalidate()
+        check("a copy without the server secret cannot decrypt it",
+              st.get("GLM_API_KEY") == "" and st.source("GLM_API_KEY") == "unreadable",
+              repr(st.get("GLM_API_KEY")))
+        app.secret_key = real_secret
+        st._invalidate()
+        check("it decrypts again with the right secret",
+              st.get("GLM_API_KEY") == "sk-secret-value-1234")
+
+        # Settings beat the environment; clearing falls back to it.
+        os.environ["GLM_API_KEY"] = "env-key"
+        st._invalidate()
+        check("settings win over the environment",
+              st.get("GLM_API_KEY") == "sk-secret-value-1234")
+        st.save("GLM_API_KEY", "", god_id)
+        check("clearing falls back to the environment", st.get("GLM_API_KEY") == "env-key")
+        check("source reports the environment", st.source("GLM_API_KEY") == "environment")
+        os.environ["GLM_API_KEY"] = "changeme"
+        st._invalidate()
+        check("a setup.sh placeholder counts as unset", st.source("GLM_API_KEY") == "unset")
+        os.environ.pop("GLM_API_KEY", None)
+        st._invalidate()
+
+        st.save("GLM_MODEL", "glm-5.3-flash", god_id)
+        stored = get_db().execute(
+            "SELECT value FROM app_settings WHERE key='GLM_MODEL'").fetchone()["value"]
+        check("a non-secret setting is stored in the clear", stored == "glm-5.3-flash", stored)
+        st.save("GLM_MODEL", "", god_id)
+
+    r = client.get("/settings/")
+    check("the owner can open settings", r.status_code == 200, f"got {r.status_code}")
+    check("the page never renders a stored key",
+          "sk-secret-value-1234" not in r.get_data(as_text=True))
+    r = other.get("/settings/")
+    check("a non-owner cannot open settings", r.status_code in (302, 403),
+          f"got {r.status_code}")
+    r = other.post("/settings/", data={"GLM_API_KEY": "hijack"})
+    check("a non-owner cannot write settings", r.status_code in (302, 403),
+          f"got {r.status_code}")
+    with app.app_context():
+        from app.services import settings_service as st
+        st._invalidate()
+        check("nothing was written by the non-owner", st.get("GLM_API_KEY") == "")
+
     print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
     if FAIL:
         for f in FAIL:
@@ -388,3 +452,4 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+

@@ -27,6 +27,17 @@ class LLMError(RuntimeError):
     """Raised for anything the caller should show the user verbatim."""
 
 
+def _configured(key):
+    """Settings first, environment second. Falls back to the environment alone
+    outside an app context (the MCP process, a script) and before the settings
+    table exists on a fresh database."""
+    try:
+        from ..services import settings_service
+        return settings_service.get(key, default="")
+    except Exception:                                        # noqa: BLE001
+        return os.environ.get(key, "")
+
+
 def _extra(obj, field):
     """Read a field the SDK doesn't model (GLM adds `reasoning_content`)."""
     value = getattr(obj, field, None)
@@ -41,13 +52,12 @@ class GLMProvider:
     name = "glm"
 
     def __init__(self, api_key=None, base_url=None, model=None):
-        self.api_key = api_key or os.environ.get("GLM_API_KEY", "")
-        self.base_url = base_url or os.environ.get("GLM_BASE_URL", DEFAULT_BASE_URL)
-        self.model = model or os.environ.get("GLM_MODEL", DEFAULT_MODEL)
+        self.api_key = api_key or _configured("GLM_API_KEY")
+        self.base_url = base_url or _configured("GLM_BASE_URL") or DEFAULT_BASE_URL
+        self.model = model or _configured("GLM_MODEL") or DEFAULT_MODEL
         if not self.api_key:
             raise LLMError(
-                "GLM_API_KEY is not set on the server, so the assistant is "
-                "unavailable. Add it to the service environment and restart."
+                "No assistant API key is configured. Add one under Settings."
             )
         try:
             import openai
@@ -220,6 +230,10 @@ class FakeProvider:
         yield {"type": "done", "finish_reason": "stop"}
 
 
+def _key_configured():
+    return bool(_configured("GLM_API_KEY"))
+
+
 def _use_fake():
     """Whether this process should run the scripted provider.
 
@@ -231,7 +245,7 @@ def _use_fake():
     flag = os.environ.get("LEDGER_CHAT_FAKE_LLM", "")
     if flag == "force":
         return True
-    return flag == "1" and not os.environ.get("GLM_API_KEY")
+    return flag == "1" and not _key_configured()
 
 
 def get_provider():
@@ -241,4 +255,4 @@ def get_provider():
 
 def provider_available():
     """True when a turn could actually run — used to hide the UI when not."""
-    return bool(_use_fake() or os.environ.get("GLM_API_KEY"))
+    return bool(_use_fake() or _key_configured())
