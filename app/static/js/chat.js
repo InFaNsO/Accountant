@@ -713,19 +713,36 @@
   /* ── Unread badge ────────────────────────────────────────────────────── */
   const Bell = {
     count: 0,
+    onIncrease: null,
     set: function (n) {
+      const grew = (n || 0) > this.count;
       this.count = n || 0;
       document.querySelectorAll(".chat-fab-badge").forEach(function (el) {
         el.style.display = n > 0 ? "" : "none";
         el.textContent = n > 9 ? "9+" : String(n);
       });
+      if (grew && this.onIncrease) this.onIncrease(this.count);
     },
     refresh: function () {
       const self = this;
-      fetch("/chat/api/inbox/unread")
+      return fetch("/chat/api/inbox/unread")
         .then(function (r) { return r.json(); })
         .then(function (d) { self.set(d.unread || 0); })
         .catch(function () {});
+    },
+    // A reminder is only useful if it arrives while you are looking at the
+    // screen, and a page can sit open for hours. Poll for deliveries, but only
+    // while the tab is actually visible — a background tab learns the moment
+    // it comes back.
+    startPolling: function (seconds) {
+      const self = this;
+      if (this._timer) return;
+      this._timer = setInterval(function () {
+        if (!document.hidden) self.refresh();
+      }, (seconds || 60) * 1000);
+      document.addEventListener("visibilitychange", function () {
+        if (!document.hidden) self.refresh();
+      });
     },
   };
 
@@ -786,6 +803,17 @@
 
     selectTab("ask");
     Bell.refresh();
+    Bell.startPolling(60);
+    Bell.onIncrease = function () {
+      // If they are already looking at the inbox, refresh it in place rather
+      // than leaving a stale list behind a bumped badge.
+      if (inboxPane.parentElement.classList.contains("active")) inbox.load();
+      document.querySelectorAll(".chat-bell").forEach(function (el) {
+        el.classList.remove("chat-bell-ring");
+        void el.offsetWidth;                 // restart the animation
+        el.classList.add("chat-bell-ring");
+      });
+    };
 
     // Show what's waiting once per tab, rather than on every page load.
     fetch("/chat/api/inbox/unread").then(function (r) { return r.json(); })

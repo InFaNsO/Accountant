@@ -304,3 +304,15 @@ body.dark .chat-error { background: #450A0A; color: #FCA5A5; }
   .chat-page { height: calc(100vh - var(--topbar-h) - 24px); }
   .chat-page .chat-thread, .chat-page .chat-composer { padding-left: 14px; padding-right: 14px; }
 }
+
+/* A newly arrived delivery gives the bell a short shake — a badge that simply
+   appears while you are reading something else is easy to miss. */
+@keyframes chat-bell-ring {
+  0%, 100% { transform: rotate(0); }
+  15% { transform: rotate(14deg); }
+  30% { transform: rotate(-12deg); }
+  45% { transform: rotate(9deg); }
+  60% { transform: rotate(-6deg); }
+  75% { transform: rotate(3deg); }
+}
+.chat-bell-ring svg { animation: chat-bell-ring .7s ease-in-out 2; transform-origin: 50% 15%; }
