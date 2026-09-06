@@ -132,8 +132,13 @@ TOOL_POLICY = {
     # Free-form SQL sees every table, so it needs view on every module.
     "describe_schema":              ("*", "view"),
     "query_sql":                    ("*", "view"),
-    # The user's own inbox and schedule — not business data.
+    # The user's own inbox and schedule — not business data, so these stay
+    # available in the read-only surfaces too.
     "save_to_inbox":                ("self", "schedule"),
+    "create_reminder":              ("self", "schedule"),
+    "create_scheduled_report":      ("self", "schedule"),
+    "list_scheduled":               ("self", "view"),
+    "cancel_scheduled":             ("self", "schedule"),
 }
 
 

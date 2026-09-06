@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Scheduled{% endblock %}
+{% block page_title %}Scheduled{% endblock %}
+
+{% block content %}
+{% if not dispatcher_running %}
+<div class="card" style="margin-bottom:18px;border-left:3px solid var(--danger)">
+  <div class="card-body" style="padding:14px 18px;font-size:13px">
+    <b>The scheduler is not running on this server</b>, so nothing below will
+    fire. APScheduler is missing — install it
+    (<code>pip install -r requirements.txt</code>) and restart the service.
+  </div>
+</div>
+{% endif %}
+
+{% for kind, label, empty in [
+      ('reminder', 'Reminders', 'Ask the assistant to remind you about something.'),
+      ('report', 'Scheduled reports', 'Ask the assistant for something “every Monday” and it will appear here.')] %}
+<div class="card" style="margin-bottom:18px">
+  <div class="card-header">
+    <span class="card-title">{{ label }}</span>
+  </div>
+  {% set rows = tasks | selectattr('kind', 'equalto', kind) | list %}
+  {% if not rows %}
+    <div class="card-body" style="color:var(--text-secondary);font-size:13px">{{ empty }}</div>
+  {% else %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th><th>Schedule</th><th>Next</th><th>Last run</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in rows %}
+        <tr>
+          <td>
+            <b>{{ t.name }}</b>
+            {% if t.prompt %}
+            <div style="font-size:12px;color:var(--text-secondary);max-width:420px">
+              {{ t.prompt[:160] }}{% if t.prompt|length > 160 %}…{% endif %}
+            </div>
+            {% endif %}
+          </td>
+          <td style="font-size:12.5px">{{ t.schedule_words }}</td>
+          <td style="font-size:12.5px">{{ t.next_words or '—' }}</td>
+          <td style="font-size:12.5px">
+            {{ t.last_words or 'never' }}
+            {% if t.last_status %}
+              <span class="badge {{ 'badge-paid' if t.last_status == 'ok' else 'badge-partial' }}">{{ t.last_status }}</span>
+            {% endif %}
+          </td>
+          <td style="white-space:nowrap;text-align:right">
+            {% if t.kind == 'report' %}
+            <form method="post" action="{{ url_for('chat.scheduled_run_now', task_id=t.id) }}" style="display:inline">
+              <button class="btn btn-secondary btn-sm">Run now</button>
+            </form>
+            {% endif %}
+            <form method="post" action="{{ url_for('chat.scheduled_cancel', task_id=t.id) }}" style="display:inline"
+                  onsubmit="return confirm('Cancel “{{ t.name }}”?')">
+              <button class="btn btn-danger btn-sm">Cancel</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</div>
+{% endfor %}
+
+{% if history %}
+<div class="card">
+  <div class="card-header"><span class="card-title">Recent report runs</span></div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Report</th><th>When</th><th>Status</th><th>Result</th></tr></thead>
+      <tbody>
+        {% for r in history %}
+        <tr>
+          <td>{{ r.task_name }}</td>
+          <td style="font-size:12.5px">{{ r.when_words }}</td>
+          <td><span class="badge {{ 'badge-paid' if r.status == 'ok' else 'badge-partial' }}">{{ r.status }}</span></td>
+          <td style="font-size:12.5px;color:var(--text-secondary)">
+            {{ (r.error or r.headline or '')[:120] }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<p style="margin-top:14px;font-size:12px;color:var(--text-muted)">
+  Everything here is set from the assistant — ask it to remind you, or to run
+  something regularly. Results arrive in your inbox and notify your phone.
+</p>
+{% endblock %}

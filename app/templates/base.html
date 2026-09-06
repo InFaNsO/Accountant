@@ -151,6 +151,14 @@
       <span>Chat</span>
     </a>
     {% endif %}
+    {% if chat_level != 'none' %}
+    <a href="{{ url_for('chat.scheduled_page') }}" class="nav-item {% if request.endpoint == 'chat.scheduled_page' %}active{% endif %}">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+      </svg>
+      <span>Scheduled</span>
+    </a>
+    {% endif %}
     <a href="{{ url_for('settings.index') }}" class="nav-item {% if request.endpoint and request.endpoint.startswith('settings.') %}active{% endif %}">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <circle cx="12" cy="12" r="3"/>

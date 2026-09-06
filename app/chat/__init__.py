@@ -8,12 +8,14 @@ conversation for the browser to keep. The only persistence is the inbox.
 import json
 import logging
 
-from flask import (Blueprint, Response, abort, jsonify, render_template,
-                   request, stream_with_context)
+from flask import (Blueprint, Response, abort, current_app, flash, jsonify,
+                   redirect, render_template, request,
+                   stream_with_context, url_for)
 from flask_login import current_user, login_required
 
 from . import agent, history as hist, inbox, llm
-from . import sql_tool  # noqa: F401 — registers query_sql / describe_schema
+from . import scheduled  # noqa: F401 — registers the scheduling tools
+from . import sql_tool   # noqa: F401 — registers query_sql / describe_schema
 from . import tools
 from .tools import MODE_CHAT, MODE_HELPER
 
@@ -62,6 +64,93 @@ def index():
         abort(403)
     return render_template("chat/index.html",
                            chat_available=llm.provider_available())
+
+
+@bp.route("/scheduled")
+@login_required
+def scheduled_page():
+    """Reminders and scheduled reports, with their run history."""
+    _require("helper")
+    tasks = []
+    for row in scheduled.listing(current_user.id):
+        last_run = scheduled.runs_for(row["id"], limit=1)
+        tasks.append({
+            "id": row["id"], "kind": row["kind"], "name": row["name"],
+            "prompt": row["prompt"],
+            "schedule_words": scheduled.describe_schedule(row),
+            "next_words": _ist(row["next_run_at"]),
+            "last_words": _ist(row["last_run_at"]),
+            "last_status": last_run[0]["status"] if last_run else None,
+        })
+
+    history = []
+    for run in _recent_runs(current_user.id):
+        history.append({
+            "task_name": run["name"], "status": run["status"],
+            "when_words": run["started_at"], "error": run["error"],
+            "headline": (run["report_md"] or "").strip().splitlines()[0][:120]
+                        if run["report_md"] else "",
+        })
+
+    return render_template(
+        "chat/scheduled.html", tasks=tasks, history=history,
+        dispatcher_running=_dispatcher_running(),
+    )
+
+
+def _ist(stored):
+    """A stored UTC timestamp as a short IST string."""
+    when = scheduled._load(stored)
+    return f"{when.astimezone(scheduled.IST):%a %d %b, %H:%M}" if when else None
+
+
+def _recent_runs(user_id, limit=10):
+    from ..database import get_db
+    return get_db().execute(
+        """SELECT r.*, t.name FROM chat_task_runs r
+             JOIN chat_tasks t ON t.id = r.task_id
+            WHERE t.user_id = ? ORDER BY r.id DESC LIMIT ?""",
+        (user_id, limit)).fetchall()
+
+
+def _dispatcher_running():
+    try:
+        import apscheduler  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+@bp.route("/scheduled/<int:task_id>/cancel", methods=["POST"])
+@login_required
+def scheduled_cancel(task_id):
+    _require("helper")
+    row = scheduled.get(current_user.id, task_id)
+    if row is None:
+        abort(404)
+    scheduled.cancel(current_user.id, task_id)
+    flash(f"Cancelled “{row['name']}”.", "success")
+    return redirect(url_for("chat.scheduled_page"))
+
+
+@bp.route("/scheduled/<int:task_id>/run", methods=["POST"])
+@login_required
+def scheduled_run_now(task_id):
+    """Run a saved report immediately — the same path the dispatcher takes."""
+    _require("helper")
+    row = scheduled.get(current_user.id, task_id)
+    if row is None or row["kind"] != "report":
+        abort(404)
+    run_id = scheduled.run_report(current_app._get_current_object(), row)
+    from ..database import get_db
+    run = get_db().execute("SELECT status, error FROM chat_task_runs WHERE id=?",
+                           (run_id,)).fetchone()
+    if run and run["status"] == "ok":
+        flash(f"“{row['name']}” ran — the result is in your inbox.", "success")
+    else:
+        flash(f"“{row['name']}” failed: {(run['error'] if run else 'unknown error')}",
+              "error")
+    return redirect(url_for("chat.scheduled_page"))
 
 
 @bp.route("/api/turn", methods=["POST"])

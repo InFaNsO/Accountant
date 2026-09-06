@@ -30,7 +30,26 @@ def start_scheduler(app):
             id="transit_due",
             replace_existing=True,
         )
+        # Reminders and scheduled reports. Every worker runs this; claiming a
+        # due task is a compare-and-set, so exactly one of them fires it.
+        from ..chat.scheduled import dispatch_due, purge_old
+        scheduler.add_job(
+            lambda: dispatch_due(app),
+            "interval",
+            minutes=1,
+            id="chat_scheduled_tasks",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+        scheduler.add_job(
+            lambda: purge_old(app),
+            "interval",
+            hours=24,
+            id="chat_scheduled_purge",
+            replace_existing=True,
+        )
         scheduler.start()
-        logger.info("Notification scheduler started")
+        logger.info("Notification and task scheduler started")
     except Exception as e:
         logger.error("Failed to start scheduler: %s", e)

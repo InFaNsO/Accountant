@@ -502,6 +502,84 @@ def main():
         check("trimming bounds the conversation size",
               len(big) <= h2.MAX_MESSAGES, f"{len(big)} messages")
 
+    # ── Scheduling ───────────────────────────────────────────────────────
+    # The bug this was written for: the assistant had no reminder tool, so it
+    # saved a note that read like one and said it was set. Nothing ever fired.
+    print("\nScheduling")
+    with app.app_context():
+        from datetime import datetime, timedelta
+        from app.chat import inbox as ib, scheduled as sch, tools as t3
+        from app.services.auth_service import load_user as _lu3
+        owner = _lu3(god_id)
+
+        offered = {t["function"]["name"] for t in t3.tools_for(owner, "helper")}
+        check("the helper is offered a real reminder tool",
+              "create_reminder" in offered)
+        check("headless report runs cannot schedule more work",
+              "create_reminder" not in
+              {t["function"]["name"] for t in t3.tools_for(owner, "scheduled")})
+
+        soon = (datetime.now(sch.IST) + timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M")
+        okc, out, _ = t3.execute("create_reminder", json.dumps(
+            {"title": "Call Sharma about INV-231", "when": soon}), owner, "helper")
+        check("a reminder can be set", okc, out[:120])
+        check("the reply states the resolved time", "IST" in out, out[:120])
+
+        task = sch.listing(god_id)[0]
+        check("it is stored as a task", task["kind"] == "reminder")
+        check("it has a next run time", bool(task["next_run_at"]))
+
+        before = ib.unread_count(god_id)
+        fired = sch.dispatch_due(app, now=sch._utc_now())
+        check("nothing fires before it is due",
+              fired == 0 and ib.unread_count(god_id) == before, f"fired={fired}")
+
+        later = sch._utc_now() + timedelta(minutes=6)
+        fired = sch.dispatch_due(app, now=later)
+        check("it fires once it is due", fired == 1, f"fired={fired}")
+        check("it lands in the inbox unread", ib.unread_count(god_id) == before + 1)
+        latest = ib.listing(god_id, limit=1)[0]
+        check("the delivery is a reminder, not a saved note",
+              latest["kind"] == "reminder" and "Sharma" in latest["title"],
+              f"{latest['kind']} / {latest['title']}")
+
+        again = sch.dispatch_due(app, now=later)
+        check("a one-off does not fire twice", again == 0, f"fired again={again}")
+
+        okc, out, _ = t3.execute("create_scheduled_report", json.dumps(
+            {"name": "Weekly overdue", "prompt": "List overdue invoices.",
+             "repeat": "0 9 * * MON"}), owner, "chat")
+        check("a recurring report can be scheduled", okc, out[:140])
+        check("its schedule is described in words", "Monday" in out, out[:140])
+
+        rep = [t for t in sch.listing(god_id) if t["kind"] == "report"][0]
+        first_next = rep["next_run_at"]
+        sch.dispatch_due(app, now=sch._load(first_next) + timedelta(seconds=1))
+        rep2 = sch.get(god_id, rep["id"])
+        check("a recurring task re-arms instead of switching itself off",
+              rep2["enabled"] == 1 and rep2["next_run_at"] > first_next,
+              f"enabled={rep2['enabled']} next={rep2['next_run_at']}")
+        runs = sch.runs_for(rep["id"])
+        check("the run is recorded", bool(runs) and runs[0]["status"] in ("ok", "error"),
+              str(dict(runs[0]))[:140] if runs else "no runs")
+
+        okc, out, _ = t3.execute("cancel_scheduled",
+                                 json.dumps({"task_id": rep["id"]}), owner, "chat")
+        check("a schedule can be cancelled",
+              okc and sch.get(god_id, rep["id"])["enabled"] == 0, out[:80])
+
+        past = (datetime.now(sch.IST) - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M")
+        okc, out, _ = t3.execute("create_reminder", json.dumps(
+            {"title": "x", "when": past}), owner, "helper")
+        check("a time in the past is refused", not okc and "past" in out.lower(),
+              out[:100])
+        okc, out, _ = t3.execute("create_scheduled_report", json.dumps(
+            {"name": "x", "prompt": "y", "repeat": "not a cron"}), owner, "chat")
+        check("an invalid schedule is refused", not okc and "crontab" in out.lower(),
+              out[:100])
+
+    r = client.get("/chat/scheduled")
+    check("the scheduled page renders", r.status_code == 200, f"got {r.status_code}")
     print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
     if FAIL:
         for f in FAIL:

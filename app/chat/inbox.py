@@ -148,6 +148,7 @@ def to_json(row, with_files=True):
         },
         "required": ["title", "body_md"],
     },
+    modes=("helper", "chat"),
 )
 def save_to_inbox(user=None, title="", body_md=""):
     if not (title or "").strip():
