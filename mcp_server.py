@@ -1555,6 +1555,49 @@ def get_upcoming_transit(
     })
 
 
+@mcp.tool()
+def checkup_from_invoice(
+    from_invoice: str,
+    inclusive: bool = True,
+    to_invoice: str = None,
+    payments_from: str = None,
+    client_ids: str = None,
+    include: str = "items,products",
+    sort: str = "name",
+) -> dict:
+    """CHECKUP: everything sold from one invoice serial onwards, client by client.
+    Reach for this when the owner says "from INV-0150 onwards, show me every sale"
+    or wants to review a batch of invoices client by client.
+
+    Returns {cutoff, summary, clients[]}. Each client has totals (invoice count,
+    sales, collected, outstanding, overdue), balance {brought_forward, closing}
+    (negative = the client owes us), invoices in serial order (with line items:
+    pieces, box size, quantity_boxes, rate, discount, line total), a ledger whose
+    first entry is type "bbf" (balance brought forward at the cutoff) followed by
+    the sales and receipts inside the window, and product totals for the range.
+
+    Args:
+      from_invoice:  cutoff serial, "INV-0150" or "150". Drafts (D-###) are not valid.
+      inclusive:     True (default) includes the named invoice; False = strictly after it.
+      to_invoice:    optional upper serial; default = latest issued invoice.
+      payments_from: YYYY-MM-DD; default = the cutoff invoice's issue date. Payments
+                     have no serial, so they join the window by date.
+      client_ids:    optional CSV of client ids to narrow the checkup.
+      include:       CSV of expansions, "items,products" (default) or "" for a
+                     lighter payload.
+      sort:          "name" (A-Z) or "invoice" (by each client's first serial in range).
+    """
+    return _call("GET", "checkup", params={
+        "from_invoice":  from_invoice,
+        "inclusive":     1 if inclusive else 0,
+        "to_invoice":    to_invoice,
+        "payments_from": payments_from,
+        "client_ids":    client_ids,
+        "include":       include,
+        "sort":          sort,
+    })
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # ENTRY POINT
 # ═════════════════════════════════════════════════════════════════════════════

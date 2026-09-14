@@ -64,6 +64,7 @@ for path, label in [
     ("/products/",     "Product catalog"),
     ("/invoices/",     "Invoice list"),
     ("/payments/",     "Payment list"),
+    ("/checkup/",      "Checkup"),
     ("/suppliers/",    "Supplier list"),
     ("/purchases/",    "PO list"),
     ("/transit/",      "Transit list"),

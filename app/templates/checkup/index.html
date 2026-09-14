@@ -1,0 +1,424 @@
+{% extends "base.html" %}
+{% block title %}Checkup{% endblock %}
+{% block page_title %}Checkup{% endblock %}
+{% block chat_context %}data-chat-context='{"module": "checkup", "entity": "checkup", "label": "Checkup"}'{% endblock %}
+
+{% block content %}
+<style>
+  /* Everything is written against main.css variables so dark mode comes free. */
+  .ck-intro { color:var(--text-secondary); font-size:13.5px; max-width:70ch; margin:-6px 0 16px; }
+  .ck-cutoff { padding:16px 18px 14px; margin-bottom:18px; }
+  .ck-grid { display:grid; grid-template-columns:minmax(220px,1.4fr) auto minmax(180px,1fr) minmax(170px,1fr); gap:14px 18px; align-items:end; }
+  .ck-field { display:flex; flex-direction:column; gap:5px; min-width:0; }
+  .ck-lbl { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.6px; color:var(--text-muted); }
+  .ck-field input, .ck-field select { height:38px; width:100%; min-width:0; }
+  .ck-mono { font-family:'SF Mono','Fira Code',ui-monospace,Menlo,monospace; font-size:13.5px; letter-spacing:.2px; }
+  .ck-hint { font-size:11.5px; color:var(--text-muted); }
+  .ck-hint button { border:none; background:none; color:var(--accent); padding:0; font:inherit; font-size:11.5px; font-weight:600; cursor:pointer; }
+  .ck-switch { display:inline-flex; align-items:center; gap:9px; height:38px; cursor:pointer; user-select:none; white-space:nowrap; }
+  .ck-switch input { position:absolute; opacity:0; width:0; height:0; }
+  .ck-switch .track { width:36px; height:20px; border-radius:999px; background:var(--text-muted); position:relative; transition:background .15s; flex-shrink:0; }
+  .ck-switch .track::after { content:""; position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:50%; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.25); transition:transform .15s; }
+  .ck-switch input:checked + .track { background:var(--accent); }
+  .ck-switch input:checked + .track::after { transform:translateX(16px); }
+  .ck-switch input:focus-visible + .track { outline:2px solid var(--accent); outline-offset:2px; }
+  .ck-switch .t { font-size:13px; font-weight:600; }
+  .ck-resolved { margin-top:14px; padding-top:12px; border-top:1px dashed var(--border); display:flex; gap:8px 22px; flex-wrap:wrap; font-size:13px; color:var(--text-secondary); }
+  .ck-resolved b { color:var(--text-primary); font-weight:600; }
+  .ck-resolved .k { color:var(--text-muted); font-size:11px; text-transform:uppercase; letter-spacing:.5px; font-weight:700; margin-right:6px; }
+  .ck-resolved code { font-family:'SF Mono','Fira Code',ui-monospace,monospace; font-size:12.5px; background:var(--bg-alt); border:1px solid var(--border); padding:1px 6px; border-radius:4px; }
+
+  .ck-stats { margin-bottom:18px; }
+  .ck-stats .stat-value { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-variant-numeric:tabular-nums; }
+
+  .ck-toolbar { position:sticky; top:0; z-index:5; background:var(--bg); padding:8px 0 10px; margin-bottom:6px; border-bottom:1px solid var(--border); }
+  .ck-row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .ck-row input[type=search] { flex:1 1 220px; max-width:340px; height:36px; }
+  .ck-chips { display:flex; gap:6px; flex-wrap:wrap; }
+  .ck-chip { border:1px solid var(--border); background:var(--surface); border-radius:999px; padding:5px 12px; font-size:12.5px; font-weight:600; color:var(--text-secondary); display:inline-flex; gap:6px; align-items:center; cursor:pointer; font-family:inherit; }
+  .ck-chip[aria-pressed="true"] { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .ck-chip .n { font-variant-numeric:tabular-nums; opacity:.75; }
+  .ck-order { display:inline-flex; align-items:center; gap:8px; }
+  .ck-seg { display:inline-flex; background:var(--border); padding:3px; border-radius:999px; gap:2px; }
+  .ck-seg button { border:none; background:transparent; padding:4px 11px; border-radius:999px; font-weight:600; font-size:12.5px; color:var(--text-secondary); cursor:pointer; white-space:nowrap; font-family:inherit; }
+  .ck-seg button[aria-selected="true"] { background:var(--surface); color:var(--text-primary); box-shadow:var(--shadow-sm); }
+  .ck-expand { margin-left:auto; }
+  .ck-rail { display:flex; gap:2px; flex-wrap:wrap; margin-top:9px; align-items:center; }
+  .ck-rail button, .ck-rail span { width:26px; height:26px; display:grid; place-items:center; font-size:12px; font-weight:700; border-radius:6px; border:none; background:transparent; color:var(--text-muted); font-family:inherit; }
+  .ck-rail button { color:var(--accent); background:var(--accent-light); cursor:pointer; }
+  .ck-rail button:hover { background:var(--accent); color:#fff; }
+  .ck-rail .note { width:auto; height:auto; display:inline; font-size:12px; font-weight:500; padding:0; }
+
+  .ck-clients { display:flex; flex-direction:column; gap:10px; margin-top:12px; }
+  .ck-client { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; scroll-margin-top:120px; box-shadow:var(--shadow-sm); }
+  .ck-head { display:flex; align-items:center; gap:12px; padding:10px 16px 10px 12px; flex-wrap:wrap; }
+  .ck-head:hover { background:var(--bg-alt); }
+  .ck-toggle { flex:1 1 240px; min-width:0; display:flex; align-items:center; gap:10px; border:none; background:transparent; text-align:left; padding:4px; border-radius:var(--radius-sm); cursor:pointer; font-family:inherit; color:inherit; }
+  .ck-chev { width:18px; height:18px; flex-shrink:0; color:var(--text-muted); transition:transform .15s; }
+  .ck-toggle[aria-expanded="true"] .ck-chev { transform:rotate(90deg); color:var(--accent); }
+  .ck-name { min-width:0; display:flex; flex-direction:column; }
+  .ck-name b { font-size:15px; letter-spacing:-.15px; line-height:1.25; }
+  .ck-name small { color:var(--text-muted); font-size:12px; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ck-meta { display:flex; gap:18px; flex-wrap:wrap; align-items:stretch; }
+  .ck-meta .m { display:flex; flex-direction:column; min-width:74px; }
+  .ck-meta .m i { font-style:normal; font-size:10.5px; font-weight:700; letter-spacing:.5px; text-transform:uppercase; color:var(--text-muted); }
+  .ck-meta .m span { font-weight:700; font-variant-numeric:tabular-nums; font-size:13.5px; white-space:nowrap; }
+  .ck-bal { border:1px solid transparent; background:transparent; text-align:left; padding:3px 8px; margin:-3px -8px; border-radius:var(--radius-sm); cursor:pointer; font-family:inherit; color:inherit; }
+  .ck-bal i { display:flex; align-items:center; gap:4px; }
+  .ck-bal i svg { width:11px; height:11px; }
+  .ck-bal span { text-decoration:underline dotted var(--text-muted); text-underline-offset:3px; }
+  .ck-bal:hover { background:var(--accent-light); }
+  .ck-bal:hover span { text-decoration-color:var(--accent); }
+  .ck-tags { display:flex; gap:6px; flex-wrap:wrap; min-width:90px; justify-content:flex-end; }
+  .ck-tag { display:inline-flex; align-items:center; gap:5px; border-radius:999px; padding:2px 9px; font-size:11.5px; font-weight:700; white-space:nowrap; }
+  .ck-tag::before { content:""; width:6px; height:6px; border-radius:50%; background:currentColor; }
+  .ck-tag-danger { background:var(--danger-light); color:#991B1B; }
+  .ck-tag-warning { background:var(--warning-light); color:#92400E; }
+  .ck-tag-success { background:var(--success-light); color:#065F46; }
+  .ck-tag-info { background:var(--info-light); color:#1D4ED8; }
+  body.dark .ck-tag-danger { color:#FCA5A5; } body.dark .ck-tag-warning { color:#FCD34D; }
+  body.dark .ck-tag-success { color:#6EE7B7; } body.dark .ck-tag-info { color:#93C5FD; }
+  .ck-body { border-top:1px solid var(--border); }
+  .ck-tabs { display:flex; gap:2px; padding:8px 12px 0; border-bottom:1px solid var(--border); background:var(--bg-alt); overflow-x:auto; }
+  .ck-tabs button { border:none; background:transparent; padding:8px 12px 9px; font-weight:600; font-size:13px; color:var(--text-secondary); border-bottom:2px solid transparent; margin-bottom:-1px; display:inline-flex; gap:6px; align-items:center; cursor:pointer; white-space:nowrap; font-family:inherit; }
+  .ck-tabs button .n { font-size:11px; font-weight:700; background:var(--border); color:var(--text-secondary); border-radius:999px; padding:0 6px; }
+  .ck-tabs button[aria-selected="true"] { color:var(--accent); border-bottom-color:var(--accent); }
+  .ck-pane { overflow-x:auto; }
+
+  .ck-tbl { width:100%; border-collapse:collapse; font-size:13px; }
+  .ck-tbl th { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.5px; color:var(--text-muted); text-align:left; padding:9px 12px; border-bottom:1px solid var(--border); white-space:nowrap; background:var(--surface); }
+  .ck-tbl td { padding:9px 12px; border-bottom:1px solid var(--border); vertical-align:middle; white-space:nowrap; }
+  .ck-tbl tbody tr:last-child td { border-bottom:none; }
+  .ck-tbl th.num, .ck-tbl td.num { text-align:right; font-variant-numeric:tabular-nums; }
+  .ck-tbl td.muted { color:var(--text-secondary); }
+  .ck-tbl .w { font-weight:700; }
+  .ck-inv { cursor:pointer; }
+  .ck-inv:hover td { background:var(--bg-alt); }
+  .ck-inv td:first-child { border-left:4px solid var(--stripe,transparent); padding-left:10px; width:34px; }
+  .ck-disc { width:16px; height:16px; color:var(--text-muted); vertical-align:-3px; transition:transform .15s; }
+  .ck-inv[aria-expanded="true"] .ck-disc { transform:rotate(90deg); color:var(--accent); }
+  .ck-invno { font-family:'SF Mono','Fira Code',ui-monospace,monospace; font-weight:700; color:var(--accent); font-size:12.5px; text-decoration:none; }
+  .ck-invno:hover { text-decoration:underline; }
+  .ck-co { border:none; background:transparent; padding:0; color:var(--text-secondary); font:inherit; text-decoration:underline dotted var(--text-muted); text-underline-offset:3px; cursor:pointer; border-radius:3px; }
+  .ck-co:hover { color:var(--accent); text-decoration-color:var(--accent); }
+  .ck-items-cell { padding:0 !important; background:var(--bg-alt); }
+  .ck-items { margin:0 0 0 46px; border-left:2px solid var(--accent-light); }
+  .ck-items .ck-tbl th { background:transparent; }
+  .ck-items .ck-tbl tfoot td { font-weight:600; color:var(--text-secondary); border-top:1px solid var(--border); border-bottom:none; padding:7px 12px; }
+  .ck-items .ck-tbl tfoot tr.total td { color:var(--text-primary); font-weight:800; }
+  .ck-sku { font-family:'SF Mono','Fira Code',ui-monospace,monospace; font-size:12px; color:var(--text-secondary); }
+  .ck-dr { color:var(--danger); font-weight:700; }
+  .ck-cr { color:var(--success); font-weight:700; }
+  .ck-nil { color:var(--text-muted); }
+  .ck-bbf td { background:var(--accent-light); font-weight:600; }
+  .ck-bbf td small { display:block; font-weight:500; font-size:11.5px; color:var(--text-secondary); }
+  .ck-ledger td.part { white-space:normal; min-width:260px; }
+  .ck-ledger td.part small { display:block; color:var(--text-muted); font-size:11.5px; }
+  .ck-tbl tfoot.close td { font-weight:800; border-top:2px solid var(--border); background:var(--surface); }
+  .ck-kind { display:inline-block; width:56px; font-size:10.5px; font-weight:700; letter-spacing:.5px; text-transform:uppercase; color:var(--text-muted); }
+  .ck-empty { padding:40px 20px; text-align:center; color:var(--text-secondary); background:var(--surface); border:1px dashed var(--border); border-radius:var(--radius); }
+  .ck-error { padding:14px 16px; border-radius:var(--radius-sm); background:var(--danger-light); color:#991B1B; font-weight:600; }
+  body.dark .ck-error { color:#FCA5A5; }
+
+  @media (max-width:900px) { .ck-grid { grid-template-columns:1fr 1fr; } }
+  @media (max-width:640px) {
+    .ck-grid { grid-template-columns:1fr; }
+    .ck-tags { justify-content:flex-start; width:100%; }
+    .ck-meta { width:100%; justify-content:space-between; gap:10px; }
+    .ck-meta .m { min-width:0; }
+    .ck-hide-m { display:none !important; }
+    .ck-items { margin-left:12px; }
+    .ck-expand { margin-left:0; }
+  }
+  @media (prefers-reduced-motion: reduce) { .ck-chev, .ck-disc, .ck-switch .track, .ck-switch .track::after { transition:none; } }
+</style>
+
+<p class="ck-intro">Name an invoice. Everything sold from that serial onwards is laid out client by client, with each client's invoices and a ledger that starts from the balance they carried into the checkup. Any balance opens the full ledger, for the client or for the company that was invoiced.</p>
+
+<div class="card ck-cutoff">
+  <div class="ck-grid">
+    <div class="ck-field">
+      <label class="ck-lbl" for="ckFrom">From invoice</label>
+      <input id="ckFrom" class="ck-mono" list="ckInvoiceList" autocomplete="off" spellcheck="false" placeholder="INV-0150">
+      <datalist id="ckInvoiceList"></datalist>
+      <span class="ck-hint">Serial number decides the cutoff, not the date.</span>
+    </div>
+    <div class="ck-field">
+      <span class="ck-lbl">Include it</span>
+      <label class="ck-switch"><input type="checkbox" id="ckInclusive" checked><span class="track"></span><span class="t" id="ckInclusiveText">onwards</span></label>
+    </div>
+    <div class="ck-field">
+      <label class="ck-lbl" for="ckTo">Up to invoice</label>
+      <select id="ckTo"><option value="">Latest</option></select>
+      <span class="ck-hint">Optional. Default is the latest issued invoice.</span>
+    </div>
+    <div class="ck-field">
+      <label class="ck-lbl" for="ckPayFrom">Payments from</label>
+      <input type="date" id="ckPayFrom">
+      <span class="ck-hint" id="ckPayHint">Auto: the cutoff invoice's date. <button type="button" data-act="payreset" hidden>Reset</button></span>
+    </div>
+  </div>
+  <div class="ck-resolved" id="ckResolved"></div>
+</div>
+
+<div class="stats-grid ck-stats" id="ckStats"></div>
+
+<div class="ck-toolbar">
+  <div class="ck-row">
+    <input id="ckSearch" type="search" placeholder="Client, company or invoice number" aria-label="Search clients">
+    <div class="ck-chips" id="ckChips"></div>
+    <div class="ck-order">
+      <span class="ck-lbl">Order</span>
+      <div class="ck-seg" role="group" aria-label="Order clients" id="ckSort">
+        <button type="button" data-act="sort" data-sort="name" aria-selected="true">Name A&ndash;Z</button>
+        <button type="button" data-act="sort" data-sort="invoice" aria-selected="false">Invoice number</button>
+      </div>
+    </div>
+    <button type="button" class="btn btn-secondary btn-sm ck-expand" data-act="expandall" id="ckExpandAll">Expand all</button>
+  </div>
+  <nav class="ck-rail" id="ckRail" aria-label="Jump to letter"></nav>
+</div>
+
+<div class="ck-clients" id="ckClients"><div class="ck-empty">Loading&hellip;</div></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function(){
+'use strict';
+const TODAY = {{ today|tojson }};
+const CK_INDEX = {{ invoice_index|tojson }};
+const CK_INIT  = {{ init|tojson }};
+const DOT = '·', RS = '₹', ARROW = '→', DASH = '—';
+const $ = id => document.getElementById(id);
+const pad4 = n => 'INV-' + String(n).padStart(4, '0');
+
+/* ---- formatting ---- */
+const fmtINR = new Intl.NumberFormat('en-IN', {style:'currency', currency:'INR', minimumFractionDigits:2, maximumFractionDigits:2});
+const inr = n => fmtINR.format(+n || 0);
+function inrShort(n){ n = +n || 0; const a = Math.abs(n), s = n < 0 ? '-' : '';
+  if (a >= 1e7) return s + RS + (a/1e7).toFixed(2) + ' Cr';
+  if (a >= 1e5) return s + RS + (a/1e5).toFixed(2) + ' L';
+  return s + fmtINR.format(a).replace(/\.00$/, ''); }
+const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function fmtDate(iso){ if (!iso) return DASH; const [y,m,d] = String(iso).slice(0,10).split('-'); return `${+d} ${MON[+m-1]} ${y}`; }
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function bal(n, short){ n = +n || 0; const cls = n < -0.005 ? 'ck-dr' : n > 0.005 ? 'ck-cr' : 'ck-nil';
+  const txt = Math.abs(n) < 0.005 ? inr(0) : (short ? inrShort(Math.abs(n)) : inr(Math.abs(n))) + (n < -0.005 ? ' Dr' : ' Cr');
+  return `<span class="${cls}">${txt}</span>`; }
+const qtyFmt = n => new Intl.NumberFormat('en-IN', {maximumFractionDigits:3}).format(+n || 0);
+const parseSeq = s => { const m = String(s || '').match(/(\d+)/); return m ? parseInt(m[1], 10) : null; };
+
+/* ---- state (mirrored into the URL so a checkup can be bookmarked) ---- */
+const qs = new URLSearchParams(location.search);
+const state = {
+  from: qs.get('from') || (CK_INIT.default_from ? pad4(CK_INIT.default_from) : ''),
+  inclusive: qs.get('inclusive') !== '0',
+  to: qs.get('to') || '',
+  payFrom: qs.get('payments_from') || '',
+  sort: qs.get('sort') === 'invoice' ? 'invoice' : 'name',
+  filter: 'all', q: '', expanded: new Set(), tabs: new Map(), openInv: new Set(),
+};
+let RESULT = null;
+function syncUrl(){
+  const p = new URLSearchParams();
+  if (state.from) p.set('from', state.from);
+  if (!state.inclusive) p.set('inclusive', '0');
+  if (state.to) p.set('to', state.to);
+  if (state.payFrom) p.set('payments_from', state.payFrom);
+  if (state.sort !== 'name') p.set('sort', state.sort);
+  const q = p.toString();
+  history.replaceState(null, '', location.pathname + (q ? '?' + q : ''));
+}
+
+/* ---- data ---- */
+async function load(){
+  if (!state.from){ $('ckClients').innerHTML = '<div class="ck-empty">Nothing has been invoiced yet.</div>'; return; }
+  $('ckClients').innerHTML = '<div class="ck-empty">Loading&hellip;</div>';
+  const p = new URLSearchParams({from_invoice: state.from, inclusive: state.inclusive ? '1' : '0', sort: state.sort});
+  if (state.to) p.set('to_invoice', state.to);
+  if (state.payFrom) p.set('payments_from', state.payFrom);
+  let r, j;
+  try { r = await fetch('/checkup/data?' + p, {headers: {'Accept': 'application/json'}}); j = await r.json(); }
+  catch (e){ $('ckClients').innerHTML = '<div class="ck-error">Could not load the checkup. Check the connection and try again.</div>'; return; }
+  if (!r.ok){ $('ckClients').innerHTML = `<div class="ck-error">${esc(j.error || ('HTTP ' + r.status))}</div>`; $('ckStats').innerHTML = ''; $('ckResolved').innerHTML = ''; return; }
+  RESULT = j;
+  state.from = j.cutoff.from_invoice;
+  if (!state.expanded.size && j.clients.length) state.expanded.add(j.clients[0].client_id);
+  syncUrl();
+  renderAll();
+}
+
+/* ---- rendering ---- */
+function renderControls(res){
+  const c = res.cutoff;
+  $('ckFrom').value = c.from_invoice;
+  $('ckInclusiveText').textContent = c.inclusive ? `${c.from_invoice} onwards` : `after ${c.from_invoice}`;
+  const sel = $('ckTo'); const cur = state.to ? String(parseSeq(state.to)) : '';
+  sel.innerHTML = `<option value="">Latest (${CK_INIT.latest ? pad4(CK_INIT.latest) : DASH})</option>` +
+    CK_INDEX.filter(i => parseSeq(i.invoice_number) >= c.from_seq).map(i => { const s = parseSeq(i.invoice_number);
+      return `<option value="${s}" ${String(s) === cur ? 'selected' : ''}>${esc(i.invoice_number)} ${DOT} ${fmtDate(i.issue_date)}</option>`; }).join('');
+  $('ckPayFrom').value = c.payments_from || '';
+  $('ckPayHint').firstChild.textContent = state.payFrom ? 'Overridden. ' : "Auto: the cutoff invoice's date. ";
+  $('ckPayHint').querySelector('button').hidden = !state.payFrom;
+  const fromRow = CK_INDEX.find(i => i.invoice_number === c.from_invoice);
+  $('ckResolved').innerHTML = `
+    <span><span class="k">Cutoff</span><code>${esc(c.from_invoice)}</code> <b>${fmtDate(c.from_date)}</b>${fromRow ? ' to ' + esc(fromRow.client_name) : ''}</span>
+    <span><span class="k">Invoices</span><b>${c.inclusive ? esc(c.from_invoice) : 'after ' + esc(c.from_invoice)}</b> ${ARROW} <b>${esc(c.to_invoice || DASH)}</b> by serial</span>
+    <span><span class="k">Payments</span>dated <b>${fmtDate(c.payments_from)}</b> ${c.payments_to ? 'to <b>' + fmtDate(c.payments_to) + '</b>' : 'onwards'}</span>`;
+}
+function renderStats(res){
+  const s = res.summary, c = res.cutoff;
+  const tile = (label, val, sub, full) => `<div class="stat-card"><div class="stat-label">${label}</div><div class="stat-value" title="${full || ''}">${val}</div><div class="stat-sub">${sub}</div></div>`;
+  $('ckStats').innerHTML =
+    tile('Sold since cutoff', inrShort(s.sales_total), `${s.invoice_count} invoices ${DOT} ${fmtDate(c.from_date)} ${ARROW} ${fmtDate(c.to_date)}`, inr(s.sales_total)) +
+    tile('Received in window', inrShort(s.collected_total), `${s.payment_count} payments, incl. money against older dues`, inr(s.collected_total)) +
+    tile('Still due on these invoices', inrShort(s.outstanding_on_range), s.overdue_count ? `<span class="ck-tag ck-tag-danger">${s.overdue_count} overdue</span>` : '<span class="ck-tag ck-tag-success">nothing overdue</span>', inr(s.outstanding_on_range)) +
+    tile('Clients touched', s.client_count, state.sort === 'invoice' ? 'in invoice order' : 'listed A to Z', '');
+}
+function filterFn(c){
+  if (state.filter === 'owes' && !(c.balance.closing < -0.005)) return false;
+  if (state.filter === 'overdue' && !c.totals.overdue_count) return false;
+  if (state.filter === 'settled' && c.invoices.some(i => i.status !== 'paid')) return false;
+  if (state.q){ const q = state.q.toLowerCase(); const hay = [c.name, ...c.companies.map(x => x.name), ...c.invoices.map(i => i.invoice_number)].join(' ').toLowerCase(); if (!hay.includes(q)) return false; }
+  return true;
+}
+function renderChips(res){
+  const n = {all: res.clients.length, owes: res.clients.filter(c => c.balance.closing < -0.005).length,
+             overdue: res.clients.filter(c => c.totals.overdue_count).length,
+             settled: res.clients.filter(c => c.invoices.every(i => i.status === 'paid')).length};
+  const defs = [['all','All'],['owes','Owes you'],['overdue','Has overdue'],['settled','Fully paid']];
+  $('ckChips').innerHTML = defs.map(([k,l]) => `<button type="button" class="ck-chip" data-act="chip" data-filter="${k}" aria-pressed="${state.filter === k}">${l}<span class="n">${n[k]}</span></button>`).join('');
+  $('ckSort').querySelectorAll('button').forEach(b => b.setAttribute('aria-selected', b.dataset.sort === state.sort));
+}
+function renderRail(list){
+  if (state.sort === 'invoice'){
+    const f = list[0], l = list[list.length - 1];
+    $('ckRail').innerHTML = list.length ? `<span class="note">Clients in the order their first invoice appears in the book: ${esc(f.totals.first_invoice)} (${esc(f.name)}) ${ARROW} ${esc(l.totals.first_invoice)} (${esc(l.name)}).</span>` : '';
+    return;
+  }
+  const present = new Set(list.map(c => (c.name[0] || '').toUpperCase()));
+  $('ckRail').innerHTML = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map(L => present.has(L) ? `<button type="button" data-act="letter" data-letter="${L}" title="Jump to ${L}">${L}</button>` : `<span aria-hidden="true">${L}</span>`).join('');
+}
+function stripe(i){ if (i.status === 'paid') return 'var(--success)'; if (i.overdue) return '#b91c1c'; return i.total > 0 && (i.total - i.amount_paid) / i.total > 0.5 ? 'var(--danger)' : 'var(--warning)'; }
+const chev = '<svg class="ck-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>';
+const disc = '<svg class="ck-disc" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>';
+const book = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>';
+const coLink = (c, companyId, name) => companyId
+  ? `<button type="button" class="ck-co" data-act="ledger" data-id="${c.client_id}" data-co="${companyId}" title="Open the ${esc(name)} ledger">${esc(name)}</button>`
+  : `<span class="ck-nil">${DASH}</span>`;
+
+function invoicesPane(c){
+  const rows = c.invoices.map(i => {
+    const open = state.openInv.has(i.invoice_id);
+    const items = (i.items || []).map(it => `<tr><td class="ck-sku">${esc(it.sku || '')}</td><td>${esc(it.description)}</td><td class="num">${qtyFmt(it.quantity)}</td><td class="num">${it.quantity_boxes != null ? qtyFmt(it.quantity_boxes) + ' × ' + qtyFmt(it.box_size) : '<span class="ck-nil">' + DASH + '</span>'}</td><td class="num">${inr(it.unit_price)}</td><td class="num">${it.discount_value ? it.discount_value + (it.discount_type === 'percent' ? '%' : '') : '<span class="ck-nil">' + DASH + '</span>'}</td><td class="num w">${inr(it.line_total)}</td></tr>`).join('');
+    return `<tr class="ck-inv" data-act="inv" data-inv="${i.invoice_id}" aria-expanded="${open}" style="--stripe:${stripe(i)}"><td>${disc}</td><td><a class="ck-invno" href="/invoices/${i.invoice_id}" data-act="link">${esc(i.invoice_number)}</a></td><td class="muted">${fmtDate(i.issue_date)}</td><td class="muted ck-hide-m">${fmtDate(i.due_date)}</td><td class="muted ck-hide-m">${coLink(c, i.company_id, i.company)}</td><td class="num w">${inr(i.total)}</td><td class="num ck-hide-m">${inr(i.amount_paid)}</td><td class="num">${i.balance_due > 0.005 ? `<span class="ck-dr">${inr(i.balance_due)}</span>` : '<span class="ck-nil">' + DASH + '</span>'}</td><td>${i.overdue ? '<span class="badge badge-overdue">overdue</span>' : `<span class="badge badge-${esc(i.status)}">${esc(i.status)}</span>`}</td></tr>
+    <tr ${open ? '' : 'hidden'}><td class="ck-items-cell" colspan="9"><div class="ck-items"><table class="ck-tbl"><thead><tr><th>SKU</th><th>Item</th><th class="num">Qty (pcs)</th><th class="num">Boxes</th><th class="num">Rate</th><th class="num">Disc.</th><th class="num">Amount</th></tr></thead><tbody>${items || '<tr><td colspan="7" class="muted">No line items.</td></tr>'}</tbody><tfoot><tr><td colspan="6" class="num">Subtotal</td><td class="num">${inr(i.subtotal)}</td></tr>${i.discount_amount ? `<tr><td colspan="6" class="num">Discount</td><td class="num">${inr(-i.discount_amount)}</td></tr>` : ''}<tr><td colspan="6" class="num">Tax</td><td class="num">${inr(i.tax_total)}</td></tr><tr class="total"><td colspan="6" class="num">Invoice total</td><td class="num">${inr(i.total)}</td></tr></tfoot></table></div></td></tr>`;
+  }).join('');
+  return `<table class="ck-tbl"><thead><tr><th></th><th>Invoice</th><th>Date</th><th class="ck-hide-m">Due</th><th class="ck-hide-m">Company</th><th class="num">Total</th><th class="num ck-hide-m">Paid</th><th class="num">Balance due</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+function ledgerPane(c){
+  const rows = c.ledger.entries.map(e => {
+    if (e.type === 'bbf') return `<tr class="ck-bbf"><td>${fmtDate(e.date)}</td><td class="part"><span class="ck-kind">B/F</span>${esc(e.label)}<small>${esc(e.note || '')}</small></td><td class="num">${e.debit ? inr(e.debit) : ''}</td><td class="num">${e.credit ? inr(e.credit) : ''}</td><td class="num">${bal(e.running)}</td></tr>`;
+    if (e.type === 'invoice') return `<tr><td class="muted">${fmtDate(e.date)}</td><td class="part"><span class="ck-kind">Sale</span><a class="ck-invno" href="/invoices/${e.invoice_id}">${esc(e.label)}</a>${e.company ? ' <span class="muted">(' + coLink(c, e.company_id, e.company) + ')</span>' : ''}</td><td class="num">${inr(e.debit)}</td><td class="num"></td><td class="num">${bal(e.running)}</td></tr>`;
+    if (e.type === 'manual') return `<tr><td class="muted">${fmtDate(e.date)}</td><td class="part"><span class="ck-kind">Manual</span>${esc(e.label)}</td><td class="num">${e.debit ? inr(e.debit) : ''}</td><td class="num">${e.credit ? inr(e.credit) : ''}</td><td class="num">${bal(e.running)}</td></tr>`;
+    return `<tr><td class="muted">${fmtDate(e.date)}</td><td class="part"><span class="ck-kind">Receipt</span>${esc(e.label)}<small>${esc(e.note || '')}${e.company ? ' ' + DOT + ' ' + esc(e.company) : ''}</small></td><td class="num"></td><td class="num">${inr(e.credit)}</td><td class="num">${bal(e.running)}</td></tr>`;
+  }).join('');
+  const dr = c.ledger.entries.reduce((s, e) => s + (e.type !== 'bbf' ? +e.debit || 0 : 0), 0);
+  const cr = c.ledger.entries.reduce((s, e) => s + (e.type !== 'bbf' ? +e.credit || 0 : 0), 0);
+  return `<table class="ck-tbl ck-ledger"><thead><tr><th>Date</th><th>Particulars</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr></thead><tbody>${rows}</tbody><tfoot class="close"><tr><td colspan="2">Closing balance <span class="muted" style="font-weight:500">as of ${fmtDate(c.balance.as_of)}</span></td><td class="num muted" style="font-weight:500">${inr(dr)}</td><td class="num muted" style="font-weight:500">${inr(cr)}</td><td class="num">${bal(c.ledger.final_balance)}</td></tr></tfoot></table>`;
+}
+function productsPane(c){
+  if (!c.products.length) return '<div class="ck-empty" style="border:none">No catalogued products on these invoices.</div>';
+  const rows = c.products.map(p => `<tr><td class="w">${esc(p.name)}</td><td class="num muted">${p.lines}</td><td class="num">${qtyFmt(p.total_qty)}</td><td class="num">${p.has_box_size ? qtyFmt(p.total_boxes) : '<span class="ck-nil">' + DASH + '</span>'}</td><td class="num w">${inr(p.total_amount)}</td></tr>`).join('');
+  return `<table class="ck-tbl"><thead><tr><th>Product</th><th class="num">Lines</th><th class="num">Qty (pcs)</th><th class="num">Boxes</th><th class="num">Amount (before tax)</th></tr></thead><tbody>${rows}</tbody><tfoot class="close"><tr><td colspan="4">Total before tax</td><td class="num">${inr(c.products.reduce((s, p) => s + p.total_amount, 0))}</td></tr></tfoot></table>`;
+}
+function paneFor(c){ const t = state.tabs.get(c.client_id) || 'invoices'; return t === 'ledger' ? ledgerPane(c) : t === 'products' ? productsPane(c) : invoicesPane(c); }
+function clientHtml(c){
+  const open = state.expanded.has(c.client_id), t = state.tabs.get(c.client_id) || 'invoices';
+  const tags = [];
+  if (c.totals.overdue_count) tags.push(`<span class="ck-tag ck-tag-danger">${c.totals.overdue_count} overdue</span>`);
+  else if (c.invoices.every(i => i.status === 'paid')) tags.push('<span class="ck-tag ck-tag-success">Settled</span>');
+  else tags.push('<span class="ck-tag ck-tag-warning">Part paid</span>');
+  if (c.balance.closing > 0.005) tags.push('<span class="ck-tag ck-tag-info">In credit</span>');
+  const tab = (k, l, n) => `<button type="button" role="tab" data-act="tab" data-id="${c.client_id}" data-tab="${k}" aria-selected="${t === k}">${l}${n != null ? `<span class="n">${n}</span>` : ''}</button>`;
+  const firstNote = state.sort === 'invoice' ? ` ${DOT} from ${esc(c.totals.first_invoice)}` : '';
+  const cos = c.companies.map(x => esc(x.name)).join(' ' + DOT + ' ');
+  return `<section class="ck-client" id="ck-c-${c.client_id}" data-letter="${esc((c.name[0] || '').toUpperCase())}">
+    <div class="ck-head">
+      <button type="button" class="ck-toggle" data-act="toggle" data-id="${c.client_id}" aria-expanded="${open}" aria-controls="ck-b-${c.client_id}">
+        ${chev}
+        <span class="ck-name"><b>${esc(c.name)}</b><small>${cos}${cos ? ' ' + DOT + ' ' : ''}${c.payment_terms}-day terms${firstNote}</small></span>
+      </button>
+      <span class="ck-meta">
+        <span class="m"><i>Invoices</i><span>${c.totals.invoice_count}</span></span>
+        <span class="m"><i>Sold</i><span title="${inr(c.totals.sales)}">${inrShort(c.totals.sales)}</span></span>
+        <span class="m"><i>Received</i><span title="${inr(c.totals.collected)}">${inrShort(c.totals.collected)}</span></span>
+        <button type="button" class="m ck-bal" data-act="ledger" data-id="${c.client_id}" data-co="" title="Open the ${esc(c.name)} ledger"><i>Balance now ${book}</i><span>${bal(c.balance.closing, true)}</span></button>
+      </span>
+      <span class="ck-tags">${tags.join('')}</span>
+    </div>
+    <div class="ck-body" id="ck-b-${c.client_id}" ${open ? '' : 'hidden'}>
+      <div class="ck-tabs" role="tablist">${tab('invoices', 'Invoices', c.totals.invoice_count)}${tab('ledger', 'Ledger since cutoff', null)}${tab('products', 'Products', c.products.length)}</div>
+      <div class="ck-pane">${open ? paneFor(c) : ''}</div>
+    </div></section>`;
+}
+function renderClients(res){
+  const list = res.clients.filter(filterFn);
+  renderRail(list);
+  $('ckClients').innerHTML = list.length ? list.map(clientHtml).join('')
+    : `<div class="ck-empty">${res.clients.length ? 'No client matches this filter.' : `No invoices from ${esc(res.cutoff.from_invoice)} onwards.`}</div>`;
+  const allOpen = list.length && list.every(c => state.expanded.has(c.client_id));
+  $('ckExpandAll').textContent = allOpen ? 'Collapse all' : 'Expand all';
+}
+function renderAll(){ renderControls(RESULT); renderStats(RESULT); renderChips(RESULT); renderClients(RESULT); }
+function repaintClient(id){ const c = RESULT.clients.find(x => x.client_id === id); const el = $('ck-c-' + id); if (!c || !el) return; el.outerHTML = clientHtml(c); }
+
+/* ---- the shared ledger modal from base.html, opened on the checkup window ---- */
+function openLedger(clientId, companyId){
+  const c = RESULT.clients.find(x => x.client_id === clientId); if (!c) return;
+  const co = companyId ? c.companies.find(x => x.company_id === companyId) : null;
+  _ledgerClientId  = clientId;
+  _ledgerCompanyId = co ? co.company_id : null;
+  $('ledgerModalTitle').textContent = co ? `${co.name} ${DASH} ${c.name}` : c.name;
+  $('ledgerFinalBal').textContent   = '';
+  $('ledgerEmpty').style.display    = 'none';
+  $('ledgerEntryForm').style.display = 'none';
+  $('ledgerModal').style.display    = 'flex';
+  // Period = the checkup window, so the modal opens on the same brought-forward line.
+  const from = RESULT.cutoff.payments_from, to = RESULT.cutoff.payments_to || TODAY;
+  _ledgerWindow = 'custom'; $('lwSel').value = 'custom';
+  _ledgerDateFrom = from; _ledgerDateTo = to;
+  $('lwFrom').value = from; $('lwTo').value = to;
+  _reloadLedger();
+}
+
+/* ---- wiring ---- */
+$('ckInvoiceList').innerHTML = CK_INDEX.map(i => `<option value="${esc(i.invoice_number)}">${fmtDate(i.issue_date)} ${DOT} ${esc(i.client_name)}</option>`).join('');
+$('ckFrom').value = state.from;
+$('ckInclusive').checked = state.inclusive;
+$('ckFrom').addEventListener('change', e => { const s = parseSeq(e.target.value); if (!s) return; state.from = pad4(s); if (state.to && parseSeq(state.to) < s) state.to = ''; state.payFrom = ''; state.expanded.clear(); load(); });
+$('ckFrom').addEventListener('keydown', e => { if (e.key === 'Enter') e.target.blur(); });
+$('ckInclusive').addEventListener('change', e => { state.inclusive = e.target.checked; load(); });
+$('ckTo').addEventListener('change', e => { state.to = e.target.value ? pad4(parseInt(e.target.value, 10)) : ''; load(); });
+$('ckPayFrom').addEventListener('change', e => { state.payFrom = e.target.value || ''; load(); });
+$('ckSearch').addEventListener('input', e => { state.q = e.target.value.trim(); if (RESULT) renderClients(RESULT); });
+
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-act]'); if (!t) return;
+  const act = t.dataset.act;
+  if (act === 'link') return;                       // let invoice links navigate
+  if (act === 'toggle'){ const id = +t.dataset.id; state.expanded.has(id) ? state.expanded.delete(id) : state.expanded.add(id); repaintClient(id); }
+  else if (act === 'tab'){ const id = +t.dataset.id; state.tabs.set(id, t.dataset.tab); repaintClient(id); }
+  else if (act === 'inv'){ const id = +t.dataset.inv; const open = !state.openInv.has(id); open ? state.openInv.add(id) : state.openInv.delete(id); t.setAttribute('aria-expanded', open); t.nextElementSibling.hidden = !open; }
+  else if (act === 'ledger'){ e.stopPropagation(); openLedger(+t.dataset.id, t.dataset.co ? +t.dataset.co : null); }
+  else if (act === 'sort'){ state.sort = t.dataset.sort; load(); }
+  else if (act === 'chip'){ state.filter = t.dataset.filter; renderChips(RESULT); renderClients(RESULT); }
+  else if (act === 'letter'){ const el = document.querySelector(`.ck-client[data-letter="${t.dataset.letter}"]`); if (el) el.scrollIntoView({behavior: 'smooth', block: 'start'}); }
+  else if (act === 'expandall'){ const list = RESULT.clients.filter(filterFn); const allOpen = list.every(c => state.expanded.has(c.client_id)); list.forEach(c => allOpen ? state.expanded.delete(c.client_id) : state.expanded.add(c.client_id)); renderClients(RESULT); }
+  else if (act === 'payreset'){ state.payFrom = ''; load(); }
+});
+load();
+})();
+</script>
+{% endblock %}

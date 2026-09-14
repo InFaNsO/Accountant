@@ -4752,3 +4752,21 @@ def transit_upcoming():
     return jsonify({"result": {
         "items": items, "count": len(items), "truncated": truncated, "limit": limit,
     }})
+
+
+# ── Checkup ───────────────────────────────────────────────────────────────────
+
+@bp.route("/checkup")
+@require_auth
+def checkup():
+    """Everything sold from one invoice serial onwards, client by client, with
+    each client's invoices (+ items), a ledger that opens with the balance
+    brought forward at the cutoff, and product totals. Same computation as the
+    Checkup page. Query params: from_invoice (required, e.g. INV-0150 or 150),
+    inclusive=1|0, to_invoice, payments_from=YYYY-MM-DD, client_ids=CSV,
+    include=items,products, sort=name|invoice."""
+    from ..services import checkup_service
+    raw = request.args.get("client_ids")
+    client_ids = [int(x) for x in raw.split(",") if x.strip().isdigit()] if raw else None
+    payload, status = checkup_service.checkup_from_args(request.args, client_ids)
+    return jsonify(payload), status

@@ -34,6 +34,7 @@ TOOL_POLICY = {
     "get_client_ledger":            ("clients", "financials"),
     "get_client_ledger_json":       ("clients", "financials"),
     "get_company_ledger":           ("clients", "financials"),
+    "checkup_from_invoice":         ("clients", "financials"),
     "clients_outstanding":          ("clients", "financials"),
     "get_business_stats":           ("clients", "financials"),
     "create_client":                ("clients", "create"),
