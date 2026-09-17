@@ -554,6 +554,9 @@ def _create_schema(db):
     # balance-lock settings)
     _add_column(db, "user_permissions",  "can_locks_view",  "INTEGER DEFAULT 0")
     _add_column(db, "user_permissions",  "can_locks_edit",  "INTEGER DEFAULT 0")
+    # Clients-only extra: without Financials, still see the balance of clients
+    # on short payment terms (auth_service.SHORT_TERMS_DAYS)
+    _add_column(db, "user_permissions",  "can_balance_short_terms", "INTEGER DEFAULT 0")
     _add_column(db, "clients",          "opening_balance", "REAL DEFAULT 0")
     _add_column(db, "clients",          "payment_terms",   "INTEGER DEFAULT 0")
     _add_column(db, "client_companies", "opening_balance", "REAL DEFAULT 0")

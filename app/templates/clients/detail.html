@@ -335,17 +335,22 @@
     </div>
     {% endif %}
 
-    {% if can_financials %}
+    {% if show_balance %}
     <div class="card">
       <div class="card-header">
+        {% if can_financials %}
         <span class="card-title" style="cursor:pointer" onclick="showClientLedger({{ client.id }}, '{{ client.name|replace("'", "\\'") }}')" title="Click to view full ledger">Balance</span>
         <span style="font-size:11px;color:var(--text-muted);margin-left:8px;cursor:pointer" onclick="showClientLedger({{ client.id }}, '{{ client.name|replace("'", "\\'") }}')">Click to view ledger</span>
         <button id="recalcBtn" class="btn btn-secondary btn-sm" style="margin-left:auto"
                 onclick="recalculateBalance({{ client.id }})">Recalculate</button>
+        {% else %}
+        {# Balance only (short payment terms): the ledger and Recalculate stay with Financials #}
+        <span class="card-title">Balance</span>
+        {% endif %}
       </div>
-      <div class="card-body" id="balanceBody"
+      <div class="card-body" id="balanceBody"{% if can_financials %}
            style="cursor:pointer" title="Click to view ledger"
-           onclick="showClientLedger({{ client.id }}, '{{ client.name|replace("'", "\\'") }}')">
+           onclick="showClientLedger({{ client.id }}, '{{ client.name|replace("'", "\\'") }}')"{% endif %}>
         <div class="stat-value" style="font-size:32px;color:{% if balance < 0 %}var(--danger){% elif balance > 0 %}var(--success){% else %}var(--warning){% endif %}">
           {{ balance|inr }}
         </div>
@@ -371,6 +376,8 @@
           {% if can_financials %}
           <div class="info-row"><span class="info-label">Paid</span><span class="info-value" style="color:var(--success)">{{ all_invoices|selectattr('status','eq','paid')|list|length }}</span></div>
           <div class="info-row"><span class="info-label">Pending</span><span class="info-value" style="color:var(--warning)">{{ all_invoices|selectattr('status','in',['sent','issued','partial'])|list|length }}</span></div>
+          {% endif %}
+          {% if show_balance %}
           <div class="info-row">
             <span class="info-label">Current Balance</span>
             <span class="info-value fw-700" style="color:{% if balance < 0 %}var(--danger){% elif balance > 0 %}var(--success){% else %}var(--text-muted){% endif %}">
@@ -425,21 +432,21 @@
           <thead>
             <tr>
               <th>Name</th>
-              {% if can_financials %}<th style="text-align:right">Balance</th>{% endif %}
+              {% if show_balance %}<th style="text-align:right">Balance</th>{% endif %}
             </tr>
           </thead>
           <tbody>
             {% for co in companies %}
             <tr id="co-row-{{ co.id }}">
               <td style="font-weight:600;font-size:13px">{{ co.name }}</td>
-              {% if can_financials %}
+              {% if show_balance %}
               {% set bal = co.balance %}
               {% set _col = 'var(--danger)' if bal < 0 else 'var(--success)' if bal > 0 else 'var(--warning)' %}
               {% set _lbl = 'outstanding' if bal < 0 else 'credit' if bal > 0 else 'settled' %}
               <td style="text-align:right">
-                <span onclick="showCompanyLedger({{ client.id }}, {{ co.id }}, {{ co.name|tojson|forceescape }})"
+                <span{% if can_financials %} onclick="showCompanyLedger({{ client.id }}, {{ co.id }}, {{ co.name|tojson|forceescape }})"
                       style="cursor:pointer;text-decoration:underline dotted"
-                      title="Click to view company ledger">
+                      title="Click to view company ledger"{% endif %}>
                   <span id="co-bal-amt-{{ co.id }}" style="color:{{ _col }};font-weight:700">{{ bal|inr }}</span>
                   <div id="co-bal-lbl-{{ co.id }}" style="font-size:11px;color:var(--text-muted)">{{ _lbl }}</div>
                 </span>

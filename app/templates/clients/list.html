@@ -33,8 +33,10 @@
       <thead>
         <tr>
           <th>Name / Company</th>
-          {% if can_financials %}
+          {% if can_financials or balance_ids %}
           <th style="text-align:right">Balance</th>
+          {% endif %}
+          {% if can_financials %}
           <th class="col-mobile-hide" style="text-align:right">Purchases (60d)</th>
           <th class="col-mobile-hide" style="text-align:right">Payments (60d)</th>
           {% endif %}
@@ -69,15 +71,17 @@
               </div>
             </div>
           </td>
-          {% if can_financials %}
-          {% set ob = (c.opening_balance or 0) %}
-          {% set credit_ob = [0, ob * -1]|max %}
-          {% set debit_ob  = [0, ob]|max %}
-          {% set balance = (c.total_paid + credit_ob) - (c.total_invoiced + debit_ob) %}
+          {% if can_financials or balance_ids %}
           <td style="text-align:right">
-            <span onclick="showClientLedger({{ c.id }}, '{{ c.name|replace("'", "\\'") }}')"
+            {% if can_financials or c.id in balance_ids %}
+            {% set ob = (c.opening_balance or 0) %}
+            {% set credit_ob = [0, ob * -1]|max %}
+            {% set debit_ob  = [0, ob]|max %}
+            {% set balance = (c.total_paid + credit_ob) - (c.total_invoiced + debit_ob) %}
+            {# The ledger stays with Financials, so only they get the click-through #}
+            <span{% if can_financials %} onclick="showClientLedger({{ c.id }}, '{{ c.name|replace("'", "\\'") }}')"
                   style="cursor:pointer;text-decoration:underline dotted"
-                  title="Click to view ledger">
+                  title="Click to view ledger"{% endif %}>
             {% if balance < 0 %}
               <span style="color:var(--danger);font-weight:700;">{{ balance|inr }}</span>
               <div style="font-size:11px;color:var(--text-muted)">outstanding</div>
@@ -89,7 +93,12 @@
               <div style="font-size:11px;color:var(--text-muted)">settled</div>
             {% endif %}
             </span>
+            {% else %}
+            <span style="color:var(--text-muted)">—</span>
+            {% endif %}
           </td>
+          {% endif %}
+          {% if can_financials %}
           <td class="col-mobile-hide" style="text-align:right;font-weight:600;">{{ c.purchases_60d|inr }}</td>
           <td class="col-mobile-hide" style="text-align:right;font-weight:600;color:var(--success)">{{ c.payments_60d|inr }}</td>
           {% endif %}
@@ -117,8 +126,9 @@
               {% if co.tax_id %}<span style="font-size:11px;color:var(--text-muted);font-family:monospace">{{ co.tax_id }}</span>{% endif %}
             </div>
           </td>
-          {% if can_financials %}
+          {% if can_financials or balance_ids %}
           <td style="text-align:right">
+            {% if can_financials or c.id in balance_ids %}
             {% if balance < 0 %}
               <span style="color:var(--danger);font-weight:600;font-size:13px">{{ balance|inr }}</span>
               <div style="font-size:11px;color:var(--text-muted)">outstanding</div>
@@ -129,7 +139,12 @@
               <span style="color:var(--warning);font-weight:600;font-size:13px">{{ balance|inr }}</span>
               <div style="font-size:11px;color:var(--text-muted)">settled</div>
             {% endif %}
+            {% else %}
+            <span style="color:var(--text-muted)">—</span>
+            {% endif %}
           </td>
+          {% endif %}
+          {% if can_financials %}
           <td class="col-mobile-hide" style="text-align:right;font-size:13px;font-weight:500">{{ co.purchases_60d|inr }}</td>
           <td class="col-mobile-hide" style="text-align:right;font-size:13px;font-weight:500;color:var(--success)">{{ co.payments_60d|inr }}</td>
           {% endif %}

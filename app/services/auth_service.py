@@ -16,19 +16,38 @@ MODULES = [
     "palm_purchase",
 ]
 
+# Clients on payment terms shorter than this many days pay on the invoice day or
+# the next. Without Financials, the balance_short_terms flag still shows these
+# clients' balances.
+SHORT_TERMS_DAYS = 2
+
 # Clients-only extra permissions, shown as sub-lines under the Clients row in the
 # user form. "actions" maps a grid column (view/create/edit/delete) to the
-# permission flag stored as user_permissions.can_<flag>.
+# permission flag stored as user_permissions.can_<flag>. "parent" indents the
+# line under another extra it narrows.
 CLIENT_EXTRAS = [
     {"key": "financials", "label": "Financials",
      "actions": {"view": "financials"},
      "desc": "Balance, ledger & payment status visibility"},
+    {"key": "balance_short_terms", "label": f"Balance if payment due < {SHORT_TERMS_DAYS} days",
+     "actions": {"view": "balance_short_terms"}, "parent": "financials",
+     "desc": f"Just the balance — no ledger or payments — and only for clients whose payment "
+             f"terms are under {SHORT_TERMS_DAYS} days. Not needed alongside Financials."},
     {"key": "locks", "label": "Invoice Locks",
      "actions": {"view": "locks_view", "edit": "locks_edit"},
      "desc": "View lock status / toggle the tally lock and edit balance-lock settings"},
 ]
-# Flat list of the extra permission flags: ["financials", "locks_view", "locks_edit"]
+# Flat list of the extra permission flags:
+# ["financials", "balance_short_terms", "locks_view", "locks_edit"]
 CLIENT_EXTRA_FLAGS = [flag for e in CLIENT_EXTRAS for flag in e["actions"].values()]
+
+
+def has_short_terms(client):
+    """True when a client's payment falls due within SHORT_TERMS_DAYS of an
+    invoice. Terms of 0 were never set (the invoice form ignores them too),
+    so they don't count."""
+    return 0 < (client["payment_terms"] or 0) < SHORT_TERMS_DAYS
+
 
 # Dashboard sections (key, display label)
 DASHBOARD_SECTIONS = [
@@ -68,8 +87,9 @@ class User(UserMixin):
         return self.role == "god"
 
     def has_permission(self, module, action):
-        """action: view | create | edit | delete | financials | locks_view | locks_edit
-        (financials and locks_* apply to the clients module only)"""
+        """action: view | create | edit | delete | financials | balance_short_terms
+        | locks_view | locks_edit (all but the first four apply to the clients
+        module only)"""
         if self.is_god():
             return True
         db = get_db()
@@ -85,7 +105,8 @@ class User(UserMixin):
             return False
 
     def get_all_permissions(self):
-        """Return dict of {module: {view,create,edit,delete[,financials,locks_view,locks_edit]}}"""
+        """Return dict of {module: {view,create,edit,delete[,financials,balance_short_terms,
+        locks_view,locks_edit]}}"""
         db = get_db()
         rows = db.execute(
             "SELECT * FROM user_permissions WHERE user_id=?", (self.id,)
@@ -264,14 +285,15 @@ def _save_permissions(db, user_id, permissions):
         db.execute(
             """INSERT INTO user_permissions
                    (user_id, module, can_view, can_create, can_edit, can_delete,
-                    can_financials, can_locks_view, can_locks_edit)
-               VALUES (?,?,?,?,?,?,?,?,?)
+                    can_financials, can_balance_short_terms, can_locks_view, can_locks_edit)
+               VALUES (?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(user_id, module) DO UPDATE SET
                    can_view=excluded.can_view,
                    can_create=excluded.can_create,
                    can_edit=excluded.can_edit,
                    can_delete=excluded.can_delete,
                    can_financials=excluded.can_financials,
+                   can_balance_short_terms=excluded.can_balance_short_terms,
                    can_locks_view=excluded.can_locks_view,
                    can_locks_edit=excluded.can_locks_edit""",
             (user_id, module,
@@ -280,6 +302,7 @@ def _save_permissions(db, user_id, permissions):
              1 if perms.get("edit")       else 0,
              1 if perms.get("delete")     else 0,
              1 if perms.get("financials") else 0,
+             1 if perms.get("balance_short_terms") else 0,
              1 if perms.get("locks_view") else 0,
              1 if perms.get("locks_edit") else 0),
         )

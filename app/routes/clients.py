@@ -7,7 +7,8 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from flask_login import login_required, current_user
 from ..services import client_service, region_service
 from ..services.payment_service import recalculate_client_balance, reconcile_all_clients
-from ..services.auth_service import permission_required, get_scoped_client_ids, get_own_scoped_client_ids
+from ..services.auth_service import (permission_required, get_scoped_client_ids,
+                                     get_own_scoped_client_ids, has_short_terms)
 from ..services.ledger_pdf_service import build_ledger_pdf, ledger_pdf_meta
 from ..database import get_db
 from .dashboard import resolve_window, WINDOW_LABELS
@@ -54,11 +55,16 @@ def list_clients():
     if scope is not None:
         clients = [c for c in clients if c["id"] in scope]
     can_financials = current_user.has_permission("clients", "financials")
+    # Without Financials, balance_short_terms still shows the balance (and
+    # only the balance) of clients on short payment terms.
+    balance_ids = set()
+    if not can_financials and current_user.has_permission("clients", "balance_short_terms"):
+        balance_ids = {c["id"] for c in clients if has_short_terms(c)}
     can_locks_view = (current_user.has_permission("clients", "locks_view")
                       or current_user.has_permission("clients", "locks_edit"))
     locked_clients = client_service.get_locked_clients() if can_locks_view else {}
     return render_template("clients/list.html", clients=clients, can_financials=can_financials,
-                           locked_clients=locked_clients)
+                           balance_ids=balance_ids, locked_clients=locked_clients)
 
 
 def _parse_companies(form):
@@ -112,6 +118,12 @@ def detail(client_id):
         flash("Client not found.", "error")
         return redirect(url_for("clients.list_clients"))
     can_financials = current_user.has_permission("clients", "financials")
+    # The balance figures alone are also open to balance_short_terms when this
+    # client is on short payment terms; everything else financial stays gated
+    # on can_financials.
+    show_balance = can_financials or (
+        has_short_terms(client)
+        and current_user.has_permission("clients", "balance_short_terms"))
     # The invoices & payments sections default to the Last-30-Days window and
     # reload independently via /invoices-partial and /payments-partial. The
     # right-side Summary card keeps its all-time counts, so keep a full list too.
@@ -121,9 +133,9 @@ def detail(client_id):
     if can_financials:
         client_service.default_single_company_payments(client_id)
     payments = client_service.get_client_payments(client_id, sec_from, sec_to) if can_financials else []
-    balance = client_service.get_client_balance(client_id) if can_financials else None
+    balance = client_service.get_client_balance(client_id) if show_balance else None
     companies_raw = client_service.get_companies(client_id)
-    if can_financials:
+    if show_balance:
         companies = [
             {**dict(c), "balance": client_service.get_company_balance(c["id"], client_id)}
             for c in companies_raw
@@ -141,6 +153,7 @@ def detail(client_id):
                            section_window=window, section_from=sec_from or "",
                            section_to=sec_to or "", section_window_label=window_label,
                            companies=companies, balance=balance, can_financials=can_financials,
+                           show_balance=show_balance,
                            product_breakdown=product_breakdown, lock=lock, can_locks=can_locks,
                            can_locks_view=can_locks_view, rep_name=rep_name,
                            ola_maps_api_key=os.environ.get("OLA_MAPS_API_KEY", ""))
