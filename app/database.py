@@ -624,6 +624,11 @@ def _create_schema(db):
     # Chat surfaces: 'none' | 'helper' | 'agent'. Existing users keep the
     # read-only helper; the owner is always treated as 'agent' in code.
     _add_column(db, "users",                   "chat_level",           "TEXT DEFAULT 'helper'")
+    # Reminders & scheduled reports: the Scheduled page, the assistant's
+    # scheduling tools, and whether this user's tasks fire at all. On by default
+    # so existing users keep what they had; it only counts alongside a
+    # chat_level of helper or agent.
+    _add_column(db, "users",                   "can_schedule",         "INTEGER DEFAULT 1")
 
     _create_chat_schema(db)
     _create_settings_schema(db)

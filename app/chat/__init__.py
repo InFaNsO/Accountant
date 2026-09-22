@@ -17,20 +17,13 @@ from . import agent, history as hist, inbox, llm
 from . import scheduled  # noqa: F401 — registers the scheduling tools
 from . import sql_tool   # noqa: F401 — registers query_sql / describe_schema
 from . import tools
-from .tools import MODE_CHAT, MODE_HELPER
+from .tools import MODE_CHAT, MODE_HELPER, chat_level
 
 logger = logging.getLogger(__name__)
 
 bp = Blueprint("chat", __name__, url_prefix="/chat")
 
 MAX_TEXT = 8000
-
-
-def chat_level(user):
-    """'none' | 'helper' | 'agent'. The owner always gets the full surface."""
-    if tools.is_god(user):
-        return "agent"
-    return getattr(user, "chat_level", "helper") or "helper"
 
 
 def _require(level):
@@ -42,19 +35,29 @@ def _require(level):
         abort(503)
 
 
+def _require_schedule():
+    """The Scheduled page and its actions: the assistant plus the Scheduled
+    permission from the user form."""
+    _require("helper")
+    if not tools.may_schedule(current_user):
+        abort(403)
+
+
 def register_template_globals(app):
-    """Expose chat_level to every template so base.html can decide what to show.
+    """Expose chat_level and chat_can_schedule to every template so base.html
+    can decide what to show.
 
     Reports 'none' when no model is configured, which hides the launcher, the
-    bell and the nav item — a half-configured deploy shows no dead UI.
+    bell and the nav items — a half-configured deploy shows no dead UI.
     """
     @app.context_processor
     def _chat_context():
         if not (current_user and current_user.is_authenticated
                 and llm.provider_available()
                 and not tools.disabled_reason()):
-            return {"chat_level": "none"}
-        return {"chat_level": chat_level(current_user)}
+            return {"chat_level": "none", "chat_can_schedule": False}
+        return {"chat_level": chat_level(current_user),
+                "chat_can_schedule": tools.may_schedule(current_user)}
 
 
 @bp.route("/")
@@ -71,7 +74,7 @@ def index():
 @login_required
 def scheduled_page():
     """Reminders and scheduled reports, with their run history."""
-    _require("helper")
+    _require_schedule()
     tasks = []
     for row in scheduled.listing(current_user.id):
         last_run = scheduled.runs_for(row["id"], limit=1)
@@ -125,7 +128,7 @@ def _dispatcher_running():
 @bp.route("/scheduled/<int:task_id>/cancel", methods=["POST"])
 @login_required
 def scheduled_cancel(task_id):
-    _require("helper")
+    _require_schedule()
     row = scheduled.get(current_user.id, task_id)
     if row is None:
         abort(404)
@@ -138,7 +141,7 @@ def scheduled_cancel(task_id):
 @login_required
 def scheduled_run_now(task_id):
     """Run a saved report immediately — the same path the dispatcher takes."""
-    _require("helper")
+    _require_schedule()
     row = scheduled.get(current_user.id, task_id)
     if row is None or row["kind"] != "report":
         abort(404)

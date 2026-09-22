@@ -24,7 +24,7 @@ from flask import current_app
 
 from ..database import get_db
 from . import inbox
-from .tools import ToolError, local_tool
+from .tools import ToolError, local_tool, may_schedule
 
 logger = logging.getLogger(__name__)
 
@@ -194,7 +194,15 @@ def runs_for(task_id, limit=RUNS_KEPT_PER_TASK):
 # ── Dispatch ─────────────────────────────────────────────────────────────────
 
 def dispatch_due(app, now=None):
-    """Fire everything that is due. Returns how many tasks this worker claimed."""
+    """Fire everything that is due. Returns how many tasks this worker fired.
+
+    A task whose owner may no longer schedule (the Scheduled permission or the
+    assistant was taken away, or the account was deactivated) is claimed but
+    not run: that occurrence passes silently, and later ones fire again only
+    once the permission is given back.
+    """
+    from ..services.auth_service import load_user
+
     fired = 0
     with app.app_context():
         db = get_db()
@@ -207,6 +215,9 @@ def dispatch_due(app, now=None):
         for task in due:
             if not _claim(db, task, now):
                 continue          # another worker got there first
+            owner = load_user(task["user_id"])
+            if owner is None or not may_schedule(owner):
+                continue
             fired += 1
             try:
                 if task["kind"] == "reminder":

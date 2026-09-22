@@ -123,6 +123,45 @@
   </div>
   {% endif %}
 
+  <!-- Chat & Scheduled (fills users.chat_level / users.can_schedule) -->
+  {% if user.get('role') != 'god' %}
+  {% set u_chat = user.get('chat_level') or 'helper' %}
+  <div class="card" style="margin-bottom:18px">
+    <div class="card-header"><span class="card-title">Chat &amp; Scheduled</span></div>
+    <div class="card-body">
+      <div style="font-size:12.5px;font-weight:600;color:var(--text-muted);margin-bottom:8px">Chat</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px;margin-bottom:16px">
+        {% for key, label, desc in chat_levels %}
+        <label style="display:flex;align-items:flex-start;gap:9px;cursor:pointer;font-size:13px;padding:9px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg)">
+          <input type="radio" name="chat_level" value="{{ key }}" style="width:auto;flex-shrink:0;margin-top:2px"
+                 onchange="onChatLevelChange()" {{ 'checked' if u_chat == key }}>
+          <span>
+            {{ label }}
+            <span style="display:block;font-size:11.5px;color:var(--text-muted)">{{ desc }}</span>
+          </span>
+        </label>
+        {% endfor %}
+      </div>
+      <label id="scheduleOption" style="display:flex;align-items:flex-start;gap:9px;cursor:pointer;font-size:13px;padding:9px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);max-width:480px">
+        <input type="checkbox" name="can_schedule" value="1" id="canSchedule" style="width:auto;flex-shrink:0;margin-top:2px"
+               {{ 'checked' if user.get('can_schedule', 1)|int }}>
+        <span>
+          Scheduled
+          <span style="display:block;font-size:11.5px;color:var(--text-muted)">
+            Set reminders and scheduled reports, and see them on the Scheduled page. Needs Chat.
+          </span>
+        </span>
+      </label>
+    </div>
+  </div>
+  {% else %}
+  <div class="card" style="margin-bottom:18px">
+    <div class="card-body">
+      <p style="color:var(--text-muted);font-size:14px">⚡ The god account always has the full chat and Scheduled.</p>
+    </div>
+  </div>
+  {% endif %}
+
   <!-- Dashboard sections -->
   {% if user.get('role') != 'god' %}
   <div class="card" style="margin-bottom:18px">
@@ -254,6 +293,16 @@ function setAll(val) {
 function setAllDash(val) {
   document.querySelectorAll('.dash-cb').forEach(cb => cb.checked = val);
 }
+
+// Scheduled lives in the assistant's inbox, so it is unavailable while Chat is Off.
+function onChatLevelChange() {
+  const off = document.querySelector('input[name="chat_level"][value="none"]');
+  const cb  = document.getElementById('canSchedule');
+  if (!off || !cb) return;
+  cb.disabled = off.checked;
+  document.getElementById('scheduleOption').style.opacity = off.checked ? '.5' : '';
+}
+onChatLevelChange();
 
 // Managed clients: search filter + live selected count
 function filterManagedClients() {

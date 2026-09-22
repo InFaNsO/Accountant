@@ -5,10 +5,12 @@ names match ``auth_service.MODULES`` and the actions match the columns on
 ``user_permissions``, so a user's chat abilities are exactly their app
 abilities — nothing is granted by prompt text.
 
-Two pseudo-modules:
-  "*"     — needs the action on *every* module (or god). Used by query_sql,
-            which can read anything.
-  "self"  — the user's own data (reminders, saved notes). Always allowed.
+Three pseudo-modules:
+  "*"        — needs the action on *every* module (or god). Used by query_sql,
+               which can read anything.
+  "self"     — the user's own data (saved notes). Always allowed.
+  "schedule" — the user's own reminders and scheduled reports. Needs the
+               Scheduled permission from the user form (tools.may_schedule).
 
 WRITE_ACTIONS decide which calls pause for confirmation in the UI. A tool
 missing from TOOL_POLICY is refused and fails the startup check, so a new
@@ -134,12 +136,13 @@ TOOL_POLICY = {
     "describe_schema":              ("*", "view"),
     "query_sql":                    ("*", "view"),
     # The user's own inbox and schedule — not business data, so these stay
-    # available in the read-only surfaces too.
+    # available in the read-only surfaces too. Scheduling also needs the
+    # Scheduled permission; saving to the inbox does not.
     "save_to_inbox":                ("self", "schedule"),
-    "create_reminder":              ("self", "schedule"),
-    "create_scheduled_report":      ("self", "schedule"),
-    "list_scheduled":               ("self", "view"),
-    "cancel_scheduled":             ("self", "schedule"),
+    "create_reminder":              ("schedule", "schedule"),
+    "create_scheduled_report":      ("schedule", "schedule"),
+    "list_scheduled":               ("schedule", "view"),
+    "cancel_scheduled":             ("schedule", "schedule"),
 }
 
 

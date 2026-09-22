@@ -167,6 +167,29 @@ def is_god(user):
     return bool(attr() if callable(attr) else attr)
 
 
+def chat_level(user):
+    """'none' | 'helper' | 'agent'. The owner always gets the full surface."""
+    if is_god(user):
+        return "agent"
+    return getattr(user, "chat_level", "helper") or "helper"
+
+
+def may_schedule(user):
+    """Reminders and scheduled reports. The owner always may; anyone else needs
+    an active account, the assistant (helper or agent) and the Scheduled
+    permission from the user form."""
+    if is_god(user):
+        return True
+    return (bool(getattr(user, "is_active", False))
+            and chat_level(user) != "none"
+            and bool(getattr(user, "can_schedule", True)))
+
+
+# Policy modules that are the user's own things rather than business data, so
+# the read-only surfaces (helper, scheduled runs) keep them.
+_OWN_DATA_MODULES = ("self", "schedule")
+
+
 def _may_call(user, tool_name):
     """(allowed, reason) for this user calling this tool."""
     entry = TOOL_POLICY.get(tool_name)
@@ -177,6 +200,10 @@ def _may_call(user, tool_name):
         return True, ""
     if module == "self":
         return True, ""
+    if module == "schedule":
+        if may_schedule(user):
+            return True, ""
+        return False, "needs the Scheduled permission"
     if module == "*":
         from ..services.auth_service import MODULES
         if all(user.has_permission(m, action) for m in MODULES):
@@ -198,7 +225,7 @@ def tools_for(user, mode):
         if mode in (MODE_HELPER, MODE_SCHEDULED) and is_write(name):
             # Reminders and saved notes are the user's own data, not business
             # data, so they stay available in the read-only surfaces.
-            if TOOL_POLICY.get(name, ("", ""))[0] != "self":
+            if TOOL_POLICY.get(name, ("", ""))[0] not in _OWN_DATA_MODULES:
                 continue
         local = LOCAL_TOOLS.get(name)
         if local and local["modes"] and mode not in local["modes"]:
@@ -246,7 +273,7 @@ def execute(name, arguments, user, mode):
         return done(False, f"Permission denied: {reason}. Tell the user they "
                            f"cannot do this and do not retry.", "denied")
     if mode in (MODE_HELPER, MODE_SCHEDULED) and is_write(name) \
-            and TOOL_POLICY.get(name, ("", ""))[0] != "self":
+            and TOOL_POLICY.get(name, ("", ""))[0] not in _OWN_DATA_MODULES:
         return done(False, "This surface is read-only. Writes are only "
                            "available in the Chat tab.")
 

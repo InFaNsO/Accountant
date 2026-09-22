@@ -65,6 +65,18 @@ DASHBOARD_SECTIONS = [
 ]
 _ALL_DASH_KEYS = {k for k, _ in DASHBOARD_SECTIONS}
 
+# Assistant access (users.chat_level): key, label, what it gives. The owner
+# always gets the full chat. Scheduling (users.can_schedule) needs one of the
+# last two, since reminders and reports arrive in the assistant's inbox.
+CHAT_LEVELS = [
+    ("none",   "Off",           "No assistant, inbox or notification bell."),
+    ("helper", "Ask questions", "The side panel on every page. Read-only: it answers, "
+                                "but can't change anything."),
+    ("agent",  "Full chat",     "Also the Chat page, which can make the changes this "
+                                "user's permissions allow — each one confirmed first."),
+]
+CHAT_LEVEL_KEYS = {k for k, _, _ in CHAT_LEVELS}
+
 
 class User(UserMixin):
     def __init__(self, row):
@@ -77,6 +89,8 @@ class User(UserMixin):
         # Which assistant surfaces this user gets: none | helper | agent.
         self.chat_level    = (row["chat_level"] if "chat_level" in row.keys()
                               else "helper") or "helper"
+        # Reminders & scheduled reports (see chat.tools.may_schedule).
+        self.can_schedule  = bool(row["can_schedule"]) if "can_schedule" in row.keys() else True
         self._is_active    = bool(row["is_active"])
 
     @property
@@ -215,8 +229,10 @@ def create_user(data, permissions, dash_sections=None):
     db = get_db()
     pw_hash = generate_password_hash(data["password"])
     cur = db.execute(
-        "INSERT INTO users (name, email, password_hash, role, is_active) VALUES (?,?,?,?,1)",
-        (data["name"], data["email"], pw_hash, data.get("role", "user")),
+        "INSERT INTO users (name, email, password_hash, role, is_active, chat_level, can_schedule) "
+        "VALUES (?,?,?,?,1,?,?)",
+        (data["name"], data["email"], pw_hash, data.get("role", "user"),
+         data.get("chat_level") or "helper", 1 if data.get("can_schedule", 1) else 0),
     )
     user_id = cur.lastrowid
     _save_permissions(db, user_id, permissions)
@@ -238,6 +254,12 @@ def update_user(user_id, data, permissions, dash_sections=None):
             "UPDATE users SET name=?, email=?, role=?, is_active=? WHERE id=?",
             (data["name"], data["email"], data.get("role", "user"),
              1 if data.get("is_active") else 0, user_id),
+        )
+    # The god account's form has no chat section; it always gets everything.
+    if "chat_level" in data:
+        db.execute(
+            "UPDATE users SET chat_level=?, can_schedule=? WHERE id=?",
+            (data["chat_level"], 1 if data.get("can_schedule") else 0, user_id),
         )
     _save_permissions(db, user_id, permissions)
     _save_dashboard_sections(db, user_id, dash_sections or [])

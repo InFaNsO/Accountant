@@ -4,7 +4,7 @@ from ..services import client_service
 from ..services.auth_service import (
     god_required, get_all_users, get_user, create_user,
     update_user, delete_user, MODULES, DASHBOARD_SECTIONS,
-    CLIENT_EXTRAS, CLIENT_EXTRA_FLAGS,
+    CLIENT_EXTRAS, CLIENT_EXTRA_FLAGS, CHAT_LEVELS, CHAT_LEVEL_KEYS,
     set_manager_staff, SALES_DEFAULT_DENIED_MODULES,
 )
 
@@ -60,6 +60,14 @@ def _parse_dashboard_sections(form):
     return [key for key, _ in DASHBOARD_SECTIONS if form.get(f"dash_{key}")]
 
 
+def _apply_chat_settings(data, form):
+    """Chat access and the Scheduled permission from the 'Chat & Scheduled'
+    card, written into `data` for create_user / update_user."""
+    level = form.get("chat_level")
+    data["chat_level"]   = level if level in CHAT_LEVEL_KEYS else "helper"
+    data["can_schedule"] = 1 if form.get("can_schedule") else 0
+
+
 @bp.route("/")
 @god_required
 def list_users():
@@ -74,6 +82,7 @@ def new_user():
     candidates  = _team_candidates()
     if request.method == "POST":
         data    = request.form.to_dict()
+        _apply_chat_settings(data, request.form)
         perms   = _parse_permissions(request.form)
         dash    = _parse_dashboard_sections(request.form)
         managed = _parse_managed_clients(request.form)
@@ -81,7 +90,7 @@ def new_user():
         if not data.get("name") or not data.get("email") or not data.get("password"):
             flash("Name, email and password are required.", "error")
             return render_template("users/form.html", user=data, perms=perms,
-                                   modules=MODULES, client_extras=CLIENT_EXTRAS, action="new",
+                                   modules=MODULES, client_extras=CLIENT_EXTRAS, chat_levels=CHAT_LEVELS, action="new",
                                    dash_sections=DASHBOARD_SECTIONS,
                                    user_dash_sections=set(dash),
                                    all_clients=all_clients, managed_ids=set(managed),
@@ -98,7 +107,7 @@ def new_user():
         except Exception as e:
             flash(f"Error: {e}", "error")
             return render_template("users/form.html", user=data, perms=perms,
-                                   modules=MODULES, client_extras=CLIENT_EXTRAS, action="new",
+                                   modules=MODULES, client_extras=CLIENT_EXTRAS, chat_levels=CHAT_LEVELS, action="new",
                                    dash_sections=DASHBOARD_SECTIONS,
                                    user_dash_sections=set(dash),
                                    all_clients=all_clients, managed_ids=set(managed),
@@ -107,7 +116,7 @@ def new_user():
     empty_perms = {m: {"view": False, "create": False, "edit": False, "delete": False}
                    for m in MODULES}
     return render_template("users/form.html", user={}, perms=empty_perms,
-                           modules=MODULES, client_extras=CLIENT_EXTRAS, action="new",
+                           modules=MODULES, client_extras=CLIENT_EXTRAS, chat_levels=CHAT_LEVELS, action="new",
                            dash_sections=DASHBOARD_SECTIONS,
                            user_dash_sections=set(),
                            all_clients=all_clients, managed_ids=set(),
@@ -128,6 +137,10 @@ def edit_user(user_id):
     candidates  = _team_candidates(exclude_id=user_id)
     if request.method == "POST":
         data    = request.form.to_dict()
+        if row["role"] == "god":
+            data.pop("chat_level", None)   # the owner always has the full chat
+        else:
+            _apply_chat_settings(data, request.form)
         perms   = _parse_permissions(request.form)
         dash    = _parse_dashboard_sections(request.form)
         managed = _parse_managed_clients(request.form)
@@ -135,7 +148,7 @@ def edit_user(user_id):
         if not data.get("name") or not data.get("email"):
             flash("Name and email are required.", "error")
             return render_template("users/form.html", user=data, perms=perms,
-                                   modules=MODULES, client_extras=CLIENT_EXTRAS, action="edit", user_id=user_id,
+                                   modules=MODULES, client_extras=CLIENT_EXTRAS, chat_levels=CHAT_LEVELS, action="edit", user_id=user_id,
                                    dash_sections=DASHBOARD_SECTIONS,
                                    user_dash_sections=set(dash),
                                    all_clients=all_clients, managed_ids=set(managed),
@@ -159,7 +172,7 @@ def edit_user(user_id):
     managed_ids = {c["id"] for c in all_clients if c["sales_rep_id"] == user_id}
     team_ids = {u["id"] for u in candidates if u.get("manager_id") == user_id}
     return render_template("users/form.html", user=dict(row), perms=perms,
-                           modules=MODULES, client_extras=CLIENT_EXTRAS, action="edit", user_id=user_id,
+                           modules=MODULES, client_extras=CLIENT_EXTRAS, chat_levels=CHAT_LEVELS, action="edit", user_id=user_id,
                            dash_sections=DASHBOARD_SECTIONS,
                            user_dash_sections=user_dash,
                            all_clients=all_clients, managed_ids=managed_ids,
