@@ -66,9 +66,11 @@ def new_dispatch():
             return render_template("transit/form.html", dispatch=data, action="new",
                                    suppliers=suppliers, products=products)
         is_draft = data.get("status") == "draft"
+        skip_production = bool(data.get("skip_production"))
         # Validate dispatch qty does not exceed available production qty.
-        # Drafts skip this check — availability is re-validated on activation instead.
-        if not is_draft:
+        # Drafts skip this check — availability is re-validated on activation instead —
+        # and so does a dispatch that skips production, which needs none.
+        if not is_draft and not skip_production:
             errors = []
             for it in items:
                 pid = int(it["product_id"]) if it.get("product_id") else None
@@ -94,6 +96,9 @@ def new_dispatch():
             flash(w, "warning")
         if is_draft:
             flash("Draft dispatch saved — no stock moved yet.", "success")
+        elif skip_production:
+            flash("Dispatch created — added straight to in-transit, production stock untouched.",
+                  "success")
         else:
             flash("Dispatch created.", "success")
         return redirect(url_for("transit.detail", dispatch_id=did))
@@ -124,7 +129,7 @@ def activate(dispatch_id):
     else:
         for w in warnings:
             flash(w, "warning")
-        flash("Dispatch activated — stock moved to in-transit.", "success")
+        flash("Dispatch activated — stock is now in transit.", "success")
     return redirect(url_for("transit.detail", dispatch_id=dispatch_id))
 
 
@@ -174,6 +179,10 @@ def edit_dispatch(dispatch_id):
             "expected_arrival": request.form.get("expected_arrival") or None,
             "notes":            request.form.get("notes", "").strip() or None,
         }
+        # Only a draft offers the skip-production box: a live dispatch's stock
+        # has already moved under its choice.
+        if dispatch["status"] == "draft":
+            data["skip_production"] = bool(request.form.get("skip_production"))
         if not data["name"]:
             flash("Dispatch name is required.", "error")
         else:

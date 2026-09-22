@@ -35,6 +35,17 @@
           <label>Notes</label>
           <input type="text" name="notes" value="{{ dispatch.get('notes','') }}" placeholder="Container number, tracking ID…">
         </div>
+        <div class="form-group span-2">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:0">
+            <input type="checkbox" id="skipProduction" name="skip_production" value="1" style="width:auto"
+                   onchange="onSkipProductionChange()" {{ 'checked' if dispatch.get('skip_production') }}>
+            Skip production
+          </label>
+          <div style="font-size:12px;color:var(--text-muted);margin-top:4px">
+            For goods that never went through a production order: they go straight into transit
+            and nothing is deducted from production stock.
+          </div>
+        </div>
       </div>
 
       <!-- Line items -->
@@ -47,7 +58,7 @@
           <thead>
             <tr>
               <th>Product / Sub-product</th>
-              <th style="text-align:center">In Production</th>
+              <th class="prod-qty-cell" style="text-align:center">In Production</th>
               <th>Quantity *</th>
               <th>Price (₹)</th>
               <th>CBM</th>
@@ -299,6 +310,18 @@ window.__dirtyCheck = () => ({
   save: null,
   saveDraft: _submitAsDraft,
 });
+/* ── Skip production: the dispatch takes nothing from production stock ─────── */
+function skipProduction() {
+  const cb = document.getElementById('skipProduction');
+  return !!(cb && cb.checked);
+}
+function onSkipProductionChange() {
+  document.getElementById('itemsTable').classList.toggle('skip-prod', skipProduction());
+  document.querySelectorAll('#itemsBody [name^="quantity_"]').forEach(validateQty);
+  markFormDirty();
+}
+document.getElementById('itemsTable').classList.toggle('skip-prod', skipProduction());
+
 /* ── Inline qty validation ────────────────────────────────────────────────── */
 function validateQty(inp) {
   const row    = inp.closest('tr');
@@ -308,7 +331,7 @@ function validateQty(inp) {
   const prodQty = parseFloat(inp.dataset.productionQty);
   const val     = parseFloat(inp.value) || 0;
   const hint    = inp.parentNode.querySelector('.qty-hint');
-  if (val > prodQty) {
+  if (val > prodQty && !skipProduction()) {
     inp.style.outline = '2px solid var(--danger)';
     if (hint) { hint.style.display = ''; hint.textContent = `Exceeds production stock (${prodQty})`; }
   } else {
@@ -322,6 +345,8 @@ document.getElementById('dispatchForm').addEventListener('submit', function(e) {
   _formDirty = false;
   // Drafts may exceed production stock — skip the over-quantity gate for them.
   if (e.submitter && e.submitter.value === 'draft') return;
+  // A dispatch that skips production needs no production stock at all.
+  if (skipProduction()) return;
   const bad = [];
   document.querySelectorAll('#itemsBody tr').forEach(row => {
     const qtyInp  = row.querySelector('[name^="quantity_"]');
@@ -382,5 +407,8 @@ function qtyModalClose() {
 .cb-option:last-child { border-bottom:none; }
 .cb-option:hover, .cb-option.cb-active { background:var(--bg-alt); }
 .qty-hint { font-size:11px; color:var(--danger); margin-top:2px; display:none; }
+/* Skip production: the In Production column is irrelevant, so fade it and drop the → shortcut */
+#itemsTable.skip-prod .prod-qty-cell { opacity:.35; }
+#itemsTable.skip-prod .prod-qty-cell button { display:none; }
 </style>
 {% endblock %}

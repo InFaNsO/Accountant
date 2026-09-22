@@ -16,6 +16,15 @@
       so changes here only rewrite the lines. Stock moves when you activate it.
     </div>
   </div>
+  {% elif dispatch.skip_production %}
+  <div class="card" style="margin-bottom:16px;border-left:3px solid var(--warning)">
+    <div class="card-body" style="padding:12px 18px;font-size:13px;color:var(--text-muted)">
+      This dispatch is <strong style="color:var(--warning)">live</strong> and skipped production, so
+      changes only touch transit: raising a quantity adds to it, lowering it takes the difference off,
+      and switching a line's range moves the quantity between the two products in transit. Production
+      stock is never touched. A line that has already been received cannot switch range.
+    </div>
+  </div>
   {% else %}
   <div class="card" style="margin-bottom:16px;border-left:3px solid var(--warning)">
     <div class="card-body" style="padding:12px 18px;font-size:13px;color:var(--text-muted)">
@@ -44,7 +53,7 @@
             <option value="{{ s.id }}" {% if s.id == dispatch.supplier_id %}selected{% endif %}>{{ s.name }}</option>
             {% endfor %}
           </select>
-          {% if dispatch.status != 'draft' %}
+          {% if dispatch.status != 'draft' and not dispatch.skip_production %}
           <div style="font-size:11px;color:var(--text-muted);margin-top:4px">
             Changing this re-points each line's purchase-order claim to the new supplier.
           </div>
@@ -65,6 +74,18 @@
         <label>Notes</label>
         <textarea name="notes" rows="2">{{ dispatch.notes or '' }}</textarea>
       </div>
+      {% if dispatch.status == 'draft' %}
+      <div class="form-group" style="margin-top:14px">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:0">
+          <input type="checkbox" name="skip_production" value="1" style="width:auto"
+                 {{ 'checked' if dispatch.skip_production }}>
+          Skip production
+        </label>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:4px">
+          On activation the goods go straight into transit and nothing is deducted from production stock.
+        </div>
+      </div>
+      {% endif %}
     </div>
   </div>
 
@@ -147,6 +168,7 @@
 <script>
 const ECO_MAP  = {{ eco_map | tojson }};
 const IS_DRAFT = {{ 'true' if dispatch.status == 'draft' else 'false' }};
+const SKIP_PRODUCTION = {{ 'true' if dispatch.skip_production else 'false' }};
 /* production_qty per catalogue line, so the form can show the real ceiling. */
 const PROD_QTY = (function () {
   var m = {};
@@ -183,6 +205,13 @@ function updateHint(row) {
   var qty      = parseFloat(row.querySelector('[name^="qty_"]').value) || 0;
   var switched = key !== row.dataset.origKey;
 
+  /* Skipped production: no production ceiling, only what's been received. */
+  if (SKIP_PRODUCTION) {
+    hint.textContent = received ? 'Min ' + received + ' already received' : '';
+    hint.style.color = qty < received - 1e-9 ? 'var(--danger)' : 'var(--text-muted)';
+    return;
+  }
+
   /* Switching re-applies the whole line to the other range, so the ceiling is that
      range's production. Staying put only needs production to cover the increase. */
   var max = switched ? avail : origQty + avail;
@@ -205,7 +234,10 @@ document.addEventListener('DOMContentLoaded', function () {
 window.__dirtyCheck = function () {
   var form = document.getElementById('editForm');
   var dirty = Array.from(form.querySelectorAll('input, select, textarea'))
-    .some(function (el) { return el.type !== 'hidden' && el.value !== el.defaultValue; });
+    .some(function (el) {
+      if (el.type === 'checkbox') return el.checked !== el.defaultChecked;
+      return el.type !== 'hidden' && el.value !== el.defaultValue;
+    });
   return { isDirty: dirty, save: dirty ? function () { form.submit(); } : null };
 };
 </script>

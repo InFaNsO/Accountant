@@ -595,6 +595,10 @@ def _create_schema(db):
     # Palm purchases can be saved as a draft (no stock-in until activated). Existing
     # rows default to 'active' so historical purchases keep their applied stock.
     _add_column(db, "palm_purchases",          "status",             "TEXT DEFAULT 'active'")
+    # A dispatch that skips production goes straight into transit: it never takes
+    # stock out of production_qty or claims purchase-order quantity, so nothing
+    # that reverses it (edit, delete) may put stock back into production either.
+    _add_column(db, "dispatches",              "skip_production",    "INTEGER DEFAULT 0")
     # Invoice locks: while locked, drafts can be created but not issued.
     # tally_lock is a manual toggle; the balance lock engages automatically while
     # the client's outstanding debt exceeds balance_lock_limit (computed live,

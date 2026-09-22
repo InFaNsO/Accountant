@@ -2428,7 +2428,8 @@ def get_dispatch_details(dispatch_id):
     lines = [
         f"DISP-{dispatch_id:04d}: {d['name']}",
         f"Supplier: {d['supplier'] or '—'}",
-        f"Status: {d['status']}",
+        f"Status: {d['status']}"
+        + (" (production skipped: went straight to transit)" if d["skip_production"] else ""),
         f"Dispatched: {d['dispatch_date'] or '—'} | Expected arrival: {d['expected_arrival'] or '—'}",
         f"Notes: {d['notes'] or '—'}",
         "",
@@ -2587,30 +2588,10 @@ def delete_dispatch(dispatch_id):
     d = db.execute("SELECT name FROM dispatches WHERE id=?", (dispatch_id,)).fetchone()
     if not d:
         return jsonify({"error": f"Dispatch ID {dispatch_id} not found."}), 404
-    items = db.execute("SELECT * FROM dispatch_items WHERE dispatch_id=?", (dispatch_id,)).fetchall()
-    for it in items:
-        unreceived = _f(it["quantity"]) - _f(it["qty_received"])
-        if unreceived > 0:
-            _update_qty(db, it["product_id"], it["sub_product_id"], "in_transit_qty", -unreceived)
-            _update_qty(db, it["product_id"], it["sub_product_id"], "production_qty", +unreceived)
-        allocs = db.execute(
-            "SELECT * FROM dispatch_po_allocations WHERE dispatch_item_id=?", (it["id"],)
-        ).fetchall()
-        for a in allocs:
-            db.execute(
-                "UPDATE purchase_order_items SET qty_dispatched=qty_dispatched-? WHERE id=?",
-                (a["quantity"], a["po_item_id"]),
-            )
-            po_row = db.execute(
-                "SELECT po_id FROM purchase_order_items WHERE id=?", (a["po_item_id"],)
-            ).fetchone()
-            if po_row:
-                db.execute(
-                    "UPDATE purchase_orders SET status='open' WHERE id=? AND status='closed'",
-                    (po_row["po_id"],),
-                )
-    db.execute("DELETE FROM dispatches WHERE id=?", (dispatch_id,))
-    db.commit()
+    # The same reversal the Transit page uses: it knows a draft moved nothing and a
+    # dispatch that skipped production has nothing to give back to production.
+    from ..services.transit_service import delete_dispatch as _delete_dispatch
+    _delete_dispatch(dispatch_id)
     return jsonify({"result": f"✓ Dispatch DISP-{dispatch_id:04d} ('{d['name']}') permanently deleted and stock movements reversed."})
 
 

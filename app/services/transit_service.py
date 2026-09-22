@@ -122,32 +122,36 @@ def get_dispatch_items(dispatch_id):
 
 
 def _apply_dispatch_item_stock(db, dispatch_id, di_id, product_id, sub_product_id, qty,
-                               supplier_id, notes, expected_arrival, label):
+                               supplier_id, notes, expected_arrival, label,
+                               skip_production=False):
     """Run FIFO PO deduction + move production_qty → in_transit_qty + log a movement
     for one dispatch item. Returns an optional warning string (or None).
 
     dispatch_id: parent dispatch row id (used for the stock_movement).
     di_id:       dispatch_item row id (used for the PO allocation rows).
+    skip_production: the goods never passed through production, so only
+                     in_transit_qty grows — no production_qty, no PO claim.
     """
-    allocations, leftover = _deduct_production_fifo(
-        db, product_id, sub_product_id, qty, supplier_id
-    )
-    for po_item_id, alloc_qty in allocations:
-        db.execute(
-            """INSERT INTO dispatch_po_allocations
-                   (dispatch_item_id, po_item_id, quantity)
-               VALUES (?,?,?)""",
-            (di_id, po_item_id, alloc_qty),
-        )
     warning = None
-    if leftover > 0.001:
-        warning = (
-            f"Only {qty - leftover} of {qty} units found in open POs for "
-            f"item {label}; {leftover} taken from production anyway."
+    if not skip_production:
+        allocations, leftover = _deduct_production_fifo(
+            db, product_id, sub_product_id, qty, supplier_id
         )
+        for po_item_id, alloc_qty in allocations:
+            db.execute(
+                """INSERT INTO dispatch_po_allocations
+                       (dispatch_item_id, po_item_id, quantity)
+                   VALUES (?,?,?)""",
+                (di_id, po_item_id, alloc_qty),
+            )
+        if leftover > 0.001:
+            warning = (
+                f"Only {qty - leftover} of {qty} units found in open POs for "
+                f"item {label}; {leftover} taken from production anyway."
+            )
+        # Full qty leaves production regardless of PO coverage
+        _update_qty(db, product_id, sub_product_id, "production_qty", -qty)
 
-    # Move qty: production_qty → in_transit_qty (full qty regardless of PO coverage)
-    _update_qty(db, product_id, sub_product_id, "production_qty", -qty)
     _update_qty(db, product_id, sub_product_id, "in_transit_qty", +qty)
 
     db.execute(
@@ -166,18 +170,24 @@ def create_dispatch(data, items):
 
     A draft (data['status'] == 'draft') records the dispatch and its items but moves
     NO stock — the production → transit move is deferred to activate_dispatch().
+
+    data['skip_production'] truthy: the goods go straight into transit — production
+    stock and purchase orders are left alone.
     """
     db = get_db()
     is_draft = (data.get("status") == "draft")
+    skip_production = bool(data.get("skip_production"))
     cur = db.execute(
-        """INSERT INTO dispatches (name, supplier_id, dispatch_date, expected_arrival, status, notes)
-           VALUES (?,?,?,?,?,?)""",
+        """INSERT INTO dispatches (name, supplier_id, dispatch_date, expected_arrival, status, notes,
+                                   skip_production)
+           VALUES (?,?,?,?,?,?,?)""",
         (data["name"],
          data.get("supplier_id") or None,
          data.get("dispatch_date") or None,
          data.get("expected_arrival") or None,
          "draft" if is_draft else "in_transit",
-         data.get("notes")),
+         data.get("notes"),
+         1 if skip_production else 0),
     )
     dispatch_id = cur.lastrowid
 
@@ -207,7 +217,7 @@ def create_dispatch(data, items):
         w = _apply_dispatch_item_stock(
             db, dispatch_id, di_cur.lastrowid, product_id, sub_product_id, qty, supplier_id,
             data.get("notes"), data.get("expected_arrival") or None,
-            it.get("display_name", product_id),
+            it.get("display_name", product_id), skip_production,
         )
         if w:
             warnings.append(w)
@@ -221,22 +231,25 @@ def activate_dispatch(dispatch_id):
     moving production_qty → in_transit_qty for every line.
 
     Re-checks availability first: if any line's quantity exceeds the product's current
-    production_qty, nothing is applied. Returns (ok, errors, warnings).
+    production_qty, nothing is applied. A dispatch that skips production needs no
+    production stock, so it is never refused. Returns (ok, errors, warnings).
     """
     db = get_db()
     d = db.execute("SELECT * FROM dispatches WHERE id=?", (dispatch_id,)).fetchone()
     if not d or d["status"] != "draft":
         return False, ["This dispatch is not a draft."], []
+    skip_production = bool(d["skip_production"])
 
     items = get_dispatch_items(dispatch_id)
     errors = []
-    for it in items:
-        available = _available_production(db, it["product_id"], it["sub_product_id"])
-        if it["quantity"] > available + 1e-9:
-            errors.append(
-                f"{it['display_name']}: dispatch qty {it['quantity']} exceeds "
-                f"production qty {available}."
-            )
+    if not skip_production:
+        for it in items:
+            available = _available_production(db, it["product_id"], it["sub_product_id"])
+            if it["quantity"] > available + 1e-9:
+                errors.append(
+                    f"{it['display_name']}: dispatch qty {it['quantity']} exceeds "
+                    f"production qty {available}."
+                )
     if errors:
         return False, errors, []
 
@@ -245,7 +258,7 @@ def activate_dispatch(dispatch_id):
     for it in items:
         w = _apply_dispatch_item_stock(
             db, dispatch_id, it["id"], it["product_id"], it["sub_product_id"], it["quantity"],
-            supplier_id, d["notes"], d["expected_arrival"], it["display_name"],
+            supplier_id, d["notes"], d["expected_arrival"], it["display_name"], skip_production,
         )
         if w:
             warnings.append(w)
@@ -257,20 +270,25 @@ def activate_dispatch(dispatch_id):
 def delete_dispatch(dispatch_id):
     """Reverse in_transit_qty → production_qty for unreceived items, undo PO allocations.
 
-    A draft never moved any stock, so it is simply deleted with no reversal.
+    A draft never moved any stock, so it is simply deleted with no reversal. A
+    dispatch that skipped production only comes off transit — it never took
+    anything out of production to give back.
     """
     db = get_db()
-    d = db.execute("SELECT status FROM dispatches WHERE id=?", (dispatch_id,)).fetchone()
+    d = db.execute("SELECT status, skip_production FROM dispatches WHERE id=?",
+                   (dispatch_id,)).fetchone()
     if d and d["status"] == "draft":
         db.execute("DELETE FROM dispatches WHERE id=?", (dispatch_id,))
         db.commit()
         return
+    skip_production = bool(d and d["skip_production"])
     items = get_dispatch_items(dispatch_id)
     for it in items:
         unreceived = it["quantity"] - (it["qty_received"] or 0)
         if unreceived > 0:
             _update_qty(db, it["product_id"], it["sub_product_id"], "in_transit_qty",  -unreceived)
-            _update_qty(db, it["product_id"], it["sub_product_id"], "production_qty",  +unreceived)
+            if not skip_production:
+                _update_qty(db, it["product_id"], it["sub_product_id"], "production_qty", +unreceived)
         # Reverse PO allocations
         allocs = db.execute(
             "SELECT * FROM dispatch_po_allocations WHERE dispatch_item_id=?",
@@ -335,14 +353,18 @@ def _unwind_allocations(db, di_id, qty=None):
             remaining -= give_back
 
 
-def _reverse_item_stock(db, dispatch_id, product_id, sub_product_id, qty, note):
+def _reverse_item_stock(db, dispatch_id, product_id, sub_product_id, qty, note,
+                        skip_production=False):
     """Put `qty` back: in_transit_qty → production_qty, with an audit row on each
-    bucket. The mirror of the production → transit move a dispatch performs."""
+    bucket. The mirror of the production → transit move a dispatch performs.
+    With skip_production the qty only comes off transit: it never came from
+    production, so there is nothing to return there."""
     if qty <= 1e-9:
         return
     _update_qty(db, product_id, sub_product_id, "in_transit_qty", -qty)
-    _update_qty(db, product_id, sub_product_id, "production_qty", +qty)
-    for mtype in ("dispatch_deduct", "production_add"):
+    if not skip_production:
+        _update_qty(db, product_id, sub_product_id, "production_qty", +qty)
+    for mtype in ("dispatch_deduct",) if skip_production else ("dispatch_deduct", "production_add"):
         db.execute(
             """INSERT INTO stock_movements
                    (product_id, sub_product_id, movement_type, quantity, notes, dispatch_id)
@@ -378,6 +400,9 @@ def update_dispatch(dispatch_id, data, item_updates):
       • quantity down → give back the difference, transit → production
       • switched line → fully reverse the old side, then apply to the new one,
         so both products' production and transit buckets end up correct
+    A dispatch that skips production makes the same moves on transit alone, with
+    no production ceiling. Only a draft can change data['skip_production']; a live
+    dispatch keeps the choice its stock was moved under.
     Everything is validated before anything is written. Returns (ok, errors, warnings).
     """
     db = get_db()
@@ -386,6 +411,10 @@ def update_dispatch(dispatch_id, data, item_updates):
         return False, ["Dispatch not found."], []
 
     is_draft  = (d["status"] == "draft")
+    if is_draft and "skip_production" in data:
+        skip_production = bool(data["skip_production"])
+    else:
+        skip_production = bool(d["skip_production"])
     items     = {it["id"]: it for it in get_dispatch_items(dispatch_id)}
     new_supplier = int(data["supplier_id"]) if data.get("supplier_id") else None
     supplier_changed = (new_supplier != d["supplier_id"])
@@ -421,13 +450,13 @@ def update_dispatch(dispatch_id, data, item_updates):
                     )
                     continue
                 avail = _available_production(db, new_pid, new_sid)
-                if new_qty > avail + 1e-9:
+                if not skip_production and new_qty > avail + 1e-9:
                     errors.append(
                         f"{it['display_name']}: the other range only has {avail:g} in "
                         f"production — cannot switch {new_qty:g}."
                     )
                     continue
-            else:
+            elif not skip_production:
                 delta = new_qty - it["quantity"]
                 if delta > 1e-9:
                     avail = _available_production(db, it["product_id"], it["sub_product_id"])
@@ -444,12 +473,13 @@ def update_dispatch(dispatch_id, data, item_updates):
 
     # ── Apply ────────────────────────────────────────────────────────────────
     db.execute(
-        """UPDATE dispatches SET name=?, supplier_id=?, dispatch_date=?, expected_arrival=?, notes=?
+        """UPDATE dispatches SET name=?, supplier_id=?, dispatch_date=?, expected_arrival=?, notes=?,
+                                 skip_production=?
            WHERE id=?""",
         (data["name"], new_supplier,
          data.get("dispatch_date") or None,
          data.get("expected_arrival") or None,
-         data.get("notes"), dispatch_id),
+         data.get("notes"), 1 if skip_production else 0, dispatch_id),
     )
 
     warnings = []
@@ -471,7 +501,7 @@ def update_dispatch(dispatch_id, data, item_updates):
             # Unwind the old side completely, then apply the line to the new one.
             note = f"Dispatch #{dispatch_id} edit — switched off {it['display_name']}"
             _reverse_item_stock(db, dispatch_id, it["product_id"], it["sub_product_id"],
-                                it["quantity"], note)
+                                it["quantity"], note, skip_production)
             _unwind_allocations(db, it["id"])
             db.execute(
                 """UPDATE dispatch_items
@@ -482,7 +512,7 @@ def update_dispatch(dispatch_id, data, item_updates):
             w = _apply_dispatch_item_stock(
                 db, dispatch_id, it["id"], new_pid, new_sid, new_qty, new_supplier,
                 f"Dispatch #{dispatch_id} edit — switched range",
-                data.get("expected_arrival") or None, it["display_name"],
+                data.get("expected_arrival") or None, it["display_name"], skip_production,
             )
             if w:
                 warnings.append(w)
@@ -497,16 +527,17 @@ def update_dispatch(dispatch_id, data, item_updates):
             w = _apply_dispatch_item_stock(
                 db, dispatch_id, it["id"], it["product_id"], it["sub_product_id"], delta,
                 new_supplier, f"Dispatch #{dispatch_id} edit — quantity increased",
-                data.get("expected_arrival") or None, it["display_name"],
+                data.get("expected_arrival") or None, it["display_name"], skip_production,
             )
             if w:
                 warnings.append(w)
         elif delta < -1e-9:
             give_back = -delta
             _reverse_item_stock(db, dispatch_id, it["product_id"], it["sub_product_id"],
-                                give_back, f"Dispatch #{dispatch_id} edit — quantity reduced")
+                                give_back, f"Dispatch #{dispatch_id} edit — quantity reduced",
+                                skip_production)
             _unwind_allocations(db, it["id"], give_back)
-        elif supplier_changed:
+        elif supplier_changed and not skip_production:
             # Same product, same quantity, different supplier: the claim has to move
             # to that supplier's POs, but no stock changes hands.
             _unwind_allocations(db, it["id"])

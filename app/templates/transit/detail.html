@@ -5,7 +5,7 @@
 {% block topbar_actions %}
   {% if dispatch.status == 'draft' %}
   <form method="post" action="{{ url_for('transit.activate', dispatch_id=dispatch.id) }}" style="display:inline">
-    <button class="btn btn-primary" onclick="return confirm('Activate this dispatch? Stock will move from production to in-transit.')">Activate</button>
+    <button class="btn btn-primary" onclick="return confirm({{ ('Activate this dispatch? Stock will be added to in-transit; production is skipped, so nothing comes out of production.' if dispatch.skip_production else 'Activate this dispatch? Stock will move from production to in-transit.')|tojson|forceescape }})">Activate</button>
   </form>
   {% elif dispatch.status != 'received' %}
   <button class="btn btn-primary" onclick="fillAll(); document.getElementById('receiveForm').submit()"><span class="btn-label-mobile">Receive All</span><span class="lbl-mobile-only">Receive</span></button>
@@ -25,8 +25,13 @@
 {% if dispatch.status == 'draft' %}
 <div class="card" style="margin-bottom:18px;border-left:3px solid var(--warning)">
   <div class="card-body" style="padding:14px 20px;font-size:13px;color:var(--text-secondary)">
+    {% if dispatch.skip_production %}
+    <strong style="color:var(--warning)">Draft</strong> — nothing has been added to transit yet.
+    Click <strong>Activate</strong> to commit this dispatch. Production is skipped, so it needs no production stock.
+    {% else %}
     <strong style="color:var(--warning)">Draft</strong> — no stock has moved from production to transit yet.
     Click <strong>Activate</strong> to commit this dispatch (production stock must be available).
+    {% endif %}
   </div>
 </div>
 {% endif %}
@@ -43,6 +48,7 @@
         {{ row('Expected Arrival', dispatch.expected_arrival) }}
         {{ row('Created', dispatch.created_at[:10] if dispatch.created_at else '—') }}
         {% if dispatch.notes %}{{ row('Notes', dispatch.notes) }}{% endif %}
+        {% if dispatch.skip_production %}{{ row('Production', 'Skipped — not deducted from production stock') }}{% endif %}
         <tr>
           <td style="padding:10px 20px;color:var(--text-muted);font-size:13px;border-bottom:1px solid var(--border)">Status</td>
           <td style="padding:10px 20px;border-bottom:1px solid var(--border)">
