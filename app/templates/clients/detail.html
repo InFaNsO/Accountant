@@ -385,7 +385,7 @@
             </span>
           </div>
           {% endif %}
-          <div class="info-row"><span class="info-label">Client since</span><span class="info-value muted">{{ client.created_at[:10] }}</span></div>
+          <div class="info-row"><span class="info-label">Client since</span><span class="info-value muted">{{ client.created_at|dmy }}</span></div>
         </div>
       </div>
     </div>

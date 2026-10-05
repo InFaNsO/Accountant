@@ -44,9 +44,9 @@
       <table style="width:100%;border-collapse:collapse">
         {% macro row(l,v) %}<tr><td style="padding:10px 20px;color:var(--text-muted);font-size:13px;width:40%;border-bottom:1px solid var(--border)">{{ l }}</td><td style="padding:10px 20px;font-weight:600;border-bottom:1px solid var(--border)">{{ v or '—' }}</td></tr>{% endmacro %}
         {{ row('Supplier', dispatch.supplier_name) }}
-        {{ row('Dispatch Date', dispatch.dispatch_date) }}
-        {{ row('Expected Arrival', dispatch.expected_arrival) }}
-        {{ row('Created', dispatch.created_at[:10] if dispatch.created_at else '—') }}
+        {{ row('Dispatch Date', dispatch.dispatch_date|dmy) }}
+        {{ row('Expected Arrival', dispatch.expected_arrival|dmy) }}
+        {{ row('Created', dispatch.created_at|dmy) }}
         {% if dispatch.notes %}{{ row('Notes', dispatch.notes) }}{% endif %}
         {% if dispatch.skip_production %}{{ row('Production', 'Skipped — not deducted from production stock') }}{% endif %}
         <tr>

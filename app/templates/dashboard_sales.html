@@ -187,7 +187,7 @@ function dashDateChange() {
 const chartData = {{ stats.chart | tojson }};
 const labels = chartData.map(d => {
   const [y, mo, day] = d.month.split('-');
-  return new Date(y, mo-1, day).toLocaleString('default', {day:'numeric', month:'short'});
+  return day ? fmtDMY(d.month) : new Date(y, mo-1, 1).toLocaleString('en', {month:'short'}) + ' ' + String(y).slice(2);
 });
 const ctx = document.getElementById('revenueChart');
 if (ctx && typeof Chart !== 'undefined') {

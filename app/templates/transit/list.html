@@ -52,10 +52,10 @@
             <a href="{{ url_for('transit.detail', dispatch_id=d.id) }}" style="color:var(--accent);text-decoration:none">{{ d.name }}</a>
           </td>
           <td class="muted col-mobile-hide">{{ d.supplier_name or '—' }}</td>
-          <td class="muted col-mobile-hide">{{ d.dispatch_date or '—' }}</td>
+          <td class="muted col-mobile-hide">{{ d.dispatch_date|dmy }}</td>
           <td>
             {% if d.expected_arrival %}
-              <span style="font-weight:600">{{ d.expected_arrival }}</span>
+              <span style="font-weight:600">{{ d.expected_arrival|dmy }}</span>
             {% else %}—{% endif %}
           </td>
           <td style="text-align:center" class="muted col-mobile-hide">{{ d.item_count }}</td>

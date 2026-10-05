@@ -35,8 +35,8 @@
       {% endif %}
       <tr{% if _rc %} style="border-left:4px solid {{ _rc }}"{% endif %}>
         <td><a href="{{ url_for('invoices.detail', invoice_id=inv.id) }}" style="font-weight:600;color:var(--accent);text-decoration:none">{{ inv.invoice_number }}</a></td>
-        <td class="muted col-mobile-hide">{{ inv.issue_date }}</td>
-        <td class="muted col-mobile-hide">{{ inv.due_date or '—' }}</td>
+        <td class="muted col-mobile-hide">{{ inv.issue_date|dmy }}</td>
+        <td class="muted col-mobile-hide">{{ inv.due_date|dmy }}</td>
         <td class="fw-700">{{ inv.total|inr }}</td>
         {% if can_financials %}
         <td class="col-mobile-hide">{{ inv.amount_paid|inr }}</td>

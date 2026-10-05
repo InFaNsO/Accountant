@@ -54,11 +54,13 @@ def _find_fonts():
 
 
 def _dmy(iso):
-    """'2026-07-27' → '27-07-2026' (leave anything unparseable untouched)."""
+    """'2026-07-27' → '27 Jul 26' (leave anything unparseable untouched)."""
+    from .. import format_date
     try:
-        return datetime.strptime(iso, "%Y-%m-%d").strftime("%d-%m-%Y")
+        datetime.strptime(iso, "%Y-%m-%d")
     except (TypeError, ValueError):
         return iso or ""
+    return format_date(iso)
 
 
 class _LedgerPDF(FPDF):
@@ -163,7 +165,8 @@ class _LedgerPDF(FPDF):
         self.set_y(-11)
         self.set_font(self.font_family_name, "", 7.5)
         self.set_text_color(*_COL_MUTED)
-        stamp = datetime.now().strftime("%d-%m-%Y %H:%M")
+        from .. import format_date
+        stamp = format_date(datetime.now(), with_time=True)
         self.cell(120, 5, self._txt(f"Generated {stamp} - Ledger"), new_x=XPos.RIGHT, new_y=YPos.TOP)
         self.cell(66, 5, f"Page {self.page_no()}/{{nb}}", align="R")
 

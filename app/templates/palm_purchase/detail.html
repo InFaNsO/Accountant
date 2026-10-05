@@ -36,8 +36,8 @@
           {% else %}<span class="badge badge-active">Active</span>{% endif %}
         </span></div>
         <div class="info-row"><span class="info-label">Supplier</span><span class="info-value">{{ pp.supplier_name or 'Walk-in / Other' }}</span></div>
-        <div class="info-row"><span class="info-label">Date</span><span class="info-value">{{ pp.purchase_date }}</span></div>
-        <div class="info-row"><span class="info-label">Created</span><span class="info-value muted">{{ pp.created_at[:16] }}</span></div>
+        <div class="info-row"><span class="info-label">Date</span><span class="info-value">{{ pp.purchase_date|dmy }}</span></div>
+        <div class="info-row"><span class="info-label">Created</span><span class="info-value muted">{{ pp.created_at|dmyt }}</span></div>
         {% if pp.notes %}<div class="info-row"><span class="info-label">Notes</span><span class="info-value muted">{{ pp.notes }}</span></div>{% endif %}
       </div>
     </div>

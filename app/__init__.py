@@ -77,6 +77,33 @@ def _format_indian(value):
     return f"-{formatted}" if negative else formatted
 
 
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def format_date(value, default="—", with_time=False):
+    """App-wide date style: dd Mmm yy, e.g. 27 Aug 26 (with_time adds ' HH:MM').
+
+    Accepts ISO strings ('2026-08-27', '2026-08-27 14:30:05', '2026-08-27T14:30'),
+    date/datetime objects, or empty values (returns `default`). Anything it can't
+    parse is returned unchanged rather than hidden.
+    """
+    if value is None or value == "":
+        return default
+    if hasattr(value, "isoformat"):
+        s = value.isoformat(sep=" ") if hasattr(value, "hour") else value.isoformat()
+    else:
+        s = str(value).strip()
+    try:
+        y, m, d = int(s[0:4]), int(s[5:7]), int(s[8:10])
+        out = f"{d:02d} {_MONTHS[m - 1]} {y % 100:02d}"
+    except (ValueError, IndexError):
+        return s
+    if with_time and len(s) >= 16 and s[10] in " T":
+        out += " " + s[11:16]
+    return out
+
+
 def _stock_val(pcs, ppb=0):
     """Render a stock quantity as dual spans for the Boxes/Pcs CSS toggle.
     Usage in templates: {{ stock_val(product.stock_qty, product.pcs_per_carton) }}
@@ -110,6 +137,8 @@ def create_app():
     app.jinja_env.filters["inr_compact"] = _format_inr_compact
     app.jinja_env.filters["indian"]      = _format_indian
     app.jinja_env.filters["enumerate"]   = enumerate
+    app.jinja_env.filters["dmy"]         = format_date
+    app.jinja_env.filters["dmyt"]        = lambda v, default="—": format_date(v, default, with_time=True)
     app.jinja_env.globals["stock_val"]   = _stock_val
 
     @app.context_processor

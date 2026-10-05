@@ -707,7 +707,8 @@
     if (mins < 1) return "just now";
     if (mins < 60) return mins + "m ago";
     if (mins < 1440) return Math.round(mins / 60) + "h ago";
-    return then.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+    const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    return String(then.getDate()).padStart(2, "0") + " " + MON[then.getMonth()] + " " + String(then.getFullYear()).slice(2);
   }
 
   /* ── Unread badge ────────────────────────────────────────────────────── */

@@ -464,6 +464,11 @@ function _fmtInr(n) {
 
 /* ── Date helpers ────────────────────────────────────────────── */
 const _fmt = d => d.toISOString().slice(0,10);
+// App-wide display date: dd Mmm yy (27 Aug 26). Input values stay ISO.
+const _MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const fmtDMY = (iso, dash) => { const s = String(iso == null ? '' : iso);
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s); if (!m) return s || (dash == null ? '—' : dash);
+  return m[3] + ' ' + _MON[+m[2]-1] + ' ' + m[1].slice(2); };
 const _addD = (d, n) => { const r = new Date(d); r.setDate(r.getDate()+n); return r; };
 
 function _windowDates(w) {
@@ -705,7 +710,7 @@ function _renderLedger(data) {
     const runColor = e.running < 0 ? 'var(--danger)' : e.running > 0 ? 'var(--success)' : 'var(--warning)';
     const isBbf    = e.type === 'bbf';
     return `<tr style="border-bottom:1px solid var(--border)${isBbf ? ';background:var(--bg-alt)' : ''}">
-      <td style="padding:10px 16px;color:var(--text-muted);font-family:monospace;font-size:12px">${e.date || '—'}</td>
+      <td style="padding:10px 16px;color:var(--text-muted);font-family:monospace;font-size:12px">${fmtDMY(e.date)}</td>
       <td style="padding:10px 16px;font-weight:${isBbf ? 600 : 400}">${e.label}${badge(e.type)}</td>
       <td style="padding:10px 16px;text-align:right;color:var(--danger);font-weight:${e.debit ? 600 : 400}">${e.debit ? _fmtInr(e.debit) : '—'}</td>
       <td style="padding:10px 16px;text-align:right;color:var(--success);font-weight:${e.credit ? 600 : 400}">${e.credit ? _fmtInr(e.credit) : '—'}</td>

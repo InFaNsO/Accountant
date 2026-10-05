@@ -201,7 +201,7 @@ function inrShort(n){ n = +n || 0; const a = Math.abs(n), s = n < 0 ? '-' : '';
   if (a >= 1e5) return s + RS + (a/1e5).toFixed(2) + ' L';
   return s + fmtINR.format(a).replace(/\.00$/, ''); }
 const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-function fmtDate(iso){ if (!iso) return DASH; const [y,m,d] = String(iso).slice(0,10).split('-'); return `${+d} ${MON[+m-1]} ${y}`; }
+function fmtDate(iso){ if (!iso) return DASH; const [y,m,d] = String(iso).slice(0,10).split('-'); return `${d} ${MON[+m-1]} ${y.slice(2)}`; }
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function bal(n, short){ n = +n || 0; const cls = n < -0.005 ? 'ck-dr' : n > 0.005 ? 'ck-cr' : 'ck-nil';
   const txt = Math.abs(n) < 0.005 ? inr(0) : (short ? inrShort(Math.abs(n)) : inr(Math.abs(n))) + (n < -0.005 ? ' Dr' : ' Cr');

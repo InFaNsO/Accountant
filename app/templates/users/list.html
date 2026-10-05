@@ -42,7 +42,7 @@
               <span class="badge badge-inactive">Inactive</span>
             {% endif %}
           </td>
-          <td class="muted">{{ u.created_at[:10] }}</td>
+          <td class="muted">{{ u.created_at|dmy }}</td>
           <td style="text-align:right;display:flex;gap:6px;justify-content:flex-end">
             <a href="{{ url_for('users.edit_user', user_id=u.id) }}" class="btn btn-secondary btn-sm">Edit</a>
             {% if u.role != 'god' %}

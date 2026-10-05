@@ -53,7 +53,7 @@
           <td class="muted">{{ po.supplier_name or '—' }}</td>
           <td>
             {% if po.expected_completion %}
-              <span style="font-weight:600">{{ po.expected_completion }}</span>
+              <span style="font-weight:600">{{ po.expected_completion|dmy }}</span>
             {% else %}—{% endif %}
           </td>
           <td style="text-align:center" class="muted">{{ po.item_count }}</td>

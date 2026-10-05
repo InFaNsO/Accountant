@@ -38,9 +38,9 @@
         <span style="font-size:12px;background:rgba(99,102,241,.12);color:var(--accent);padding:4px 12px;border-radius:20px;font-weight:700">● Draft</span>
         {% endif %}
       </div>
-      <div style="font-size:13px;color:var(--text-muted)">Created <strong style="color:var(--text)">{{ tally.created_at[:10] if tally.created_at else '—' }}</strong></div>
+      <div style="font-size:13px;color:var(--text-muted)">Created <strong style="color:var(--text)">{{ tally.created_at|dmy }}</strong></div>
       {% if tally.applied_at %}
-      <div style="font-size:13px;color:var(--text-muted)">Applied <strong style="color:var(--success)">{{ tally.applied_at[:10] }}</strong></div>
+      <div style="font-size:13px;color:var(--text-muted)">Applied <strong style="color:var(--success)">{{ tally.applied_at|dmy }}</strong></div>
       {% endif %}
       {% if tally.notes %}
       <div style="font-size:13px;color:var(--text-muted)">{{ tally.notes }}</div>
@@ -132,7 +132,7 @@
               </tr>
               {% if item.refreshed_at %}
               <tr class="tally-refresh-row tally-cat-row cat-{{ cat_idx }}" style="border-bottom:1px solid var(--border)">
-                <td colspan="7" style="padding:2px 20px 6px;font-size:11px;color:var(--text-muted)">↻ Digital refreshed {{ item.refreshed_at[:16].replace('T',' ') }}</td>
+                <td colspan="7" style="padding:2px 20px 6px;font-size:11px;color:var(--text-muted)">↻ Digital refreshed {{ item.refreshed_at|dmyt }}</td>
               </tr>
               {% endif %}
 
@@ -172,7 +172,7 @@
               </tr>
               {% if group.refreshed_at %}
               <tr class="tally-refresh-row sub-of-{{ pid }} tally-cat-row cat-{{ cat_idx }}" style="background:var(--bg-alt)">
-                <td colspan="7" style="padding:2px 20px 5px;font-size:11px;color:var(--text-muted)">↻ Digital refreshed {{ group.refreshed_at[:16].replace('T',' ') }}</td>
+                <td colspan="7" style="padding:2px 20px 5px;font-size:11px;color:var(--text-muted)">↻ Digital refreshed {{ group.refreshed_at|dmyt }}</td>
               </tr>
               {% endif %}
 

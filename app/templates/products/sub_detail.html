@@ -139,7 +139,7 @@
         <tbody>
           {% for m in warehouse_history %}
           <tr>
-            <td class="muted font-mono" style="font-size:12px">{{ m.created_at[:16] if m.created_at else '—' }}</td>
+            <td class="muted font-mono" style="font-size:12px">{{ m.created_at|dmyt }}</td>
             <td>
               {% if m.movement_type == 'opening' %}
                 <span class="badge" style="background:rgba(99,102,241,.15);color:#6366f1">Opening Stock</span>
@@ -196,7 +196,7 @@
         <tbody>
           {% for m in production_history %}
           <tr>
-            <td class="muted font-mono" style="font-size:12px">{{ m.created_at[:16] if m.created_at else '—' }}</td>
+            <td class="muted font-mono" style="font-size:12px">{{ m.created_at|dmyt }}</td>
             <td>
               {% if m.movement_type == 'production_deduct' %}
                 <span class="badge" style="background:rgba(239,68,68,.12);color:var(--danger)">▼ Reduced</span>
@@ -225,7 +225,7 @@
         <tbody>
           {% for m in transit_history %}
           <tr>
-            <td class="muted font-mono" style="font-size:12px">{{ m.created_at[:16] if m.created_at else '—' }}</td>
+            <td class="muted font-mono" style="font-size:12px">{{ m.created_at|dmyt }}</td>
             <td>
               {% if m.movement_type == 'dispatch_deduct' %}
                 <span class="badge" style="background:rgba(239,68,68,.12);color:var(--danger)">▼ Reduced</span>
@@ -237,7 +237,7 @@
               {% endif %}
             </td>
             <td style="text-align:right;font-weight:700;color:var(--primary)">{{ stock_val(m.quantity, product.pcs_per_carton) }}</td>
-            <td class="muted" style="font-size:12px">{{ m.expected_arrival or '—' }}</td>
+            <td class="muted" style="font-size:12px">{{ m.expected_arrival|dmy }}</td>
             <td class="muted" style="font-size:12px">{{ m.notes or '—' }}</td>
           </tr>
           {% endfor %}

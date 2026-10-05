@@ -38,7 +38,7 @@
           <td style="padding:13px 20px;font-weight:600">
             <a href="{{ url_for('tallies.tally_detail', tally_id=t.id) }}" style="color:var(--accent);text-decoration:none">{{ t.name }}</a>
           </td>
-          <td style="padding:13px 20px;color:var(--text-muted);font-size:13px">{{ t.created_at[:10] if t.created_at else '—' }}</td>
+          <td style="padding:13px 20px;color:var(--text-muted);font-size:13px">{{ t.created_at|dmy }}</td>
           <td style="padding:13px 20px">
             {% if t.status == 'applied' %}
             <span style="font-size:11px;background:rgba(16,185,129,.12);color:var(--success);padding:3px 9px;border-radius:20px;font-weight:600">✓ Applied</span>
@@ -46,7 +46,7 @@
             <span style="font-size:11px;background:rgba(99,102,241,.12);color:var(--accent);padding:3px 9px;border-radius:20px;font-weight:600">● Draft</span>
             {% endif %}
           </td>
-          <td style="padding:13px 20px;color:var(--text-muted);font-size:13px">{{ t.applied_at[:10] if t.applied_at else '—' }}</td>
+          <td style="padding:13px 20px;color:var(--text-muted);font-size:13px">{{ t.applied_at|dmy }}</td>
           <td style="padding:13px 20px;color:var(--text-muted);font-size:13px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ t.notes or '—' }}</td>
           <td style="padding:13px 20px;text-align:right">
             <a href="{{ url_for('tallies.tally_detail', tally_id=t.id) }}" class="btn btn-secondary btn-sm">

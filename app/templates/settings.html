@@ -55,7 +55,7 @@
         <div style="font-size:12px;color:var(--text-secondary);margin-top:6px">
           {{ spec.help }}
           {% if item.updated_at %}
-            <span style="color:var(--text-muted)"> · updated {{ item.updated_at }}</span>
+            <span style="color:var(--text-muted)"> · updated {{ item.updated_at|dmy }}</span>
           {% endif %}
         </div>
       </div>

@@ -176,9 +176,9 @@
     <div class="card-body">
       <div class="info-list">
         <div class="info-row"><span class="info-label">Number</span><span class="info-value fw-700 font-mono">{{ invoice.invoice_number }}</span></div>
-        <div class="info-row"><span class="info-label">Issued</span><span class="info-value">{{ invoice.issue_date }}</span></div>
-        <div class="info-row"><span class="info-label">Due</span><span class="info-value">{{ invoice.due_date or '—' }}</span></div>
-        <div class="info-row"><span class="info-label">Created</span><span class="info-value muted">{{ invoice.created_at[:10] }}</span></div>
+        <div class="info-row"><span class="info-label">Issued</span><span class="info-value">{{ invoice.issue_date|dmy }}</span></div>
+        <div class="info-row"><span class="info-label">Due</span><span class="info-value">{{ invoice.due_date|dmy }}</span></div>
+        <div class="info-row"><span class="info-label">Created</span><span class="info-value muted">{{ invoice.created_at|dmy }}</span></div>
         {% if invoice.notes %}<div class="info-row"><span class="info-label">Notes</span><span class="info-value muted" style="font-size:13px">{{ invoice.notes }}</span></div>{% endif %}
       </div>
     </div>
@@ -299,7 +299,7 @@ function setUnitMode(mode) {
       <tbody>
         {% for p in payments %}
         <tr>
-          <td>{{ p.payment_date }}</td>
+          <td>{{ p.payment_date|dmy }}</td>
           <td><span class="badge badge-sent" style="text-transform:capitalize">{{ p.method.replace('_',' ') }}</span></td>
           <td class="muted font-mono">{{ p.reference or '—' }}</td>
           <td class="muted">{{ p.notes or '—' }}</td>

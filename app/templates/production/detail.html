@@ -40,8 +40,8 @@
         {% macro row(l,v) %}<tr><td style="padding:10px 20px;color:var(--text-muted);font-size:13px;width:40%;border-bottom:1px solid var(--border)">{{ l }}</td><td style="padding:10px 20px;font-weight:600;border-bottom:1px solid var(--border)">{{ v or '—' }}</td></tr>{% endmacro %}
         {{ row('Supplier', po.supplier_name) }}
         {{ row('Status', po.status|capitalize) }}
-        {{ row('Expected Completion', po.expected_completion) }}
-        {{ row('Created', po.created_at[:10] if po.created_at else '—') }}
+        {{ row('Expected Completion', po.expected_completion|dmy) }}
+        {{ row('Created', po.created_at|dmy) }}
         {% if po.notes %}{{ row('Notes', po.notes) }}{% endif %}
       </table>
     </div>

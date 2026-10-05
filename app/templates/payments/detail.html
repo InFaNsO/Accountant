@@ -35,7 +35,7 @@
             <a href="{{ url_for('clients.detail', client_id=p.client_id) }}" style="color:var(--accent);text-decoration:none">{{ p.client_name }}</a>
           </span>
         </div>
-        <div class="info-row"><span class="info-label">Date</span><span class="info-value">{{ p.payment_date or '—' }}</span></div>
+        <div class="info-row"><span class="info-label">Date</span><span class="info-value">{{ p.payment_date|dmy }}</span></div>
         <div class="info-row"><span class="info-label">Method</span><span class="info-value" style="text-transform:capitalize">{{ (p.method or '—').replace('_',' ') }}</span></div>
         <div class="info-row"><span class="info-label">Company</span><span class="info-value">{{ company_name or '— unassigned —' }}</span></div>
         <div class="info-row"><span class="info-label">Reference</span><span class="info-value font-mono">{{ p.reference or '—' }}</span></div>
@@ -66,7 +66,7 @@
           {% for a in allocations %}
           <tr>
             <td><a href="{{ url_for('invoices.detail', invoice_id=a.invoice_id) }}" style="font-weight:600;color:var(--accent);text-decoration:none">{{ a.invoice_number }}</a></td>
-            <td class="muted col-mobile-hide">{{ a.issue_date or '—' }}</td>
+            <td class="muted col-mobile-hide">{{ a.issue_date|dmy }}</td>
             <td class="fw-700" style="text-align:right;color:var(--success)">{{ a.amount|inr }}</td>
           </tr>
           {% endfor %}
