@@ -16,8 +16,9 @@ from functools import wraps
 from flask import Blueprint, jsonify, request
 
 from ..database import get_db
+from ..services.client_service import get_client_balance
 
-bp = Blueprint("api", __name__, url_prefix="/api")
+bp =Blueprint("api", __name__, url_prefix="/api")
 
 
 # ── Auth helpers ─────────────────────────────────────────────────────────────
@@ -269,20 +270,8 @@ def get_all_clients_summary():
     ).fetchall()
     result = []
     for c in clients:
-        ob = _f(c["opening_balance"])
-        rows = db.execute(
-            "SELECT total, amount_paid FROM invoices WHERE client_id=? AND status != 'cancelled'",
-            (c["id"],),
-        ).fetchall()
-        ob_paid = _f(db.execute(
-            "SELECT COALESCE(SUM(amount),0) FROM payments WHERE client_id=? AND invoice_id IS NULL",
-            (c["id"],),
-        ).fetchone()[0])
-        inv_bal = sum(_f(r["total"]) - _f(r["amount_paid"]) for r in rows)
-        if ob >= 0:
-            balance = -(max(0.0, ob - ob_paid) + inv_bal) + max(0.0, ob_paid - ob)
-        else:
-            balance = -inv_bal + (ob_paid + abs(ob))
+        # Same formula as the Ledger screen, so the two can never disagree.
+        balance = get_client_balance(c["id"])
         result.append((c["id"], c["name"], c["company"] or "", balance))
     result.sort(key=lambda x: x[3])
     lines = []
@@ -305,19 +294,9 @@ def get_client_details(client_id):
         "WHERE client_id=? AND status != 'cancelled'",
         (client_id,),
     ).fetchall()
-    ob_paid = _f(db.execute(
-        "SELECT COALESCE(SUM(amount),0) FROM payments WHERE client_id=? AND invoice_id IS NULL",
-        (client_id,),
-    ).fetchone()[0])
     ob = _f(c["opening_balance"])
-    inv_balance = sum(_f(i["total"]) - _f(i["amount_paid"]) for i in invoices)
-    if ob >= 0:
-        ob_remaining = max(0.0, ob - ob_paid)
-        excess = max(0.0, ob_paid - ob)
-    else:
-        ob_remaining = 0.0
-        excess = ob_paid + abs(ob)
-    balance = -(ob_remaining + inv_balance) + excess
+    # Same formula as the Ledger screen, so the two can never disagree.
+    balance = get_client_balance(client_id)
     paid_count = sum(1 for i in invoices if i["status"] == "paid")
     pending_count = sum(1 for i in invoices if i["status"] in ("issued", "sent", "partial"))
     lines = [
