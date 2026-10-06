@@ -23,6 +23,7 @@
   --text-muted:  #94A3B8;
   --border:      #E2E8F0;
   --border-focus:#6366F1;
+  --bg-alt:      #F8FAFC;
   --radius:      10px;
   --radius-sm:   6px;
   --radius-lg:   14px;
@@ -72,6 +73,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  flex: 1;
 }
 
 .nav-item {
@@ -89,6 +91,52 @@ body {
 .nav-item svg { width: 17px; height: 17px; flex-shrink: 0; }
 .nav-item:hover { background: var(--sidebar-hover); color: #fff; }
 .nav-item.active { background: var(--accent); color: #fff; }
+
+/* ── Sidebar collapse toggle (desktop icon rail) ──────────── */
+.sidebar-collapse-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--sidebar-text);
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+  transition: background .15s, color .15s;
+}
+.sidebar-collapse-btn:hover { background: var(--sidebar-hover); color: #fff; }
+.sidebar-collapse-btn svg { width: 18px; height: 18px; transition: transform .2s ease; }
+
+@media (min-width: 901px) {
+  .sidebar { transition: width .2s ease; }
+  .main    { transition: margin-left .2s ease; }
+
+  body.sidebar-collapsed { --sidebar-w: 74px; }
+  body.sidebar-collapsed .sidebar-brand { justify-content: center; gap: 0; }
+  body.sidebar-collapsed .sidebar-brand > svg,
+  body.sidebar-collapsed .sidebar-brand > span { display: none; }
+  body.sidebar-collapsed .sidebar-collapse-btn { margin-left: 0; }
+  body.sidebar-collapsed .sidebar-collapse-btn svg { transform: rotate(180deg); }
+  body.sidebar-collapsed .nav-item {
+    justify-content: center;
+    gap: 0;
+    font-size: 0;          /* hides the bare-text labels; icons keep their fixed size */
+    padding: 10px;
+  }
+  body.sidebar-collapsed .sidebar-user { justify-content: center; }
+  body.sidebar-collapsed .sidebar-user-info,
+  body.sidebar-collapsed .sidebar-user-logout { display: none; }
+}
+
+/* Collapse is a desktop affordance only — mobile uses the off-canvas drawer */
+@media (max-width: 900px) {
+  .sidebar-collapse-btn { display: none; }
+}
 
 /* ── Main Layout ──────────────────────────────────────────── */
 .main {
@@ -255,6 +303,7 @@ td.muted { color: var(--text-muted); }
 }
 .badge-draft    { background: #F1F5F9; color: var(--text-secondary); }
 .badge-sent     { background: var(--info-light);    color: #1D4ED8; }
+.badge-issued   { background: var(--info-light);    color: #1D4ED8; }
 .badge-paid     { background: var(--success-light); color: #065F46; }
 .badge-partial  { background: var(--warning-light); color: #92400E; }
 .badge-overdue  { background: var(--danger-light);  color: #991B1B; }
@@ -411,13 +460,19 @@ select { cursor: pointer; }
 /* ── Dashboard Grid ───────────────────────────────────────── */
 .dashboard-grid {
   display: grid;
-  grid-template-columns: 2fr 1fr;
-  gap: 22px;
+  /* Match the 3-column stats grid above so internal dividers line up.
+     Chart card spans 2 columns, side panel spans 1. */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
 }
+.dashboard-grid > :first-child { grid-column: span 2; }
 
 /* ── Misc helpers ─────────────────────────────────────────── */
 .text-right { text-align: right; }
 .text-muted  { color: var(--text-muted); }
+/* Mobile-only elements: hidden by default, shown inside the ≤640px query */
+.col-mobile-show { display: none; }
+.lbl-mobile-only { display: none; }
 .font-mono   { font-family: 'SF Mono', 'Fira Code', monospace; }
 .fw-700      { font-weight: 700; }
 .mt-4        { margin-top: 4px; }
@@ -432,6 +487,38 @@ select { cursor: pointer; }
 /* ── Delete confirm ───────────────────────────────────────── */
 .confirm-inline { display: inline; }
 
+/* ── Fixed bottom action bar (tally apply, etc.) ──────────────
+   Tracks the sidebar: full-width offset on desktop (follows the
+   collapsed rail too, since --sidebar-w changes on <body>), and
+   flush to the viewport on mobile where the sidebar is a drawer. */
+.bottom-actionbar {
+  position: fixed;
+  bottom: 0;
+  left: var(--sidebar-w);
+  right: 0;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  padding: 12px 20px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 16px;
+  z-index: 100;
+}
+@media (min-width: 901px) {
+  .bottom-actionbar { transition: left .2s ease; }
+}
+@media (max-width: 900px) {
+  .bottom-actionbar { left: 0; }
+}
+@media (max-width: 640px) {
+  .bottom-actionbar { padding: 10px 14px; gap: 8px; grid-template-columns: 1fr; font-size: 12px; }
+  .bottom-actionbar .btn { justify-content: center; }
+  /* Content above a fixed bottom bar needs extra clearance on phones,
+     where the bar wraps taller than its single desktop row. */
+  .actionbar-clearance { margin-bottom: 170px !important; }
+}
+
 /* ── Dark Mode ────────────────────────────────────────────── */
 body.dark {
   --bg:           #0F172A;
@@ -441,8 +528,9 @@ body.dark {
   --sidebar-hover:#1E293B;
   --text-primary: #F1F5F9;
   --text-secondary:#94A3B8;
-  --text-muted:   #475569;
+  --text-muted:   #64748B;
   --border:       #334155;
+  --bg-alt:       #1E293B;
   --accent-light: #1E1B4B;
   --success-light:#052E16;
   --warning-light:#451A03;
@@ -486,9 +574,276 @@ body.dark thead th { background: #0F172A; }
 body.dark .icon-moon { display: none; }
 body.dark .icon-sun  { display: block; }
 
-/* ── Responsive ───────────────────────────────────────────── */
+/* ── Boxes / Pcs dual-render ───────────────────────────────── */
+.u-box { display:none }
+html.show-boxes .u-pcs { display:none }
+html.show-boxes .u-box { display:inline }
+
+/* ── Unit toggle sliding pill ──────────────────────────────── */
+.unit-toggle { position:relative;display:inline-flex;align-items:stretch;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;cursor:pointer;background:var(--bg-alt);padding:0;gap:0;user-select:none;flex-shrink:0; }
+.unit-toggle .unit-opt { position:relative;z-index:1;padding:5px 14px;font-size:12px;font-weight:600;white-space:nowrap;line-height:1.6;transition:color .15s;color:var(--text-muted); }
+.unit-toggle .unit-opt:last-child { color:#fff; }
+html.show-boxes .unit-toggle .unit-opt:first-child { color:#fff; }
+html.show-boxes .unit-toggle .unit-opt:last-child  { color:var(--text-muted); }
+.unit-knob { position:absolute;inset:0;width:50%;background:var(--accent);border-radius:inherit;transition:transform .2s ease;transform:translateX(100%); }
+html.show-boxes .unit-knob { transform:translateX(0); }
+
+/* ── Topbar left group (hamburger + title) ────────────────── */
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.topbar-left .page-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Hamburger button ─────────────────────────────────────── */
+#menuBtn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  transition: background .15s, color .15s;
+}
+#menuBtn:hover { background: var(--bg); color: var(--text-primary); }
+
+/* ── Sidebar overlay ──────────────────────────────────────── */
+#sidebarOverlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.45);
+  z-index: 199;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .25s;
+}
+
+/* ── Touch scrolling on tables ────────────────────────────── */
+.table-wrap { -webkit-overflow-scrolling: touch; }
+
+/* ── Stock card scrollable lists ──────────────────────────── */
+.stock-scroll {
+  max-height: 300px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.stock-scroll::-webkit-scrollbar { width: 4px; }
+.stock-scroll::-webkit-scrollbar-track { background: transparent; }
+.stock-scroll::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 99px;
+}
+.stock-scroll::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* ── Invoice list — max 5 items visible then scroll ───────── */
+.invoice-scroll {
+  max-height: 305px;
+  overflow-y: auto;
+  list-style: none;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.invoice-scroll::-webkit-scrollbar { width: 4px; }
+.invoice-scroll::-webkit-scrollbar-track { background: transparent; }
+.invoice-scroll::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 99px;
+}
+.invoice-scroll::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* ── Global scrollbar theming ──────────────────────────────
+   Applies to every scroll container (horizontal + vertical),
+   including table overflow wrappers. Firefox uses the two
+   `scrollbar-*` properties; WebKit/Chromium uses ::-webkit-*. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner { background: var(--bg-alt); }
+*::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 99px;
+  border: 2px solid var(--bg-alt);   /* inset look — matches the track */
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:active {
+  background: var(--accent);
+  background-clip: padding-box;
+}
+
+/* ── Responsive: Tablet + Mobile (≤ 900px) ────────────────── */
 @media (max-width: 900px) {
   .form-grid-2, .form-grid-3 { grid-template-columns: 1fr; }
   .form-group.span-2, .form-group.span-3 { grid-column: span 1; }
-  .dashboard-grid, .detail-grid, .invoice-header-box { grid-template-columns: 1fr; }
+  .dashboard-grid, .detail-grid, .invoice-header-box { grid-template-columns: minmax(0, 1fr); }
+
+  /* Sidebar becomes off-canvas drawer */
+  .sidebar {
+    transform: translateX(-100%);
+    transition: transform .25s ease;
+    z-index: 200;
+  }
+  body.sidebar-open .sidebar { transform: translateX(0); }
+
+  /* Overlay becomes active */
+  #sidebarOverlay {
+    display: block;
+    pointer-events: none;
+  }
+  body.sidebar-open #sidebarOverlay {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* Main fills full width — no sidebar offset */
+  .main { margin-left: 0; }
+
+  /* Show hamburger */
+  #menuBtn { display: flex; }
+}
+
+@media (min-width: 901px) {
+  #sidebarOverlay { display: none !important; }
+}
+
+/* ── Responsive: Mobile only (≤ 640px) ───────────────────── */
+@media (max-width: 640px) {
+  /* Prevent page-level horizontal scroll. Only the root clips: giving .main
+     its own overflow would create a nested scroll container, hijacking page
+     scrolling from the window (breaks scroll physics on real phones). */
+  html { overflow-x: hidden; }
+  .main { max-width: 100vw; }
+
+  /* Tighter topbar & content spacing */
+  .topbar { padding: 0 10px 0 14px; }
+  .page-title { font-size: 15px; }
+  .content { padding: 14px; }
+  .flash-container { padding: 0 14px; }
+
+  /* Topbar never breaks the viewport: the title truncates first, and if
+     the action buttons still don't fit they scroll horizontally within
+     their own row instead of pushing the layout wider. */
+  .topbar-left { flex: 0 1 auto; }
+  .page-title { min-width: 56px; }
+  .topbar-actions {
+    gap: 6px;
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;           /* invisible scroll — swipe to reach extras */
+    padding: 6px 0;                  /* keep button shadows/focus rings unclipped */
+  }
+  .topbar-actions::-webkit-scrollbar { display: none; }
+
+  /* Cards */
+  .card-header { padding: 12px 14px; flex-wrap: wrap; gap: 8px; }
+  .card-body { padding: 14px; }
+
+  /* Card-header filter fields stretch across their row on phones
+     (overrides the inline desktop widths like width:240px) */
+  .card-header input[type="search"] { width: 100% !important; min-width: 120px; }
+
+  /* Inline multi-column grids (detail-page info/summary cards) collapse:
+     .grid-collapse → single column, .grid-collapse-2 → two columns (stat trios) */
+  .grid-collapse   { grid-template-columns: 1fr !important; }
+  .grid-collapse-2 { grid-template-columns: 1fr 1fr !important; }
+
+  /* Slightly taller small buttons — finger-sized tap targets in table rows */
+  .btn-sm { padding: 7px 12px; }
+
+  /* Form actions wrap on small screens */
+  .form-actions { flex-wrap: wrap; }
+
+  /* Tighter table cells */
+  thead th { padding: 8px 6px; font-size: 11px; }
+  tbody td { padding: 10px 6px; font-size: 12.5px; }
+
+  /* Hide secondary table columns on mobile */
+  .col-mobile-hide { display: none !important; }
+  /* Show elements only on mobile */
+  .col-mobile-show { display: block !important; }
+
+  /* Hide long button labels on mobile — keep SVG icon visible */
+  .btn-label-mobile { display: none !important; }
+  /* Short replacement labels that appear only on mobile */
+  .lbl-mobile-only { display: inline !important; }
+
+  /* Compact topbar action buttons */
+  .topbar-actions .btn { padding: 7px 10px; font-size: 13px; }
+  .topbar-actions .btn svg { width: 15px; height: 15px; }
+
+  /* Invoice line-items scroll inside their .table-wrap (no display:block —
+     that would nest a second scroll container inside the wrapper) */
+
+  /* Ledger modal fills screen */
+  #ledgerModal > div {
+    width: 100vw !important;
+    max-height: 100dvh !important;
+    border-radius: 0 !important;
+    margin: 0 !important;
+  }
+
+  /* Ledger entry form: 2-col instead of 5-col */
+  #ledgerEntryForm > div {
+    grid-template-columns: 1fr 1fr !important;
+  }
+
+  /* Invoice status bar wraps cleanly */
+  .invoice-status-bar { flex-direction: column; align-items: flex-start !important; gap: 10px !important; }
+  .invoice-status-bar .progress-bar-wrap { width: 100% !important; }
+
+  /* ── Dashboard bottom sections: stock cards before production due ── */
+  .dash-bottom-sections {
+    display: flex;
+    flex-direction: column;
+  }
+  .dash-stock-grid  { order: 1; }
+  .dash-production-due { order: 2; }
+
+  /* Stock cards collapse to single column, full width */
+  .stock-inner-grid { grid-template-columns: 1fr !important; }
+
+  /* ── Dashboard invoice list ── */
+  .dash-inv-row { padding: 10px 12px !important; }
+  .dash-inv-meta { min-width: 0; flex: 1; overflow: hidden; }
+  .dash-inv-meta a,
+  .dash-inv-meta div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dash-inv-amount { flex-shrink: 0; max-width: 42%; text-align: right; }
+
+  /* ── Dashboard chart header: stack title then controls ── */
+  .dash-chart-header { flex-direction: column !important; align-items: flex-start !important; }
+  .dash-chart-form { width: 100% !important; }
+  .dash-chart-form select,
+  .dash-chart-form input[type="date"] { flex: 1 1 0; min-width: 0; font-size: 12px !important; padding: 4px 6px !important; }
+  .dash-chart-form .btn { align-self: flex-end; }
+}
+
+/* ── Responsive: Small phones (≤ 480px) ──────────────────── */
+@media (max-width: 480px) {
+  .stats-grid { grid-template-columns: 1fr 1fr; gap: 12px; }
+  /* Smaller stat cards so values don't wrap */
+  .stat-card { padding: 14px; }
+  .stat-value { font-size: 17px; letter-spacing: -0.5px; }
+  .stat-icon { width: 32px; height: 32px; }
+  .stat-icon svg { width: 15px; height: 15px; }
 }

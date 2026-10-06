@@ -1,0 +1,592 @@
+"""Tests for the assistant: permissions, the confirm gate, SQL safety,
+history integrity and the inbox.
+
+Runs against a throwaway copy of the database with a scripted model
+(LEDGER_CHAT_FAKE_LLM=force), so it needs no API key and spends nothing.
+
+    python test_chat.py
+"""
+
+import json
+import os
+import re
+import shutil
+import sys
+import tempfile
+
+# "force", not "1": stays scripted even if this machine has a real
+# GLM_API_KEY exported, so a test run can never call the paid API.
+os.environ["LEDGER_CHAT_FAKE_LLM"] = "force"
+os.environ.setdefault("MCP_API_KEY", "test-key")
+
+from flask.globals import _cv_app, _cv_request                # noqa: E402
+
+from app import create_app                                    # noqa: E402
+from app.database import get_db                               # noqa: E402
+
+PASS, FAIL = [], []
+
+
+def ok(label):
+    PASS.append(label)
+    print(f"  [pass] {label}")
+
+
+def bad(label, detail=""):
+    FAIL.append(label)
+    print(f"  [FAIL] {label}" + (f" - {detail}" if detail else ""))
+
+
+def check(label, condition, detail=""):
+    ok(label) if condition else bad(label, detail)
+
+
+def sse(response):
+    """Parse an SSE body into [(event, data), ...]."""
+    events = []
+    name = None
+    for line in response.get_data(as_text=True).splitlines():
+        if line.startswith("event: "):
+            name = line[7:]
+        elif line.startswith("data: ") and name:
+            events.append((name, json.loads(line[6:])))
+            name = None
+    return events
+
+
+def kinds(events):
+    return [e for e, _ in events]
+
+
+def last(events, kind):
+    return next((d for e, d in reversed(events) if e == kind), None)
+
+
+def turn(client, **body):
+    response = client.post("/chat/api/turn", json=body)
+    response.get_data()
+    _drop_leftover_contexts()
+    return response
+
+
+def _drop_leftover_contexts():
+    """Flask's test client can leave an app context pushed after a streaming
+    response, and the next request would reuse its `g` — including the previous
+    caller's _login_user. Real WSGI servers pop correctly (verified against a
+    threaded server), so this is a test-harness quirk, not app behaviour. Clear
+    it so each request in this file is genuinely independent.
+    """
+    for var in (_cv_request, _cv_app):
+        while True:
+            ctx = var.get(None)
+            if ctx is None:
+                break
+            try:
+                ctx.pop()
+            except Exception:                                 # noqa: BLE001
+                var.set(None)
+                break
+
+
+def login(client, user_id):
+    with client.session_transaction() as sess:
+        sess["_user_id"] = str(user_id)
+        sess["_fresh"] = True
+
+
+def main():
+    app = create_app()
+
+    # Work on a copy: these tests create and delete rows.
+    tmp = os.path.join(tempfile.mkdtemp(prefix="ledger-chat-test-"), "test.db")
+    shutil.copy(app.config["DATABASE"], tmp)
+    app.config["DATABASE"] = tmp
+    app.config["TESTING"] = True
+    print(f"database copy: {tmp}\n")
+
+    with app.app_context():
+        god = get_db().execute(
+            "SELECT id, name FROM users WHERE role='god' ORDER BY id LIMIT 1"
+        ).fetchone()
+        if not god:
+            print("no god account in the database; cannot run")
+            return 1
+        god_id = god["id"]
+
+        # A second user with view on clients only, to prove the gate works.
+        db = get_db()
+        db.execute("DELETE FROM user_permissions WHERE user_id IN "
+                   "(SELECT id FROM users WHERE email='chattest@example.com')")
+        db.execute("DELETE FROM users WHERE email='chattest@example.com'")
+        cur = db.execute(
+            "INSERT INTO users (name, email, password_hash, role, is_active, "
+            "chat_level) VALUES ('Chat Test','chattest@example.com','x','user',1,'agent')"
+        )
+        limited_id = cur.lastrowid
+        db.execute(
+            "INSERT INTO user_permissions (user_id, module, can_view, can_create,"
+            " can_edit, can_delete) VALUES (?,'clients',1,0,0,0)", (limited_id,))
+        db.commit()
+
+    client = app.test_client()
+
+    # ── Access control ───────────────────────────────────────────────────
+    print("Access control")
+    r = turn(client, mode="chat", text="hello")
+    check("anonymous request is refused", r.status_code in (302, 401),
+          f"got {r.status_code}")
+
+    login(client, god_id)
+    r = turn(client, mode="nonsense", text="hi")
+    check("unknown mode is rejected", r.status_code == 400, f"got {r.status_code}")
+
+    with app.app_context():
+        db = get_db()
+        db.execute("UPDATE users SET chat_level='helper' WHERE id=?", (limited_id,))
+        db.commit()
+    limited = app.test_client()
+    login(limited, limited_id)
+    r = turn(limited, mode="chat", text="hi")
+    check("helper-level user cannot use chat mode", r.status_code == 403,
+          f"got {r.status_code}")
+    r = turn(limited, mode="helper", text="hi")
+    check("helper-level user can use the helper", r.status_code == 200,
+          f"got {r.status_code}")
+
+    # ── Tool visibility ──────────────────────────────────────────────────
+    print("\nTool visibility")
+    with app.app_context():
+        from app.chat import tools
+        from app.services.auth_service import load_user
+
+        god_user = load_user(god_id)
+        limited_user = load_user(limited_id)
+
+        god_chat = {t["function"]["name"] for t in tools.tools_for(god_user, "chat")}
+        god_help = {t["function"]["name"] for t in tools.tools_for(god_user, "helper")}
+        lim_chat = {t["function"]["name"] for t in tools.tools_for(limited_user, "chat")}
+
+        check("owner sees write tools in chat", "record_payment" in god_chat)
+        check("helper mode hides every write tool",
+              not {"record_payment", "delete_client", "create_invoice"} & god_help)
+        check("helper mode keeps save_to_inbox", "save_to_inbox" in god_help)
+        check("limited user sees permitted reads", "search_clients" in lim_chat)
+        check("limited user does not see other modules",
+              "search_products" not in lim_chat and "record_payment" not in lim_chat)
+        check("limited user does not get query_sql", "query_sql" not in lim_chat)
+        check("owner gets query_sql", "query_sql" in god_chat)
+        check("tool count stays under the provider's 128 limit",
+              len(god_chat) <= 128, f"{len(god_chat)} tools")
+
+        # Enforcement is independent of what was offered.
+        okc, result, _ = tools.execute("record_payment", "{}", limited_user, "chat")
+        check("execute refuses a tool the user lacks", not okc and "denied" in result.lower(),
+              result[:80])
+        okc, result, _ = tools.execute("create_category", '{"name":"x"}', god_user, "helper")
+        check("execute refuses a write in helper mode",
+              not okc and "read-only" in result.lower(), result[:80])
+
+    # ── A plain turn ─────────────────────────────────────────────────────
+    print("\nStreaming a turn")
+    r = turn(client, mode="chat", text="hello there")
+    events = sse(r)
+    check("stream is text/event-stream",
+          r.headers["Content-Type"].startswith("text/event-stream"))
+    check("nginx buffering is disabled", r.headers.get("X-Accel-Buffering") == "no")
+    check("turn emits text and done", "text" in kinds(events) and "done" in kinds(events),
+          str(kinds(events)))
+    done = last(events, "done")
+    check("done carries history and signature",
+          bool(done and done.get("history") and done.get("history_sig")))
+    check("history ends with the assistant reply",
+          done["history"][-1]["role"] == "assistant")
+    check("usage is reported", bool(last(events, "usage")))
+
+    # ── History integrity ────────────────────────────────────────────────
+    print("\nHistory integrity")
+    history, sig = done["history"], done["history_sig"]
+    r = turn(client, mode="chat", text="again", history=history, history_sig=sig)
+    check("a signed history is accepted", r.status_code == 200, f"got {r.status_code}")
+
+    tampered = json.loads(json.dumps(history))
+    tampered[-1]["content"] = "The outstanding balance is zero."
+    r = turn(client, mode="chat", text="again", history=tampered, history_sig=sig)
+    check("an edited history is rejected", r.status_code == 409, f"got {r.status_code}")
+
+    r = turn(client, mode="helper", text="again", history=history, history_sig=sig)
+    check("a chat history cannot be replayed into helper mode",
+          r.status_code == 409, f"got {r.status_code}")
+
+    other = app.test_client()
+    login(other, limited_id)
+    with app.app_context():
+        db = get_db()
+        db.execute("UPDATE users SET chat_level='agent' WHERE id=?", (limited_id,))
+        db.commit()
+    r = turn(other, mode="chat", text="again", history=history, history_sig=sig)
+    check("another user cannot replay someone's history",
+          r.status_code == 409, f"got {r.status_code}")
+
+    # ── Tools actually run ───────────────────────────────────────────────
+    print("\nTool execution")
+    r = turn(client, mode="chat", text='call:search_clients:{"query": "a"}')
+    events = sse(r)
+    check("tool_start and tool_end are emitted",
+          "tool_start" in kinds(events) and "tool_end" in kinds(events),
+          str(kinds(events)))
+    end = last(events, "tool_end")
+    check("the tool succeeded", bool(end and end["ok"]), str(end)[:200])
+    check("the result reached the model",
+          any(m.get("role") == "tool" for m in last(events, "done")["history"]))
+
+    # ── The confirmation gate ────────────────────────────────────────────
+    print("\nConfirmation gate")
+    r = turn(client, mode="chat",
+             text='call:create_category:{"name": "ChatTest Cat", "description": "x"}')
+    events = sse(r)
+    check("a write pauses for confirmation", "confirm_required" in kinds(events),
+          str(kinds(events)))
+    pause = last(events, "confirm_required")
+    check("no tool ran before confirmation", "tool_end" not in kinds(events))
+    card = (pause or {}).get("cards", [{}])[0]
+    check("the card names the action", card.get("title", "").lower().startswith("create"),
+          str(card))
+    check("the card shows the values", any("ChatTest Cat" in l for l in card.get("lines", [])),
+          str(card.get("lines")))
+
+    with app.app_context():
+        before = get_db().execute(
+            "SELECT COUNT(*) c FROM categories WHERE name='ChatTest Cat'").fetchone()["c"]
+    check("nothing was written while awaiting confirmation", before == 0)
+
+    # Decline
+    r = turn(client, mode="chat", history=pause["history"],
+             history_sig=pause["history_sig"],
+             decisions={card["tool_call_id"]: False})
+    events = sse(r)
+    with app.app_context():
+        after_no = get_db().execute(
+            "SELECT COUNT(*) c FROM categories WHERE name='ChatTest Cat'").fetchone()["c"]
+    check("declining writes nothing", after_no == 0)
+    check("declining still completes the turn", "done" in kinds(events), str(kinds(events)))
+
+    # Approve
+    r = turn(client, mode="chat", history=pause["history"],
+             history_sig=pause["history_sig"],
+             decisions={card["tool_call_id"]: True})
+    events = sse(r)
+    with app.app_context():
+        after_yes = get_db().execute(
+            "SELECT COUNT(*) c FROM categories WHERE name='ChatTest Cat'").fetchone()["c"]
+        audit = get_db().execute(
+            "SELECT tool, status FROM chat_tool_calls ORDER BY id DESC LIMIT 2"
+        ).fetchall()
+    check("confirming performs the write", after_yes == 1, f"count={after_yes}")
+    check("the write is audited",
+          any(a["tool"] == "create_category" and a["status"] == "executed" for a in audit),
+          str([dict(a) for a in audit]))
+
+    # ── Read-only SQL ────────────────────────────────────────────────────
+    print("\nSQL guard")
+    with app.app_context():
+        from app.chat import sql_tool
+        from app.services.auth_service import load_user
+        god_user = load_user(god_id)
+
+        okc, out, _ = tools.execute(
+            "query_sql", json.dumps({"sql": "SELECT COUNT(*) AS n FROM clients"}),
+            god_user, "chat")
+        check("a SELECT runs", okc and "n" in out, out[:120])
+
+        for label, sql in [
+            ("INSERT is refused", "INSERT INTO clients (name) VALUES ('x')"),
+            ("UPDATE is refused", "UPDATE clients SET name='x'"),
+            ("DROP is refused", "DROP TABLE clients"),
+            ("PRAGMA is refused", "PRAGMA table_info(clients)"),
+            ("ATTACH is refused", "SELECT 1; ATTACH DATABASE 'x' AS y"),
+            ("a hidden second statement is refused",
+             "SELECT 1 -- \nUPDATE clients SET name='x'"),
+        ]:
+            okc, out, _ = tools.execute(
+                "query_sql", json.dumps({"sql": sql}), god_user, "chat")
+            check(label, not okc, out[:100])
+
+        with app.test_request_context():
+            n_before = get_db().execute("SELECT COUNT(*) c FROM clients").fetchone()["c"]
+        okc, out, _ = tools.execute(
+            "query_sql", json.dumps({"sql": "SELECT * FROM clients"}), god_user, "chat")
+        check("row cap is applied", okc and ("rows shown" in out or "row(s)" in out),
+              out[-120:] if out else "")
+
+        okc, out, _ = tools.execute("describe_schema", "{}", god_user, "chat")
+        check("describe_schema lists tables", okc and "clients(" in out, out[:100])
+
+        okc, out, _ = tools.execute(
+            "query_sql", json.dumps({"sql": "SELECT * FROM no_such_table"}),
+            god_user, "chat")
+        check("a bad query returns an error the model can read",
+              not okc and "sql error" in out.lower(), out[:100])
+
+    # ── Bad arguments ────────────────────────────────────────────────────
+    print("\nArgument handling")
+    with app.app_context():
+        okc, out, _ = tools.execute("search_clients", "{not json", god_user, "chat")
+        check("malformed JSON arguments are reported, not raised",
+              not okc and "json" in out.lower(), out[:100])
+        okc, out, _ = tools.execute("get_client_details", '{"client_id":"abc"}',
+                                    god_user, "chat")
+        check("wrong argument types are reported", not okc, out[:100])
+
+    # ── Inbox ────────────────────────────────────────────────────────────
+    print("\nInbox")
+    r = client.post("/chat/api/inbox", json={"title": "Kept answer",
+                                             "body_md": "**42** clients"})
+    check("saving a message works", r.status_code == 200, r.get_data(as_text=True)[:120])
+    saved_id = r.get_json()["id"]
+
+    r = client.get("/chat/api/inbox")
+    items = r.get_json()["items"]
+    check("the saved item is listed",
+          any(i["id"] == saved_id and i["title"] == "Kept answer" for i in items))
+    check("a saved item is not unread", r.get_json()["unread"] == 0,
+          str(r.get_json()["unread"]))
+
+    with app.app_context():
+        from app.chat import inbox
+        inbox.create(god_id, "report", "Weekly overdue", "table here")
+    r = client.get("/chat/api/inbox/unread")
+    check("a delivered report is unread", r.get_json()["unread"] == 1,
+          str(r.get_json()))
+
+    r = client.post("/chat/api/inbox/read-all")
+    check("read-all clears the badge", r.get_json()["unread"] == 0)
+
+    r = turn(client, mode="helper",
+             text='call:save_to_inbox:{"title":"From the helper","body_md":"note"}')
+    events = sse(r)
+    check("the helper can save to the inbox",
+          bool(last(events, "tool_end")) and last(events, "tool_end")["ok"],
+          str(last(events, "tool_end"))[:150])
+
+    r = client.delete(f"/chat/api/inbox/{saved_id}")
+    check("deleting an item works", r.status_code == 200)
+    r = client.get("/chat/api/inbox")
+    check("the deleted item is gone",
+          not any(i["id"] == saved_id for i in r.get_json()["items"]))
+
+    other_inbox = app.test_client()
+    login(other_inbox, limited_id)
+    r = other_inbox.get("/chat/api/inbox")
+    check("one user cannot see another's inbox",
+          all(i["title"] != "From the helper" for i in r.get_json()["items"]))
+
+    # ── Settings store ───────────────────────────────────────────────────
+    print("\nSettings")
+    with app.app_context():
+        from app.services import settings_service as st
+
+        st.save("GLM_API_KEY", "sk-secret-value-1234", god_id)
+        check("a saved key reads back", st.get("GLM_API_KEY") == "sk-secret-value-1234")
+        check("its source is the settings page", st.source("GLM_API_KEY") == "settings")
+        check("only the last four are shown", st.masked("GLM_API_KEY") == "•" * 8 + "1234",
+              st.masked("GLM_API_KEY"))
+
+        raw = get_db().execute(
+            "SELECT value, is_secret FROM app_settings WHERE key='GLM_API_KEY'").fetchone()
+        check("the database holds ciphertext, not the key",
+              "sk-secret-value-1234" not in raw["value"] and raw["is_secret"] == 1,
+              raw["value"][:40])
+
+        # A copied database opened with a different SECRET_KEY must not reveal it.
+        real_secret = app.secret_key
+        app.secret_key = "a-different-server-secret"
+        st._invalidate()
+        check("a copy without the server secret cannot decrypt it",
+              st.get("GLM_API_KEY") == "" and st.source("GLM_API_KEY") == "unreadable",
+              repr(st.get("GLM_API_KEY")))
+        app.secret_key = real_secret
+        st._invalidate()
+        check("it decrypts again with the right secret",
+              st.get("GLM_API_KEY") == "sk-secret-value-1234")
+
+        # Settings beat the environment; clearing falls back to it.
+        os.environ["GLM_API_KEY"] = "env-key"
+        st._invalidate()
+        check("settings win over the environment",
+              st.get("GLM_API_KEY") == "sk-secret-value-1234")
+        st.save("GLM_API_KEY", "", god_id)
+        check("clearing falls back to the environment", st.get("GLM_API_KEY") == "env-key")
+        check("source reports the environment", st.source("GLM_API_KEY") == "environment")
+        os.environ["GLM_API_KEY"] = "changeme"
+        st._invalidate()
+        check("a setup.sh placeholder counts as unset", st.source("GLM_API_KEY") == "unset")
+        os.environ.pop("GLM_API_KEY", None)
+        st._invalidate()
+
+        st.save("GLM_MODEL", "glm-5.3-flash", god_id)
+        stored = get_db().execute(
+            "SELECT value FROM app_settings WHERE key='GLM_MODEL'").fetchone()["value"]
+        check("a non-secret setting is stored in the clear", stored == "glm-5.3-flash", stored)
+        st.save("GLM_MODEL", "", god_id)
+
+    r = client.get("/settings/")
+    check("the owner can open settings", r.status_code == 200, f"got {r.status_code}")
+    check("the page never renders a stored key",
+          "sk-secret-value-1234" not in r.get_data(as_text=True))
+    r = other.get("/settings/")
+    check("a non-owner cannot open settings", r.status_code in (302, 403),
+          f"got {r.status_code}")
+    r = other.post("/settings/", data={"GLM_API_KEY": "hijack"})
+    check("a non-owner cannot write settings", r.status_code in (302, 403),
+          f"got {r.status_code}")
+    with app.app_context():
+        from app.services import settings_service as st
+        st._invalidate()
+        check("nothing was written by the non-owner", st.get("GLM_API_KEY") == "")
+
+    # ── Prompt caching ───────────────────────────────────────────────────
+    # The provider caches by prefix match, so these are cost-and-latency
+    # regressions waiting to happen: a date in the system prompt, a tool list
+    # that reorders, or a history that gets rewritten in the middle each turn.
+    print("\nPrompt caching")
+    with app.app_context():
+        from app.chat import history as h2, prompts as p2, tools as t2
+        from app.services.auth_service import load_user as _lu
+        owner = _lu(god_id)
+
+        frozen = p2.PROMPTS["chat"] + json.dumps(t2.tools_for(owner, "chat"),
+                                                 ensure_ascii=False)
+        again = p2.PROMPTS["chat"] + json.dumps(t2.tools_for(owner, "chat"),
+                                                ensure_ascii=False)
+        check("the cached prefix is byte-stable", frozen == again)
+        check("no date or clock leaks into the cached prefix",
+              not re.search(r"\b20\d\d-\d\d-\d\d\b|\b\d{2}:\d{2}\b", frozen))
+        check("the clock lives in the trailing context instead",
+              re.search(r"\d{2}:\d{2}",
+                        p2.context_message(owner, None)["content"]) is not None)
+
+        convo, rewrites, previous = [], 0, None
+        for n in range(1, 21):          # not `turn` — that is the helper above
+            convo.append({"role": "user", "content": f"q{n}"})
+            convo.append({"role": "assistant", "content": None, "tool_calls": [
+                {"id": f"c{n}", "type": "function",
+                 "function": {"name": "clients_outstanding", "arguments": "{}"}}]})
+            convo.append({"role": "tool", "tool_call_id": f"c{n}",
+                          "name": "clients_outstanding", "content": "X" * 3000})
+            convo.append({"role": "assistant", "content": f"a{n}"})
+            convo = h2.trim(convo)
+            if previous is not None:
+                shared = 0
+                for old, new in zip(previous, convo):
+                    if old != new:
+                        break
+                    shared += 1
+                if shared < len(previous):
+                    rewrites += 1
+            previous = [dict(m) for m in convo]
+        check("a 20-turn conversation is rewritten at most once",
+              rewrites <= 1, f"{rewrites} rewrites")
+
+        big = h2.trim(convo + [
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "z", "type": "function",
+                 "function": {"name": "invoices_bulk", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "z", "content": "Y" * 400_000}])
+        check("an oversized result is still capped",
+              all(len(m.get("content") or "") <= h2.MAX_RESULT_CHARS + 20
+                  for m in big if m.get("role") == "tool"))
+        calls = {tc["id"] for m in big if m.get("tool_calls")
+                 for tc in m["tool_calls"]}
+        check("trimming leaves every result paired with its call",
+              all(m["tool_call_id"] in calls for m in big if m.get("role") == "tool"))
+        check("trimming bounds the conversation size",
+              len(big) <= h2.MAX_MESSAGES, f"{len(big)} messages")
+
+    # ── Scheduling ───────────────────────────────────────────────────────
+    # The bug this was written for: the assistant had no reminder tool, so it
+    # saved a note that read like one and said it was set. Nothing ever fired.
+    print("\nScheduling")
+    with app.app_context():
+        from datetime import datetime, timedelta
+        from app.chat import inbox as ib, scheduled as sch, tools as t3
+        from app.services.auth_service import load_user as _lu3
+        owner = _lu3(god_id)
+
+        offered = {t["function"]["name"] for t in t3.tools_for(owner, "helper")}
+        check("the helper is offered a real reminder tool",
+              "create_reminder" in offered)
+        check("headless report runs cannot schedule more work",
+              "create_reminder" not in
+              {t["function"]["name"] for t in t3.tools_for(owner, "scheduled")})
+
+        soon = (datetime.now(sch.IST) + timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M")
+        okc, out, _ = t3.execute("create_reminder", json.dumps(
+            {"title": "Call Sharma about INV-231", "when": soon}), owner, "helper")
+        check("a reminder can be set", okc, out[:120])
+        check("the reply states the resolved time", "IST" in out, out[:120])
+
+        task = sch.listing(god_id)[0]
+        check("it is stored as a task", task["kind"] == "reminder")
+        check("it has a next run time", bool(task["next_run_at"]))
+
+        before = ib.unread_count(god_id)
+        fired = sch.dispatch_due(app, now=sch._utc_now())
+        check("nothing fires before it is due",
+              fired == 0 and ib.unread_count(god_id) == before, f"fired={fired}")
+
+        later = sch._utc_now() + timedelta(minutes=6)
+        fired = sch.dispatch_due(app, now=later)
+        check("it fires once it is due", fired == 1, f"fired={fired}")
+        check("it lands in the inbox unread", ib.unread_count(god_id) == before + 1)
+        latest = ib.listing(god_id, limit=1)[0]
+        check("the delivery is a reminder, not a saved note",
+              latest["kind"] == "reminder" and "Sharma" in latest["title"],
+              f"{latest['kind']} / {latest['title']}")
+
+        again = sch.dispatch_due(app, now=later)
+        check("a one-off does not fire twice", again == 0, f"fired again={again}")
+
+        okc, out, _ = t3.execute("create_scheduled_report", json.dumps(
+            {"name": "Weekly overdue", "prompt": "List overdue invoices.",
+             "repeat": "0 9 * * MON"}), owner, "chat")
+        check("a recurring report can be scheduled", okc, out[:140])
+        check("its schedule is described in words", "Monday" in out, out[:140])
+
+        rep = [t for t in sch.listing(god_id) if t["kind"] == "report"][0]
+        first_next = rep["next_run_at"]
+        sch.dispatch_due(app, now=sch._load(first_next) + timedelta(seconds=1))
+        rep2 = sch.get(god_id, rep["id"])
+        check("a recurring task re-arms instead of switching itself off",
+              rep2["enabled"] == 1 and rep2["next_run_at"] > first_next,
+              f"enabled={rep2['enabled']} next={rep2['next_run_at']}")
+        runs = sch.runs_for(rep["id"])
+        check("the run is recorded", bool(runs) and runs[0]["status"] in ("ok", "error"),
+              str(dict(runs[0]))[:140] if runs else "no runs")
+
+        okc, out, _ = t3.execute("cancel_scheduled",
+                                 json.dumps({"task_id": rep["id"]}), owner, "chat")
+        check("a schedule can be cancelled",
+              okc and sch.get(god_id, rep["id"])["enabled"] == 0, out[:80])
+
+        past = (datetime.now(sch.IST) - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M")
+        okc, out, _ = t3.execute("create_reminder", json.dumps(
+            {"title": "x", "when": past}), owner, "helper")
+        check("a time in the past is refused", not okc and "past" in out.lower(),
+              out[:100])
+        okc, out, _ = t3.execute("create_scheduled_report", json.dumps(
+            {"name": "x", "prompt": "y", "repeat": "not a cron"}), owner, "chat")
+        check("an invalid schedule is refused", not okc and "crontab" in out.lower(),
+              out[:100])
+
+    r = client.get("/chat/scheduled")
+    check("the scheduled page renders", r.status_code == 200, f"got {r.status_code}")
+    print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
+    if FAIL:
+        for f in FAIL:
+            print(f"  failed: {f}")
+    return 1 if FAIL else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+

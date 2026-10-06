@@ -1,14 +1,138 @@
-from flask import Blueprint, render_template
+from flask import Blueprint, render_template, request
+from flask_login import login_required, current_user
 from ..services.payment_service import get_dashboard_stats
 from ..services.product_service import get_stock_alerts
-from ..services.purchase_service import get_pos_due_soon
+from ..services.transit_service import get_dispatches_due_soon
+from ..services import sales_service
+from ..services.auth_service import get_scoped_client_ids, get_manager_staff, get_own_scoped_client_ids
+from datetime import date, timedelta
 
 bp = Blueprint("dashboard", __name__)
 
+WINDOW_LABELS = {
+    "today":         "Today",
+    "yesterday":     "Yesterday",
+    "this_week":     "This Week",
+    "last_week":     "Last Week",
+    "last_15":       "Last 15 Days",
+    "last_30":       "Last 30 Days",
+    "this_month":    "This Month",
+    "last_2_months": "Last 2 Months",
+    "60_days":       "60 Days",
+    "90_days":       "90 Days",
+    "this_year":     "This Year",
+    "current_fy":    "Current FY",
+    "last_fy":       "Last FY",
+    "custom":        "Custom Range",
+    "all":           "All Time",
+}
+
+
+def _fy(today):
+    """Returns (current_fy_start, last_fy_start, last_fy_end) for India (Apr-Mar)."""
+    m, y = today.month, today.year
+    if m >= 4:
+        return date(y, 4, 1), date(y - 1, 4, 1), date(y, 3, 31)
+    return date(y - 1, 4, 1), date(y - 2, 4, 1), date(y - 1, 3, 31)
+
+
+def resolve_window(window, custom_from="", custom_to=""):
+    """Return (date_from, date_to) as date objects, or (None, None) for all-time."""
+    today = date.today()
+
+    if window == "custom" and custom_from and custom_to:
+        try:
+            return date.fromisoformat(custom_from), date.fromisoformat(custom_to)
+        except ValueError:
+            pass
+
+    if window == "all":
+        return None, None
+
+    dow = today.weekday()            # 0=Mon … 6=Sun
+    cfy, lfy_s, lfy_e = _fy(today)
+
+    table = {
+        "today":         (today,                       today),
+        "yesterday":     (today - timedelta(1),        today - timedelta(1)),
+        "this_week":     (today - timedelta(dow),      today),
+        "last_week":     (today - timedelta(dow + 7),  today - timedelta(dow + 1)),
+        "last_15":       (today - timedelta(14),       today),
+        "last_30":       (today - timedelta(29),       today),
+        "this_month":    (today.replace(day=1),        today),
+        "last_2_months": (today - timedelta(60),       today),
+        "60_days":       (today - timedelta(59),       today),
+        "90_days":       (today - timedelta(89),       today),
+        "this_year":     (date(today.year, 1, 1),      today),
+        "current_fy":    (cfy,                         today),
+        "last_fy":       (lfy_s,                       lfy_e),
+    }
+    return table.get(window, (today - timedelta(29), today))
+
 
 @bp.route("/")
+@login_required
 def index():
-    stats        = get_dashboard_stats()
-    alerts       = get_stock_alerts()
-    pos_due_soon = get_pos_due_soon(days=14)
-    return render_template("dashboard.html", stats=stats, alerts=alerts, pos_due_soon=pos_due_soon)
+    import os
+    window      = request.args.get("window", "last_30")
+    custom_from = request.args.get("from", "")
+    custom_to   = request.args.get("to", "")
+
+    d_from, d_to = resolve_window(window, custom_from, custom_to)
+    date_from = d_from.isoformat() if d_from else None
+    date_to   = d_to.isoformat()   if d_to   else None
+
+    # The coverage map is client data, so it always requires clients:view;
+    # the data behind it is further user-scoped by clients.regions_all.
+    can_view_clients = current_user.has_permission("clients", "view")
+    ola_key = os.environ.get("OLA_MAPS_API_KEY", "")
+
+    # ── Sales-manager dashboard: scoped to their team's clients ─────────────
+    # (fixed layout — no per-section toggles — so the map shows whenever they
+    # can view clients, which sales managers do by default.)
+    if getattr(current_user, "role", None) == "sales":
+        client_ids = get_scoped_client_ids(current_user)
+        staff      = [dict(u) for u in get_manager_staff(current_user.id)]
+        stats      = sales_service.get_scoped_stats(client_ids, date_from, date_to)
+        team       = sales_service.get_team_breakdown(staff, date_from, date_to)
+        return render_template(
+            "dashboard_sales.html",
+            stats=stats,
+            team=team,
+            window=window,
+            window_label=WINDOW_LABELS.get(window, "Custom Range"),
+            date_from=date_from or "",
+            date_to=date_to or "",
+            custom_from=custom_from,
+            custom_to=custom_to,
+            show_region_map=can_view_clients,
+            ola_maps_api_key=ola_key,
+        )
+
+    # ── Any user with clients assigned to them (clients.sales_rep_id) sees a
+    # dashboard scoped to just those clients; no assignment = company-wide data.
+    own_client_ids = get_own_scoped_client_ids(current_user)
+
+    dash_sections = current_user.get_dashboard_sections()
+    # Regular dashboard: the map is a toggleable dashboard section (still
+    # requires clients:view so the card never appears without loadable data).
+    show_region_map = ("coverage_map" in dash_sections) and can_view_clients
+    stats         = get_dashboard_stats(date_from=date_from, date_to=date_to, client_ids=own_client_ids)
+    alerts        = get_stock_alerts()
+    dispatches_due_soon  = get_dispatches_due_soon(days=14)
+
+    return render_template(
+        "dashboard.html",
+        stats=stats,
+        alerts=alerts,
+        dispatches_due_soon=dispatches_due_soon,
+        dash_sections=dash_sections,
+        window=window,
+        window_label=WINDOW_LABELS.get(window, "Custom Range"),
+        date_from=date_from or "",
+        date_to=date_to or "",
+        custom_from=custom_from,
+        custom_to=custom_to,
+        show_region_map=show_region_map,
+        ola_maps_api_key=ola_key,
+    )

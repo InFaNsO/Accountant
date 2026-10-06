@@ -8,7 +8,7 @@
 <div class="card">
   <div class="card-header"><span class="card-title">Order Details</span></div>
   <div class="card-body">
-    <form method="post" action="{{ url_for('purchases.new_purchase') }}">
+    <form id="poForm" method="post" action="{{ url_for('purchases.new_purchase') }}">
       <div class="form-grid form-grid-2" style="margin-bottom:24px">
         <div class="form-group">
           <label>Order Name *</label>
@@ -38,7 +38,7 @@
       <div class="table-wrap" style="margin-bottom:12px">
         <table id="itemsTable" style="table-layout:fixed;width:100%">
           <colgroup>
-            <col style="width:38%"><col style="width:14%"><col style="width:14%"><col style="width:14%"><col style="width:36px">
+            <col style="width:45%"><col style="width:20%"><col style="width:20%"><col style="width:36px">
           </colgroup>
           <thead>
             <tr>
@@ -48,22 +48,7 @@
               <th></th>
             </tr>
           </thead>
-          <tbody id="itemsBody">
-            <tr id="row_0">
-              <td>
-                <select name="product_id_0" onchange="syncSubId(this,0)" style="width:100%">
-                  <option value="">— select product —</option>
-                  {% for p in products %}
-                  <option value="{{ p.product_id }}" data-sub="{{ p.sub_product_id or '' }}" data-price="{{ p.price }}">{{ p.label }}</option>
-                  {% endfor %}
-                </select>
-                <input type="hidden" name="sub_product_id_0" id="sub_0" value="">
-              </td>
-              <td><input type="number" name="quantity_0" step="0.01" min="0.01" placeholder="0" style="width:100%"></td>
-              <td><input type="number" name="price_0" step="0.01" min="0" placeholder="optional" style="width:100%"></td>
-              <td><button type="button" onclick="removeRow(0)" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:18px;padding:0 6px">×</button></td>
-            </tr>
-          </tbody>
+          <tbody id="itemsBody"></tbody>
         </table>
       </div>
       <button type="button" class="btn btn-secondary btn-sm" onclick="addRow()" style="margin-bottom:24px">+ Add Product</button>
@@ -78,35 +63,153 @@
 {% endblock %}
 {% block scripts %}
 <script>
-const PRODUCTS = {{ products | tojson }};
-let rowCount = 1;
+const CATALOG = {{ products | tojson }};
+let rowCount = 0;
 
-function syncSubId(sel, idx) {
-  const opt = sel.options[sel.selectedIndex];
-  document.getElementById('sub_' + idx).value = opt ? (opt.dataset.sub || '') : '';
-  const priceInput = sel.closest('tr').querySelector('input[name^="price_"]');
-  if (priceInput && opt && opt.dataset.price && !priceInput.value) {
-    priceInput.value = opt.dataset.price;
+/* ── Shared dropdown (fixed position, never clipped) ─────────────────────── */
+let _cbInput = null;
+const _cbDD  = (() => {
+  const el = document.createElement('div');
+  el.id    = 'cbSharedDropdown';
+  el.style.cssText =
+    'display:none;position:fixed;z-index:9500;background:var(--bg);' +
+    'border:1px solid var(--border);border-radius:var(--radius-sm);' +
+    'box-shadow:0 8px 32px rgba(0,0,0,.22);overflow-y:auto;' +
+    'max-height:310px;min-width:380px';
+  el._cursor  = -1;
+  el._matches = [];
+  document.body.appendChild(el);
+  return el;
+})();
+
+function _cbPos(inp) {
+  const r = inp.getBoundingClientRect();
+  _cbDD.style.top   = (r.bottom + 3) + 'px';
+  _cbDD.style.left  = r.left + 'px';
+  _cbDD.style.width = Math.max(r.width, 400) + 'px';
+}
+window.addEventListener('scroll', () => { if (_cbInput) _cbPos(_cbInput); }, true);
+window.addEventListener('resize', () => { if (_cbInput) _cbPos(_cbInput); });
+
+function cbRender(inp, matches) {
+  _cbInput       = inp;
+  _cbDD._matches = matches;
+  _cbDD._cursor  = -1;
+  if (!matches.length) {
+    _cbDD.innerHTML = '<div style="padding:10px 14px;color:var(--text-muted);font-size:13px;font-style:italic">No products found</div>';
+  } else {
+    _cbDD.innerHTML = matches.map((p, i) => {
+      const sku = (p.label.match(/\[([^\]]+)\]/) || ['',''])[1];
+      const price = p.price ? `<span style="font-weight:600;color:var(--success)">₹${parseFloat(p.price).toLocaleString('en-IN',{minimumFractionDigits:2})}</span>` : '';
+      return `<div class="cb-option" data-idx="${i}" onmousedown="cbSelectShared(event,this)">
+        <div style="font-weight:600;font-size:13px">${p.label.replace(/\s*\[[^\]]+\]/, '')}</div>
+        <div style="font-size:11px;color:var(--text-muted);display:flex;gap:8px;margin-top:2px">
+          ${sku ? `<span style="font-family:monospace;background:var(--bg-alt);padding:1px 5px;border-radius:3px">${sku}</span>` : ''}
+          ${price}
+        </div>
+      </div>`;
+    }).join('');
+  }
+  _cbPos(inp);
+  _cbDD.style.display = '';
+}
+
+function cbFilter(inp) {
+  const q = inp.value.toLowerCase();
+  const matches = CATALOG.filter(p =>
+    p.label.toLowerCase().includes(q) ||
+    (p.label.match(/\[([^\]]+)\]/) || ['',''])[1].toLowerCase().includes(q)
+  );
+  cbRender(inp, matches);
+  markFormDirty();
+}
+
+function cbOpen(inp) { cbRender(inp, CATALOG); }
+
+function cbBlur(inp) {
+  setTimeout(() => {
+    if (_cbInput === inp) { _cbDD.style.display = 'none'; _cbInput = null; }
+  }, 180);
+}
+
+function cbSelectShared(e, optEl) {
+  e.preventDefault();
+  const idx = parseInt(optEl.dataset.idx, 10);
+  const p   = _cbDD._matches[idx];
+  if (!p || !_cbInput) return;
+  const wrap     = _cbInput.closest('.cb-wrap');
+  const row      = _cbInput.closest('tr');
+  _cbInput.value = p.label.replace(/\s*\[[^\]]+\]/, '');
+  wrap.querySelector('[name^="product_id_"]').value     = p.product_id || '';
+  wrap.querySelector('[name^="sub_product_id_"]').value = p.sub_product_id || '';
+  const priceInp = row.querySelector('[name^="price_"]');
+  if (priceInp && p.price && !priceInp.value) priceInp.value = p.price;
+  _cbDD.style.display = 'none'; _cbInput = null;
+  markFormDirty();
+}
+
+function cbKey(e, inp) {
+  if (_cbDD.style.display === 'none' || _cbInput !== inp) {
+    cbOpen(inp);
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const opts = _cbDD.querySelectorAll('.cb-option');
+      if (opts.length) {
+        _cbDD._cursor = e.key === 'ArrowDown' ? 0 : opts.length - 1;
+        opts[_cbDD._cursor].classList.add('cb-active');
+        opts[_cbDD._cursor].scrollIntoView({ block: 'nearest' });
+      }
+    }
+    return;
+  }
+  const opts = _cbDD.querySelectorAll('.cb-option');
+  if (!opts.length) return;
+  if (e.key === 'Escape') { _cbDD.style.display = 'none'; _cbInput = null; return; }
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    _cbDD._cursor = Math.min(_cbDD._cursor + 1, opts.length - 1);
+    opts.forEach((o, i) => o.classList.toggle('cb-active', i === _cbDD._cursor));
+    opts[_cbDD._cursor]?.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    _cbDD._cursor = Math.max(_cbDD._cursor - 1, 0);
+    opts.forEach((o, i) => o.classList.toggle('cb-active', i === _cbDD._cursor));
+    opts[_cbDD._cursor]?.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (_cbDD._cursor >= 0 && opts[_cbDD._cursor]) cbSelectShared(e, opts[_cbDD._cursor]);
   }
 }
 
-function addRow() {
+function addRow(nameVal, pidVal, sidVal, qtyVal, priceVal) {
   const i = rowCount++;
-  const opts = PRODUCTS.map(p =>
-    `<option value="${p.product_id}" data-sub="${p.sub_product_id||''}" data-price="${p.price||''}">${p.label}</option>`
-  ).join('');
   const row = document.createElement('tr');
   row.id = 'row_' + i;
   row.innerHTML = `
     <td>
-      <select name="product_id_${i}" onchange="syncSubId(this,${i})" style="width:100%">
-        <option value="">— select product —</option>${opts}
-      </select>
-      <input type="hidden" name="sub_product_id_${i}" id="sub_${i}" value="">
+      <div class="cb-wrap">
+        <input class="cb-inp" type="text"
+               name="description_${i}"
+               value="${nameVal || ''}"
+               placeholder="Type product name or SKU…"
+               autocomplete="off"
+               oninput="cbFilter(this)"
+               onfocus="cbOpen(this)"
+               onblur="cbBlur(this)"
+               onkeydown="cbKey(event,this)"
+               style="width:100%">
+        <input type="hidden" name="product_id_${i}"     value="${pidVal  || ''}">
+        <input type="hidden" name="sub_product_id_${i}" value="${sidVal  || ''}">
+      </div>
     </td>
-    <td><input type="number" name="quantity_${i}" step="0.01" min="0.01" placeholder="0" style="width:100%"></td>
-    <td><input type="number" name="price_${i}" step="0.01" min="0" placeholder="optional" style="width:100%"></td>
-    <td><button type="button" onclick="removeRow(${i})" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:18px;padding:0 6px">×</button></td>`;
+    <td><input type="number" name="quantity_${i}" step="0.01" min="0.01"
+               value="${qtyVal || ''}" placeholder="0" style="width:100%"
+               oninput="markFormDirty()"></td>
+    <td><input type="number" name="price_${i}" step="0.01" min="0"
+               value="${priceVal || ''}" placeholder="optional" style="width:100%"
+               oninput="markFormDirty()"></td>
+    <td><button type="button" onclick="removeRow(${i})"
+                style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:18px;padding:0 6px">×</button></td>`;
   document.getElementById('itemsBody').appendChild(row);
 }
 
@@ -114,5 +217,24 @@ function removeRow(i) {
   const row = document.getElementById('row_' + i);
   if (row && document.getElementById('itemsBody').children.length > 1) row.remove();
 }
+
+// Start with one blank row
+addRow();
+
+/* ── Dirty tracking ───────────────────────────────────────────────────────── */
+let _formDirty = false;
+function markFormDirty() { _formDirty = true; }
+window.__dirtyCheck = () => ({
+  isDirty: _formDirty,
+  label: 'Purchase Order',
+  save: null,   // no auto-save for new forms
+});
+document.getElementById('poForm').addEventListener('submit', () => { _formDirty = false; });
 </script>
+
+<style>
+.cb-option { padding:10px 14px; cursor:pointer; border-bottom:1px solid var(--border); }
+.cb-option:last-child { border-bottom:none; }
+.cb-option:hover, .cb-option.cb-active { background:var(--bg-alt); }
+</style>
 {% endblock %}

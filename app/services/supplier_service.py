@@ -77,6 +77,15 @@ def add_supplier_product(supplier_id, data):
     return cur.lastrowid
 
 
+def update_supplier_product(sp_id, price, notes):
+    db = get_db()
+    db.execute(
+        "UPDATE supplier_products SET price=?, notes=? WHERE id=?",
+        (price, notes or None, sp_id),
+    )
+    db.commit()
+
+
 def remove_supplier_product(sp_id):
     db = get_db()
     db.execute("DELETE FROM supplier_products WHERE id=?", (sp_id,))

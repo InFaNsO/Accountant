@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}Sales Rep Assignments{% endblock %}
+{% block page_title %}Sales Rep Assignments{% endblock %}
+
+{% block topbar_actions %}
+<a href="{{ url_for('clients.list_clients') }}" class="btn btn-secondary btn-sm">All Clients</a>
+{% endblock %}
+
+{% block content %}
+
+<!-- Per-staff summary cards -->
+<div id="repCards" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px;margin-bottom:18px"></div>
+
+<!-- Assignment editor -->
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">Assign Clients</span>
+    <input type="text" id="clientFilter" placeholder="Search clients…" oninput="renderTable()"
+           style="margin-left:auto;width:220px;font-size:13px;padding:6px 10px">
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Client</th>
+          <th class="col-mobile-hide">Location</th>
+          <th style="width:220px">Sales Rep</th>
+        </tr>
+      </thead>
+      <tbody id="assignRows"></tbody>
+    </table>
+    <div id="assignEmpty" style="display:none;padding:24px;text-align:center;color:var(--text-muted);font-size:13px">
+      No matching clients.
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const REPS    = {{ reps|tojson }};
+const CLIENTS = {{ clients|tojson }};
+const IS_GOD  = {{ 'true' if current_user.is_god() else 'false' }};
+
+const esc = s => String(s ?? '').replace(/[&<>"']/g,
+  m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+
+/* ── Summary cards: one per rep + one for unassigned ─────────── */
+function renderCards() {
+  const groups = REPS.map(r => ({
+    id: r.id, name: r.name,
+    clients: CLIENTS.filter(c => c.sales_rep_id === r.id),
+  }));
+  // Everything not held by an active rep (incl. clients whose rep was
+  // deactivated or deleted) counts as handled directly.
+  const repIds = new Set(REPS.map(r => r.id));
+  const unassigned = CLIENTS.filter(c => !c.sales_rep_id || !repIds.has(c.sales_rep_id));
+
+  const chip = c =>
+    `<a href="/clients/${c.id}" style="display:inline-block;font-size:12px;padding:3px 9px;margin:2px;
+        background:var(--bg-alt);border:1px solid var(--border);border-radius:999px;
+        color:var(--text-primary);text-decoration:none">${esc(c.name)}</a>`;
+
+  const card = (title, list, accent, editUrl) => `
+    <div class="card" style="border-top:3px solid ${accent}">
+      <div class="card-header">
+        <span class="card-title">${esc(title)}</span>
+        <span class="badge" style="margin-left:auto">${list.length}</span>
+        ${editUrl ? `<a href="${editUrl}" class="btn btn-secondary btn-sm" style="margin-left:8px">Edit list</a>` : ''}
+      </div>
+      <div class="card-body" style="padding:10px 12px;max-height:180px;overflow-y:auto">
+        ${list.length ? list.map(chip).join('') :
+          '<span style="font-size:12.5px;color:var(--text-muted)">No clients assigned.</span>'}
+      </div>
+    </div>`;
+
+  document.getElementById('repCards').innerHTML =
+    groups.map(g => card(g.name, g.clients, 'var(--accent)',
+                         IS_GOD ? `/users/${g.id}/edit` : null)).join('') +
+    card('Handled directly (no rep)', unassigned, 'var(--border)', null);
+}
+
+/* ── Editor table with instant-save dropdowns ────────────────── */
+function renderTable() {
+  const q = document.getElementById('clientFilter').value.trim().toLowerCase();
+  const list = CLIENTS.filter(c =>
+    !q || c.name.toLowerCase().includes(q) ||
+    (c.city || '').toLowerCase().includes(q) ||
+    (c.state || '').toLowerCase().includes(q) ||
+    (c.rep_name || '').toLowerCase().includes(q));
+
+  document.getElementById('assignEmpty').style.display = list.length ? 'none' : '';
+  document.getElementById('assignRows').innerHTML = list.map(c => `
+    <tr>
+      <td style="font-weight:600"><a href="/clients/${c.id}" style="color:var(--accent);text-decoration:none">${esc(c.name)}</a></td>
+      <td class="muted col-mobile-hide">${esc([c.city, c.state].filter(Boolean).join(', ') || '—')}</td>
+      <td>
+        <select onchange="saveRep(${c.id}, this)" data-client="${c.id}" style="width:100%;font-size:13px">
+          <option value="">— No rep (handled directly) —</option>
+          ${REPS.map(r => `<option value="${r.id}" ${c.sales_rep_id === r.id ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}
+        </select>
+      </td>
+    </tr>`).join('');
+}
+
+function saveRep(clientId, sel) {
+  const userId = sel.value ? parseInt(sel.value, 10) : null;
+  sel.disabled = true;
+  fetch(`/clients/${clientId}/assign-rep`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({user_id: userId}),
+  })
+  .then(r => r.json())
+  .then(d => {
+    sel.disabled = false;
+    if (!d.ok) { alert(d.error || 'Could not save.'); renderTable(); return; }
+    const c = CLIENTS.find(x => x.id === clientId);
+    c.sales_rep_id = userId;
+    c.rep_name = userId ? (REPS.find(r => r.id === userId) || {}).name : null;
+    renderCards();
+  })
+  .catch(() => { sel.disabled = false; alert('Network error — change not saved.'); renderTable(); });
+}
+
+renderCards();
+renderTable();
+</script>
+{% endblock %}

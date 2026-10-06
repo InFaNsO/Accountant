@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Access Denied{% endblock %}
+{% block page_title %}Access Denied{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width:480px;margin:60px auto;text-align:center;padding:48px 40px">
+  <div style="font-size:56px;margin-bottom:16px">🔒</div>
+  <h2 style="font-size:22px;font-weight:700;margin-bottom:10px">You don't have permission</h2>
+  <p style="color:var(--text-muted);font-size:14px;margin-bottom:28px">
+    Your account doesn't have access to this page or action.<br>
+    Contact your administrator if you think this is a mistake.
+  </p>
+  <a href="{{ url_for('dashboard.index') }}" class="btn btn-primary">Go to Dashboard</a>
+</div>
+{% endblock %}

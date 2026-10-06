@@ -1,2 +1,12 @@
 Flask==3.0.3
 Werkzeug==3.0.3
+Flask-Login>=0.6.3
+mcp[cli]>=1.27.1
+gunicorn>=21.2.0
+firebase-admin>=6.5.0
+APScheduler>=3.10.4
+fpdf2>=2.8.0
+segno>=1.6.0
+openai>=1.50.0
+jsonschema>=4.21.0
+cryptography>=42.0.0
