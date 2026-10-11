@@ -283,6 +283,12 @@ function closeSidebar() {
 document.querySelectorAll('.nav-item').forEach(function(el) {
   el.addEventListener('click', function() { closeSidebar(); });
 });
+// App-wide display date: dd Mmm yy (27 Aug 26). Input values stay ISO.
+// Defined here, ahead of the page's scripts block, so page scripts can call it while loading.
+const _MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const fmtDMY = (iso, dash) => { const s = String(iso == null ? '' : iso);
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s); if (!m) return s || (dash == null ? '—' : dash);
+  return m[3] + ' ' + _MON[+m[2]-1] + ' ' + m[1].slice(2); };
 </script>
 {% if chat_level != 'none' %}
   {% include '_chat_drawer.html' %}
@@ -464,11 +470,6 @@ function _fmtInr(n) {
 
 /* ── Date helpers ────────────────────────────────────────────── */
 const _fmt = d => d.toISOString().slice(0,10);
-// App-wide display date: dd Mmm yy (27 Aug 26). Input values stay ISO.
-const _MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-const fmtDMY = (iso, dash) => { const s = String(iso == null ? '' : iso);
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s); if (!m) return s || (dash == null ? '—' : dash);
-  return m[3] + ' ' + _MON[+m[2]-1] + ' ' + m[1].slice(2); };
 const _addD = (d, n) => { const r = new Date(d); r.setDate(r.getDate()+n); return r; };
 
 function _windowDates(w) {
