@@ -1,18 +1,48 @@
+// Indian comma formatter (shared core): 10000000 → "1,00,00,000"
+function _indianCommas(intStr) {
+  if (intStr.length <= 3) return intStr;
+  const last3 = intStr.slice(-3);
+  let rem = intStr.slice(0, -3);
+  const groups = [];
+  while (rem.length > 0) { groups.unshift(rem.slice(-2)); rem = rem.slice(0, -2); }
+  return groups.join(',') + ',' + last3;
+}
+
 // Indian Rupee formatter: 10000000 → ₹1,00,00,000.00
 function formatINR(value) {
   const num = parseFloat(value) || 0;
   const [intRaw, dec] = Math.abs(num).toFixed(2).split('.');
-  let formatted;
-  if (intRaw.length <= 3) {
-    formatted = intRaw;
-  } else {
-    const last3 = intRaw.slice(-3);
-    let rem = intRaw.slice(0, -3);
-    const groups = [];
-    while (rem.length > 0) { groups.unshift(rem.slice(-2)); rem = rem.slice(0, -2); }
-    formatted = groups.join(',') + ',' + last3;
-  }
-  return (num < 0 ? '-' : '') + '₹' + formatted + '.' + dec;
+  return (num < 0 ? '-' : '') + '₹' + _indianCommas(intRaw) + '.' + dec;
+}
+
+// Compact INR: ≥1 Cr → "₹X.XX Cr", ≥1 L → "₹X.XX L", else full format
+function formatINRCompact(value) {
+  const num = parseFloat(value) || 0;
+  const sign = num < 0 ? '-' : '';
+  const abs = Math.abs(num);
+  if (abs > 9999999.99) return sign + '₹' + (abs / 1e7).toFixed(2) + ' Cr';
+  if (abs > 99999.99)   return sign + '₹' + (abs / 1e5).toFixed(2) + ' L';
+  const [intRaw, dec] = abs.toFixed(2).split('.');
+  return sign + '₹' + _indianCommas(intRaw) + '.' + dec;
+}
+
+// Indian quantity formatter (no ₹, no forced decimals): 100000 → "1,00,000"
+function formatIndian(value) {
+  const num = parseFloat(value);
+  if (isNaN(num)) return String(value ?? '0');
+  const abs = Math.abs(num);
+  const isWhole = abs === Math.floor(abs);
+  const intStr = String(Math.floor(abs));
+  const dec    = isWhole ? '' : ('.' + abs.toFixed(2).split('.')[1]);
+  return (num < 0 ? '-' : '') + _indianCommas(intStr) + dec;
+}
+
+// ── Stock unit toggle (pieces ↔ boxes) ──────────────────────
+// CSS-driven: toggling 'show-boxes' on <html> switches .u-pcs / .u-box visibility.
+// Preference is saved to localStorage and applied before first paint in base.html <head>.
+function toggleStockUnit() {
+  const isBoxes = document.documentElement.classList.toggle('show-boxes');
+  localStorage.setItem('stockUnit', isBoxes ? 'boxes' : 'pcs');
 }
 
 // Shared table search utility
@@ -35,6 +65,7 @@ function filterTable(q, tableId) {
 function toggleDark() {
   const isDark = document.body.classList.toggle('dark');
   localStorage.setItem('theme', isDark ? 'dark' : 'light');
+  window.dispatchEvent(new CustomEvent('ledger:theme-changed', { detail: { dark: isDark } }));
 }
 
 // Auto-dismiss flash messages after 4s

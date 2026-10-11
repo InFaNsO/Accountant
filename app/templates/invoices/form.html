@@ -8,6 +8,13 @@
 {% block content %}
 <form method="post" action="{{ url_for('invoices.edit_invoice', invoice_id=invoice_id) if action == 'edit' else url_for('invoices.new_invoice') }}" id="invoiceForm">
 
+  <!-- Locked-client warning (shown by JS when a locked client is selected) -->
+  <div id="lockBanner" style="display:none;margin-bottom:18px;padding:12px 16px;border-radius:var(--radius);
+       background:var(--danger-light);border:1px solid var(--danger);color:#991B1B;font-size:13.5px;line-height:1.5">
+    🔒 <strong id="lockBannerName"></strong> is locked — <span id="lockBannerReason"></span>.
+    This invoice can only be saved as a <strong>draft</strong>; it cannot be issued until the lock is removed.
+  </div>
+
   <!-- Header info -->
   <div class="card" style="margin-bottom:18px">
     <div class="card-header"><span class="card-title">Invoice Details</span></div>
@@ -15,13 +22,27 @@
       <div class="form-grid form-grid-3">
 
         <div class="form-group">
-          <label for="client_id">Client *</label>
-          <select id="client_id" name="client_id" required>
-            <option value="">— Select client —</option>
-            {% for c in clients %}
-            <option value="{{ c.id }}" {{ 'selected' if invoice.get('client_id')|string == c.id|string }}>{{ c.name }}{% if c.company %} — {{ c.company }}{% endif %}</option>
-            {% endfor %}
-          </select>
+          <label for="client_search">Client *</label>
+          <input type="text" id="client_search"
+                 placeholder="Search by client name…"
+                 autocomplete="off"
+                 oninput="clientCbFilter(this)"
+                 onfocus="clientCbOpen(this)"
+                 onblur="clientCbBlur(this)"
+                 onkeydown="clientCbKey(event,this)">
+          <input type="hidden" id="client_id" name="client_id" value="{{ invoice.get('client_id', '') }}">
+          <div id="client_error" style="font-size:11px;color:var(--danger);margin-top:3px;display:none">Please select a client.</div>
+        </div>
+
+        <div class="form-group">
+          <label for="company_search">Company <span style="font-weight:400;color:var(--text-muted)">(auto-fills client)</span></label>
+          <input type="text" id="company_search"
+                 placeholder="Search by company name…"
+                 autocomplete="off"
+                 oninput="companyCbFilter(this)"
+                 onfocus="companyCbOpen(this)"
+                 onblur="companyCbBlur(this)"
+                 onkeydown="companyCbKey(event,this)">
         </div>
 
         <div class="form-group">
@@ -37,19 +58,36 @@
         <div class="form-group">
           <label for="status">Status</label>
           <select id="status" name="status">
-            <option value="draft"   {{ 'selected' if invoice.get('status','draft') == 'draft' }}>Draft</option>
-            <option value="sent"    {{ 'selected' if invoice.get('status') == 'sent' }}>Sent</option>
-            <option value="paid"    {{ 'selected' if invoice.get('status') == 'paid' }}>Paid</option>
+            <option value="draft"     {{ 'selected' if invoice.get('status') == 'draft' }}>Draft</option>
+            <option value="issued"    {{ 'selected' if invoice.get('status','issued') in ('issued','sent','') or not invoice.get('status') }}>Issued</option>
+            <option value="paid"      {{ 'selected' if invoice.get('status') == 'paid' }}>Paid</option>
             <option value="cancelled" {{ 'selected' if invoice.get('status') == 'cancelled' }}>Cancelled</option>
           </select>
         </div>
 
         <div class="form-group">
-          <label for="discount_amount">Discount (₹)</label>
-          <input type="number" id="discount_amount" name="discount_amount" value="{{ invoice.get('discount_amount', 0) }}" step="0.01" min="0" oninput="recalcTotals()">
+          <label for="discount_amount">Discount</label>
+          <div style="display:flex;align-items:stretch;gap:0">
+            <input type="number" id="discount_amount" name="discount_amount"
+                   value="{{ invoice.get('discount_value', invoice.get('discount_amount', 0)) }}"
+                   step="0.01" min="0" oninput="recalcTotals()"
+                   style="flex:1;border-top-right-radius:0;border-bottom-right-radius:0;border-right:none">
+            <select id="discount_type" name="discount_type" onchange="recalcTotals()"
+                    style="width:62px;border-top-left-radius:0;border-bottom-left-radius:0">
+              <option value="value"   {{ 'selected' if (invoice.get('discount_type') or 'value') == 'value' }}>₹</option>
+              <option value="percent" {{ 'selected' if invoice.get('discount_type') == 'percent' }}>%</option>
+            </select>
+          </div>
         </div>
 
-        <div class="form-group span-3">
+        <div class="form-group" id="companyWrap" style="display:none">
+          <label for="company_id">Bill to Company</label>
+          <select id="company_id" name="company_id">
+            <option value="">— No specific company —</option>
+          </select>
+        </div>
+
+        <div class="form-group {% if invoice.get('company_id') %}{% else %}span-2{% endif %}" id="notesWrap">
           <label for="notes">Notes / Terms</label>
           <textarea id="notes" name="notes" placeholder="Payment terms, bank details, thank-you message…">{{ invoice.get('notes','') }}</textarea>
         </div>
@@ -62,48 +100,86 @@
   <div class="card" style="margin-bottom:18px">
     <div class="card-header">
       <span class="card-title">Line Items</span>
-      <div style="display:flex;gap:8px">
-        <select id="productPicker" style="width:220px" onchange="addFromProduct(this)">
-          <option value="">+ Add from catalog…</option>
-          {% for p in products %}
-          <option value="{{ p.id }}" data-name="{{ p.name }}" data-price="{{ p.unit_price }}" data-tax="{{ p.tax_rate }}">{{ p.name }} — {{ p.unit_price|inr }}</option>
-          {% endfor %}
-        </select>
-        <button type="button" class="btn btn-secondary" onclick="addRow()">+ Add row</button>
+      <div style="display:flex;gap:8px;margin-left:auto">
+        <button type="button" class="btn btn-secondary" onclick="refreshStock(this)" title="Refresh warehouse stock quantities">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+          <span class="btn-label-mobile">Refresh Stock</span>
+        </button>
+        <button type="button" class="btn btn-secondary" onclick="addLineItem()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          Add Item
+        </button>
       </div>
     </div>
-    <div class="card-body" style="padding:16px">
-      <div class="table-wrap">
-        <table class="line-items">
-          <thead>
-            <tr>
-              <th class="col-desc">Description</th>
-              <th class="col-qty">Qty</th>
-              <th class="col-price">Unit Price</th>
-              <th class="col-tax">Tax %</th>
-              <th class="col-total">Line Total</th>
-              <th class="col-del"></th>
-            </tr>
-          </thead>
-          <tbody id="lineItems">
-            {% for item in items %}
-            <tr>
-              <td class="col-desc">
-                <input type="hidden" name="items[{{ loop.index0 }}][product_id]" value="{{ item.get('product_id','') }}">
-                <input type="text" name="items[{{ loop.index0 }}][description]" value="{{ item.get('description','') }}" placeholder="Description" oninput="recalcRow(this)" required>
-              </td>
-              <td class="col-qty"><input type="number" name="items[{{ loop.index0 }}][quantity]" value="{{ item.get('quantity',1) }}" min="0.01" step="any" oninput="recalcRow(this)"></td>
-              <td class="col-price"><input type="number" name="items[{{ loop.index0 }}][unit_price]" value="{{ item.get('unit_price',0) }}" min="0" step="0.01" oninput="recalcRow(this)"></td>
-              <td class="col-tax"><input type="number" name="items[{{ loop.index0 }}][tax_rate]" value="{{ item.get('tax_rate',0) }}" min="0" max="100" step="0.01" oninput="recalcRow(this)"></td>
-              <td class="col-total"><div class="line-total-readonly" id="lt-{{ loop.index0 }}">₹0.00</div></td>
-              <td class="col-del"><button type="button" class="btn btn-danger btn-sm" onclick="removeRow(this)">✕</button></td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
+    <div class="table-wrap">
+      <table class="line-items" style="min-width:820px">
+        <thead>
+          <tr>
+            <th>Product / Description</th>
+            <th style="width:80px;text-align:right">Qty</th>
+            <th style="width:130px;text-align:right">Unit Price (₹)</th>
+            <th style="width:130px;text-align:right">Discount</th>
+            <th style="width:70px;text-align:center">Tax %</th>
+            <th style="width:120px;text-align:right">Total</th>
+            <th style="width:36px"></th>
+          </tr>
+        </thead>
+        <tbody id="lineItems">
+          {% for item in items %}
+          <tr>
+            <td class="col-desc" style="min-width:280px">
+              <div class="cb-wrap">
+                <input type="text"
+                       name="items[{{ loop.index0 }}][description]"
+                       class="cb-input"
+                       value="{{ item.get('description','') }}"
+                       placeholder="Search product by name or SKU…"
+                       autocomplete="off"
+                       oninput="cbFilter(this)"
+                       onfocus="cbOpen(this)"
+                       onblur="cbBlur(this)"
+                       onkeydown="cbKey(event,this)">
+                <div class="cb-dropdown" style="display:none"></div>
+                <input type="hidden" name="items[{{ loop.index0 }}][product_id]"     class="cb-pid"  value="{{ item.get('product_id','') }}">
+                <input type="hidden" name="items[{{ loop.index0 }}][sub_product_id]" class="cb-spid" value="{{ item.get('sub_product_id','') }}">
+              </div>
+              <input type="text"
+                     name="items[{{ loop.index0 }}][sku]"
+                     class="cb-sku-inp"
+                     value="{{ item.get('sku','') }}"
+                     placeholder="SKU (optional)">
+            </td>
+            <td class="col-qty" style="vertical-align:top;padding-top:10px">
+              <input type="number" name="items[{{ loop.index0 }}][quantity]"   value="{{ item.get('quantity',1) }}"   min="0.01" step="any"  oninput="recalcTotals();validateInvQty(this)" style="text-align:right">
+            </td>
+            <td class="col-price" style="vertical-align:top;padding-top:10px">
+              <input type="number" name="items[{{ loop.index0 }}][unit_price]" value="{{ item.get('unit_price',0) }}" min="0"    step="0.01" oninput="recalcTotals()" style="text-align:right">
+            </td>
+            <td class="col-disc" style="vertical-align:top;padding-top:10px">
+              <div style="display:flex;align-items:stretch;gap:0">
+                <input type="number" name="items[{{ loop.index0 }}][discount_value]" value="{{ item.get('discount_value',0) }}" min="0" step="0.01" oninput="recalcTotals()" style="text-align:right;flex:1;border-top-right-radius:0;border-bottom-right-radius:0;border-right:none;min-width:0">
+                <select name="items[{{ loop.index0 }}][discount_type]" onchange="recalcTotals()" style="width:54px;border-top-left-radius:0;border-bottom-left-radius:0">
+                  <option value="percent" {{ 'selected' if (item.get('discount_type') or 'percent') == 'percent' }}>%</option>
+                  <option value="value"   {{ 'selected' if item.get('discount_type') == 'value' }}>₹</option>
+                </select>
+              </div>
+            </td>
+            <td class="col-tax" style="vertical-align:top;padding-top:10px">
+              <input type="number" name="items[{{ loop.index0 }}][tax_rate]"   value="{{ item.get('tax_rate',0) }}"   min="0"    max="100"   step="0.01" oninput="recalcTotals()" style="text-align:center">
+            </td>
+            <td class="col-total" style="vertical-align:top;padding-top:14px;text-align:right">
+              <span class="line-total-disp fw-700">₹0.00</span>
+            </td>
+            <td class="col-del" style="vertical-align:top;padding-top:8px">
+              <button type="button" class="btn btn-danger btn-sm" onclick="removeRow(this)" title="Remove">✕</button>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
 
-      <!-- Totals -->
+    <div class="card-body" style="padding:16px 22px">
       <div class="invoice-totals">
         <div class="total-row"><span>Subtotal</span><span id="subtotal">₹0.00</span></div>
         <div class="total-row"><span>Tax</span><span id="taxTotal">₹0.00</span></div>
@@ -114,7 +190,14 @@
   </div>
 
   <div class="form-actions">
-    <button type="submit" class="btn btn-primary">{{ 'Save Invoice' if action == 'edit' else 'Create Invoice' }}</button>
+    <button type="submit" class="btn btn-primary" onclick="document.getElementById('status').value || true">
+      {{ 'Save Invoice' if action == 'edit' else 'Create Invoice' }}
+    </button>
+    {% if action == 'new' %}
+    <button type="submit" class="btn btn-secondary" onclick="document.getElementById('status').value='draft'">
+      Save as Draft
+    </button>
+    {% endif %}
     <a href="{{ url_for('invoices.list_invoices') }}" class="btn btn-secondary">Cancel</a>
   </div>
 </form>
@@ -122,80 +205,656 @@
 
 {% block scripts %}
 <script>
-let rowCount = {{ items|length }};
+// ── Data ───────────────────────────────────────────────────────────────────────
+const CLIENT_LIST = [{% for c in clients %}{"id":{{ c.id }},"name":{{ c.name|tojson }},"company":{{ (c.company or '')|tojson }},"payment_terms":{{ c.payment_terms or 0 }}}{% if not loop.last %},{% endif %}{% endfor %}];
+const ALL_COMPANIES = [{% for co in all_companies %}{"id":{{ co.id }},"name":{{ co.name|tojson }},"client_id":{{ co.client_id }},"client_name":{{ co.client_name|tojson }}}{% if not loop.last %},{% endif %}{% endfor %}];
+// {client_id: [lock reasons]} for currently-locked clients (JSON keys are strings)
+const LOCKED_CLIENTS = {{ (locked_clients if locked_clients is defined else {}) | tojson }};
 
-function addRow(desc='', qty=1, price=0, tax=0, productId='') {
-  const idx = rowCount++;
+// ── Locked-client banner ───────────────────────────────────────────────────────
+function updateLockBanner() {
+  const banner  = document.getElementById('lockBanner');
+  const cid     = document.getElementById('client_id').value;
+  const reasons = cid ? LOCKED_CLIENTS[String(cid)] : null;
+  if (reasons && reasons.length) {
+    const c = CLIENT_LIST.find(x => String(x.id) === String(cid));
+    document.getElementById('lockBannerName').textContent   = c ? c.name : 'This client';
+    document.getElementById('lockBannerReason').textContent = reasons.join('; ');
+    banner.style.display = '';
+  } else {
+    banner.style.display = 'none';
+  }
+}
+
+// ── Shared fixed-position dropdown factory ─────────────────────────────────────
+function _makeDD(zIndex) {
+  const el = document.createElement('div');
+  el.style.cssText =
+    `display:none;position:fixed;z-index:${zIndex};background:var(--bg);` +
+    'border:1px solid var(--border);border-radius:var(--radius-sm);' +
+    'box-shadow:0 8px 32px rgba(0,0,0,.22);overflow-y:auto;max-height:310px;min-width:280px';
+  el._cursor = -1; el._matches = [];
+  document.body.appendChild(el);
+  return el;
+}
+function _ddPos(dd, inp) {
+  const r = inp.getBoundingClientRect();
+  dd.style.top   = (r.bottom + 3) + 'px';
+  dd.style.left  = r.left + 'px';
+  dd.style.width = Math.max(r.width, 280) + 'px';
+}
+
+// ── Client combobox ────────────────────────────────────────────────────────────
+const _clientDD    = _makeDD(9600);
+let   _clientInput = null;
+
+function _clientMatches(q) {
+  return q ? CLIENT_LIST.filter(c =>
+    c.name.toLowerCase().includes(q) || c.company.toLowerCase().includes(q)
+  ) : CLIENT_LIST;
+}
+function clientCbRender(inp, matches) {
+  _clientInput = inp; _clientDD._matches = matches; _clientDD._cursor = -1;
+  _clientDD.innerHTML = matches.length
+    ? matches.map((c, i) => `<div class="cb-option" data-idx="${i}" onmousedown="clientCbSelect(event,this)">
+        <div style="font-weight:600;font-size:13px">${escHtml(c.name)}${LOCKED_CLIENTS[String(c.id)] ? ' <span style="color:var(--danger)" title="Client is locked — drafts only">🔒</span>' : ''}</div>
+        ${c.company ? `<div style="font-size:11px;color:var(--text-muted)">${escHtml(c.company)}</div>` : ''}
+      </div>`).join('')
+    : '<div style="padding:10px 14px;color:var(--text-muted);font-size:13px;font-style:italic">No clients found</div>';
+  _ddPos(_clientDD, inp);
+  _clientDD.style.display = '';
+}
+function clientCbOpen(inp)   { clientCbRender(inp, _clientMatches(inp.value.toLowerCase())); }
+function clientCbFilter(inp) {
+  document.getElementById('client_id').value = '';
+  updateLockBanner();
+  clientCbRender(inp, _clientMatches(inp.value.toLowerCase()));
+}
+function clientCbBlur(inp) {
+  setTimeout(() => { if (_clientInput === inp) { _clientDD.style.display = 'none'; _clientInput = null; } }, 180);
+}
+function clientCbSelect(e, optEl) {
+  e.preventDefault();
+  const c = _clientDD._matches[parseInt(optEl.dataset.idx, 10)];
+  if (!c || !_clientInput) return;
+  _clientInput.value = c.name;
+  document.getElementById('client_id').value = c.id;
+  document.getElementById('client_error').style.display = 'none';
+  updateLockBanner();
+  _clientDD.style.display = 'none'; _clientInput = null;
+
+  // Load companies and auto-select first
+  loadClientCompanies(c.id);
+
+  // Auto-fill due date from payment terms
+  const dueDate  = document.getElementById('due_date');
+  const issueDate = document.getElementById('issue_date');
+  if (c.payment_terms > 0) {
+    dueDate._clientTerms = c.payment_terms;
+    if (issueDate.value) {
+      const d = new Date(issueDate.value);
+      d.setDate(d.getDate() + c.payment_terms);
+      dueDate.value = d.toISOString().slice(0, 10);
+      dueDate._userSet = false;
+    }
+  } else {
+    dueDate._clientTerms = null;
+  }
+}
+function clientCbKey(e, inp) {
+  if (_clientDD.style.display === 'none' || _clientInput !== inp) {
+    clientCbOpen(inp);
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const opts = _clientDD.querySelectorAll('.cb-option');
+      if (opts.length) {
+        _clientDD._cursor = e.key === 'ArrowDown' ? 0 : opts.length - 1;
+        opts[_clientDD._cursor].classList.add('cb-active');
+        opts[_clientDD._cursor].scrollIntoView({ block: 'nearest' });
+      }
+    }
+    return;
+  }
+  const opts = _clientDD.querySelectorAll('.cb-option');
+  if (!opts.length) return;
+  if (e.key === 'Escape') { _clientDD.style.display = 'none'; _clientInput = null; return; }
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    _clientDD._cursor = Math.min(_clientDD._cursor + 1, opts.length - 1);
+    opts.forEach((o, i) => o.classList.toggle('cb-active', i === _clientDD._cursor));
+    opts[_clientDD._cursor]?.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    _clientDD._cursor = Math.max(_clientDD._cursor - 1, 0);
+    opts.forEach((o, i) => o.classList.toggle('cb-active', i === _clientDD._cursor));
+    opts[_clientDD._cursor]?.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (_clientDD._cursor >= 0 && opts[_clientDD._cursor]) clientCbSelect(e, opts[_clientDD._cursor]);
+  }
+}
+
+// ── Company combobox (searches ALL companies → auto-fills client) ───────────────
+const _companyDD    = _makeDD(9610);
+let   _companyInput = null;
+
+function _companyMatches(q) {
+  return q ? ALL_COMPANIES.filter(co =>
+    co.name.toLowerCase().includes(q) || co.client_name.toLowerCase().includes(q)
+  ) : ALL_COMPANIES;
+}
+function companyCbRender(inp, matches) {
+  _companyInput = inp; _companyDD._matches = matches; _companyDD._cursor = -1;
+  _companyDD.innerHTML = matches.length
+    ? matches.map((co, i) => `<div class="cb-option" data-idx="${i}" onmousedown="companyCbSelect(event,this)">
+        <div style="font-weight:600;font-size:13px">${escHtml(co.name)}</div>
+        <div style="font-size:11px;color:var(--text-muted)">${escHtml(co.client_name)}</div>
+      </div>`).join('')
+    : '<div style="padding:10px 14px;color:var(--text-muted);font-size:13px;font-style:italic">No companies found</div>';
+  _ddPos(_companyDD, inp);
+  _companyDD.style.display = '';
+}
+function companyCbOpen(inp)   { companyCbRender(inp, _companyMatches(inp.value.toLowerCase())); }
+function companyCbFilter(inp) { companyCbRender(inp, _companyMatches(inp.value.toLowerCase())); }
+function companyCbBlur(inp) {
+  setTimeout(() => { if (_companyInput === inp) { _companyDD.style.display = 'none'; _companyInput = null; } }, 180);
+}
+function companyCbSelect(e, optEl) {
+  e.preventDefault();
+  const co = _companyDD._matches[parseInt(optEl.dataset.idx, 10)];
+  if (!co || !_companyInput) return;
+  _companyInput.value = co.name;
+  _companyDD.style.display = 'none'; _companyInput = null;
+
+  // Auto-fill client
+  const clientSearchInp = document.getElementById('client_search');
+  clientSearchInp.value = co.client_name;
+  document.getElementById('client_id').value = co.client_id;
+  document.getElementById('client_error').style.display = 'none';
+  updateLockBanner();
+
+  // Load companies and select this specific company
+  loadClientCompanies(co.client_id, co.id);
+
+  // Auto-fill due date from client's payment terms
+  const found = CLIENT_LIST.find(c => c.id === co.client_id);
+  if (found && found.payment_terms > 0) {
+    const dueDate   = document.getElementById('due_date');
+    const issueDate = document.getElementById('issue_date');
+    dueDate._clientTerms = found.payment_terms;
+    if (issueDate.value && !dueDate._userSet) {
+      const d = new Date(issueDate.value);
+      d.setDate(d.getDate() + found.payment_terms);
+      dueDate.value = d.toISOString().slice(0, 10);
+    }
+  }
+}
+function companyCbKey(e, inp) {
+  if (_companyDD.style.display === 'none' || _companyInput !== inp) {
+    companyCbOpen(inp);
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const opts = _companyDD.querySelectorAll('.cb-option');
+      if (opts.length) {
+        _companyDD._cursor = e.key === 'ArrowDown' ? 0 : opts.length - 1;
+        opts[_companyDD._cursor].classList.add('cb-active');
+        opts[_companyDD._cursor].scrollIntoView({ block: 'nearest' });
+      }
+    }
+    return;
+  }
+  const opts = _companyDD.querySelectorAll('.cb-option');
+  if (!opts.length) return;
+  if (e.key === 'Escape') { _companyDD.style.display = 'none'; _companyInput = null; return; }
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    _companyDD._cursor = Math.min(_companyDD._cursor + 1, opts.length - 1);
+    opts.forEach((o, i) => o.classList.toggle('cb-active', i === _companyDD._cursor));
+    opts[_companyDD._cursor]?.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    _companyDD._cursor = Math.max(_companyDD._cursor - 1, 0);
+    opts.forEach((o, i) => o.classList.toggle('cb-active', i === _companyDD._cursor));
+    opts[_companyDD._cursor]?.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (_companyDD._cursor >= 0 && opts[_companyDD._cursor]) companyCbSelect(e, opts[_companyDD._cursor]);
+  }
+}
+
+// ── Bill-to Company loader ─────────────────────────────────────────────────────
+async function loadClientCompanies(clientId, preselectId) {
+  // preselectId: undefined = auto-select first, null/''/0 = no preselect, id = select specific
+  const wrap = document.getElementById('companyWrap');
+  const sel  = document.getElementById('company_id');
+  sel.innerHTML = '<option value="">— No specific company —</option>';
+  if (!clientId) { wrap.style.display = 'none'; return; }
+  try {
+    const res       = await fetch(`/invoices/api/client-companies/${clientId}`);
+    const companies = await res.json();
+    companies.forEach(co => {
+      const opt = document.createElement('option');
+      opt.value       = co.id;
+      opt.textContent = co.name;
+      sel.appendChild(opt);
+    });
+    if (wrap) wrap.style.display = companies.length ? '' : 'none';
+
+    if (preselectId !== null && preselectId !== undefined && preselectId !== '' && preselectId !== 0) {
+      sel.value = String(preselectId);
+    } else if (preselectId === undefined && companies.length > 0) {
+      // Auto-select first company when client chosen interactively
+      sel.value = String(companies[0].id);
+    }
+  } catch(e) { wrap.style.display = 'none'; }
+}
+
+window.addEventListener('scroll', () => {
+  if (_clientInput)  _ddPos(_clientDD,  _clientInput);
+  if (_companyInput) _ddPos(_companyDD, _companyInput);
+}, true);
+window.addEventListener('resize', () => {
+  if (_clientInput)  _ddPos(_clientDD,  _clientInput);
+  if (_companyInput) _ddPos(_companyDD, _companyInput);
+});
+
+// ── Catalog data ───────────────────────────────────────────────────────────────
+const CATALOG = {{ products | tojson }};
+
+let rowCount = {{ items | length }};
+
+const _cbDD = (() => {
+  const el = document.createElement('div');
+  el.id    = 'cbSharedDropdown';
+  el.style.cssText =
+    'display:none;position:fixed;z-index:9500;background:var(--bg);' +
+    'border:1px solid var(--border);border-radius:var(--radius-sm);' +
+    'box-shadow:0 8px 32px rgba(0,0,0,.22);overflow-y:auto;' +
+    'max-height:310px;min-width:380px';
+  document.body.appendChild(el);
+  el._matches = [];
+  el._cursor  = -1;
+  return el;
+})();
+let _cbInput = null;
+
+function _cbPos(input) {
+  const r = input.getBoundingClientRect();
+  _cbDD.style.top   = (r.bottom + 3) + 'px';
+  _cbDD.style.left  = r.left + 'px';
+  _cbDD.style.width = Math.max(r.width, 400) + 'px';
+}
+
+function getSelectedKeys(excludeInput) {
+  const keys = new Set();
+  document.querySelectorAll('#lineItems tr').forEach(tr => {
+    const cbInp = tr.querySelector('.cb-input');
+    if (cbInp === excludeInput) return;
+    const pid  = tr.querySelector('.cb-pid')?.value;
+    const spid = tr.querySelector('.cb-spid')?.value;
+    if (pid || spid) keys.add(spid ? `p${pid}_s${spid}` : `p${pid}`);
+  });
+  return keys;
+}
+
+function cbBuildOptions(query, excludeInput) {
+  const selectedKeys = getSelectedKeys(excludeInput);
+  const q = query.trim().toLowerCase();
+  const catalog = CATALOG.filter(p => {
+    const key = p.sub_product_id ? `p${p.product_id}_s${p.sub_product_id}` : `p${p.product_id}`;
+    return !selectedKeys.has(key);
+  });
+  return q === ''
+    ? catalog
+    : catalog.filter(p =>
+        p.name.toLowerCase().includes(q) ||
+        (p.sku && p.sku.toLowerCase().includes(q))
+      );
+}
+
+function cbRender(input, matches) {
+  _cbInput = input; _cbDD._matches = matches; _cbDD._cursor = -1;
+  if (!matches.length) {
+    _cbDD.innerHTML = '<div class="cb-no-match">No products found</div>';
+  } else {
+    _cbDD.innerHTML = matches.map((p, i) => `
+      <div class="cb-option" data-idx="${i}" onmousedown="cbSelect(event,this)">
+        <div class="cb-opt-name">${escHtml(p.name)}</div>
+        <div class="cb-opt-meta">${p.sku ? '<span class="cb-sku-tag">' + escHtml(p.sku) + '</span>' : ''} <span class="cb-price-tag">₹${(p.unit_price||0).toFixed(2)}</span> · <span>Tax ${p.tax_rate||0}%</span></div>
+      </div>`).join('');
+  }
+  _cbPos(input);
+  _cbDD.style.display = '';
+}
+
+function cbOpen(input)   { cbRender(input, cbBuildOptions(input.value, input)); }
+function cbFilter(input) {
+  const wrap = input.closest('.cb-wrap');
+  wrap.querySelector('.cb-pid').value  = '';
+  wrap.querySelector('.cb-spid').value = '';
+  cbRender(input, cbBuildOptions(input.value, input));
+  recalcTotals();
+}
+function cbBlur(input) {
+  setTimeout(() => {
+    if (_cbInput === input) { _cbDD.style.display = 'none'; _cbDD._cursor = -1; _cbInput = null; }
+  }, 180);
+}
+
+function cbSelect(event, optEl) {
+  event.preventDefault();
+  const idx = parseInt(optEl.dataset.idx, 10);
+  const p   = _cbDD._matches[idx];
+  if (!p || !_cbInput) return;
+
+  const wrap = _cbInput.closest('.cb-wrap');
+  _cbInput.value = p.name;
+  wrap.querySelector('.cb-pid').value  = p.product_id  || '';
+  wrap.querySelector('.cb-spid').value = p.sub_product_id || '';
+
+  const row    = wrap.closest('tr');
+  const skuInp = row.querySelector('.cb-sku-inp');
+  if (skuInp && !skuInp._userEdited) skuInp.value = p.sku || '';
+
+  const priceInp = row.querySelector('[name$="[unit_price]"]');
+  const taxInp   = row.querySelector('[name$="[tax_rate]"]');
+  const qtyInp   = row.querySelector('[name$="[quantity]"]');
+  if (priceInp) priceInp.value = (p.unit_price || 0).toFixed(2);
+  if (taxInp)   taxInp.value   = p.tax_rate || 0;
+  if (qtyInp)   { qtyInp.dataset.stockQty = p.stock_qty != null ? p.stock_qty : ''; validateInvQty(qtyInp); }
+
+  _cbDD.style.display = 'none'; _cbInput = null;
+  recalcTotals();
+
+  const rows = document.querySelectorAll('#lineItems tr');
+  if (wrap.closest('tr') === rows[rows.length - 1]) addLineItem();
+}
+
+function validateInvQty(inp) {
+  const stock = parseFloat(inp.dataset.stockQty);
+  if (isNaN(stock)) return;
+  const val = parseFloat(inp.value) || 0;
+  let hint = inp.parentNode.querySelector('.inv-qty-hint');
+  if (!hint) {
+    hint = document.createElement('div');
+    hint.className = 'inv-qty-hint';
+    hint.style.cssText = 'font-size:11px;color:var(--danger);margin-top:2px';
+    inp.parentNode.appendChild(hint);
+  }
+  if (val > stock) {
+    inp.style.outline = '2px solid var(--danger)';
+    hint.textContent  = `Exceeds warehouse stock (${stock})`;
+  } else {
+    inp.style.outline = '';
+    hint.textContent  = '';
+  }
+}
+
+function cbKey(event, input) {
+  if (_cbDD.style.display === 'none' || _cbInput !== input) {
+    cbOpen(input);
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const opts = _cbDD.querySelectorAll('.cb-option');
+      if (opts.length) {
+        _cbDD._cursor = event.key === 'ArrowDown' ? 0 : opts.length - 1;
+        opts[_cbDD._cursor].classList.add('cb-active');
+        opts[_cbDD._cursor].scrollIntoView({ block: 'nearest' });
+      }
+    }
+    return;
+  }
+  const opts = _cbDD.querySelectorAll('.cb-option');
+  if (!opts.length) return;
+  if (event.key === 'Escape') { _cbDD.style.display = 'none'; _cbInput = null; return; }
+  if (event.key === 'ArrowDown') {
+    event.preventDefault();
+    _cbDD._cursor = Math.min(_cbDD._cursor + 1, opts.length - 1);
+    opts.forEach((o, i) => o.classList.toggle('cb-active', i === _cbDD._cursor));
+    opts[_cbDD._cursor]?.scrollIntoView({ block: 'nearest' });
+  } else if (event.key === 'ArrowUp') {
+    event.preventDefault();
+    _cbDD._cursor = Math.max(_cbDD._cursor - 1, 0);
+    opts.forEach((o, i) => o.classList.toggle('cb-active', i === _cbDD._cursor));
+    opts[_cbDD._cursor]?.scrollIntoView({ block: 'nearest' });
+  } else if (event.key === 'Enter') {
+    event.preventDefault();
+    const cursor = _cbDD._cursor >= 0 ? _cbDD._cursor : 0;
+    if (opts[cursor]) cbSelect(event, opts[cursor]);
+  }
+}
+
+window.addEventListener('scroll', () => { if (_cbInput) _cbPos(_cbInput); }, true);
+window.addEventListener('resize', () => { if (_cbInput) _cbPos(_cbInput); });
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Add / remove rows ──────────────────────────────────────────────────────────
+function addLineItem(desc='', sku='', qty=1, price=0, tax=0, pid='', spid='') {
+  const idx   = rowCount++;
   const tbody = document.getElementById('lineItems');
-  const tr = document.createElement('tr');
+  const tr    = document.createElement('tr');
   tr.innerHTML = `
-    <td class="col-desc">
-      <input type="hidden" name="items[${idx}][product_id]" value="${productId}">
-      <input type="text" name="items[${idx}][description]" value="${desc}" placeholder="Description" oninput="recalcRow(this)" required>
+    <td class="col-desc" style="min-width:280px">
+      <div class="cb-wrap">
+        <input type="text" name="items[${idx}][description]" class="cb-input" value="${escHtml(desc)}"
+               placeholder="Search product by name or SKU…" autocomplete="off"
+               oninput="cbFilter(this)" onfocus="cbOpen(this)" onblur="cbBlur(this)" onkeydown="cbKey(event,this)">
+        <div class="cb-dropdown" style="display:none"></div>
+        <input type="hidden" name="items[${idx}][product_id]"     class="cb-pid"  value="${escHtml(pid)}">
+        <input type="hidden" name="items[${idx}][sub_product_id]" class="cb-spid" value="${escHtml(spid)}">
+      </div>
+      <input type="text" name="items[${idx}][sku]" class="cb-sku-inp" value="${escHtml(sku)}" placeholder="SKU (optional)">
     </td>
-    <td class="col-qty"><input type="number" name="items[${idx}][quantity]" value="${qty}" min="0.01" step="any" oninput="recalcRow(this)"></td>
-    <td class="col-price"><input type="number" name="items[${idx}][unit_price]" value="${price}" min="0" step="0.01" oninput="recalcRow(this)"></td>
-    <td class="col-tax"><input type="number" name="items[${idx}][tax_rate]" value="${tax}" min="0" max="100" step="0.01" oninput="recalcRow(this)"></td>
-    <td class="col-total"><div class="line-total-readonly" id="lt-${idx}">₹0.00</div></td>
-    <td class="col-del"><button type="button" class="btn btn-danger btn-sm" onclick="removeRow(this)">✕</button></td>
-  `;
+    <td class="col-qty"   style="vertical-align:top;padding-top:10px">
+      <input type="number" name="items[${idx}][quantity]"   value="${qty}"   min="0.01" step="any"  oninput="recalcTotals();validateInvQty(this)" style="text-align:right">
+    </td>
+    <td class="col-price" style="vertical-align:top;padding-top:10px">
+      <input type="number" name="items[${idx}][unit_price]" value="${price}" min="0"    step="0.01" oninput="recalcTotals()" style="text-align:right">
+    </td>
+    <td class="col-disc"  style="vertical-align:top;padding-top:10px">
+      <div style="display:flex;align-items:stretch;gap:0">
+        <input type="number" name="items[${idx}][discount_value]" value="0" min="0" step="0.01" oninput="recalcTotals()" style="text-align:right;flex:1;border-top-right-radius:0;border-bottom-right-radius:0;border-right:none;min-width:0">
+        <select name="items[${idx}][discount_type]" onchange="recalcTotals()" style="width:54px;border-top-left-radius:0;border-bottom-left-radius:0">
+          <option value="percent" selected>%</option>
+          <option value="value">₹</option>
+        </select>
+      </div>
+    </td>
+    <td class="col-tax"   style="vertical-align:top;padding-top:10px">
+      <input type="number" name="items[${idx}][tax_rate]"   value="${tax}"   min="0"    max="100"   step="0.01" oninput="recalcTotals()" style="text-align:center">
+    </td>
+    <td class="col-total" style="vertical-align:top;padding-top:14px;text-align:right">
+      <span class="line-total-disp fw-700">₹0.00</span>
+    </td>
+    <td class="col-del"   style="vertical-align:top;padding-top:8px">
+      <button type="button" class="btn btn-danger btn-sm" onclick="removeRow(this)" title="Remove">✕</button>
+    </td>`;
   tbody.appendChild(tr);
+  tr.querySelector('.cb-sku-inp')._userEdited = false;
+  tr.querySelector('.cb-sku-inp').addEventListener('input', function() { this._userEdited = true; });
+  tr.querySelector('.cb-input').focus();
   recalcTotals();
 }
 
-function addFromProduct(sel) {
-  const opt = sel.options[sel.selectedIndex];
-  if (!opt.value) return;
-  addRow(opt.dataset.name, 1, parseFloat(opt.dataset.price), parseFloat(opt.dataset.tax), opt.value);
-  sel.selectedIndex = 0;
-}
-
-function removeRow(btn) {
-  btn.closest('tr').remove();
-  renumberRows();
-  recalcTotals();
-}
+function removeRow(btn) { btn.closest('tr').remove(); renumberRows(); recalcTotals(); }
 
 function renumberRows() {
   document.querySelectorAll('#lineItems tr').forEach((tr, i) => {
-    tr.querySelectorAll('input[name]').forEach(input => {
-      input.name = input.name.replace(/items\[\d+\]/, `items[${i}]`);
+    tr.querySelectorAll('input[name]').forEach(inp => {
+      inp.name = inp.name.replace(/items\[\d+\]/, `items[${i}]`);
     });
-    const lt = tr.querySelector('[id^="lt-"]');
-    if (lt) lt.id = `lt-${i}`;
   });
   rowCount = document.querySelectorAll('#lineItems tr').length;
 }
 
-function recalcRow(input) { recalcTotals(); }
-
+// ── Totals ─────────────────────────────────────────────────────────────────────
 function recalcTotals() {
   let subtotal = 0, taxTotal = 0;
-  document.querySelectorAll('#lineItems tr').forEach((tr, i) => {
-    const qty   = parseFloat(tr.querySelector('[name$="[quantity]"]')?.value) || 0;
+  document.querySelectorAll('#lineItems tr').forEach(tr => {
+    const qty   = parseFloat(tr.querySelector('[name$="[quantity]"]')?.value)   || 0;
     const price = parseFloat(tr.querySelector('[name$="[unit_price]"]')?.value) || 0;
-    const tax   = parseFloat(tr.querySelector('[name$="[tax_rate]"]')?.value) || 0;
-    const lineTotal = qty * price;
-    const lineTax   = lineTotal * tax / 100;
-    subtotal += lineTotal;
-    taxTotal += lineTax;
-    const ltEl = tr.querySelector('[id^="lt-"]');
-    if (ltEl) ltEl.textContent = formatINR(lineTotal);
+    const tax   = parseFloat(tr.querySelector('[name$="[tax_rate]"]')?.value)   || 0;
+    const dval  = parseFloat(tr.querySelector('[name$="[discount_value]"]')?.value) || 0;
+    const dtype = tr.querySelector('[name$="[discount_type]"]')?.value || 'percent';
+    let effPrice = dtype === 'percent' ? price * (1 - dval / 100) : price - dval;
+    if (effPrice < 0) effPrice = 0;
+    const lineTotal = effPrice * qty;
+    subtotal += lineTotal; taxTotal += lineTotal * tax / 100;
+    const disp = tr.querySelector('.line-total-disp');
+    if (disp) disp.textContent = formatINR(lineTotal);
   });
-  const discount = parseFloat(document.getElementById('discount_amount')?.value) || 0;
-  const grand = subtotal + taxTotal - discount;
-  document.getElementById('subtotal').textContent       = formatINR(subtotal);
-  document.getElementById('taxTotal').textContent       = formatINR(taxTotal);
-  document.getElementById('discountDisplay').textContent= formatINR(discount);
-  document.getElementById('grandTotal').textContent     = formatINR(grand);
+  const invDval  = parseFloat(document.getElementById('discount_amount')?.value) || 0;
+  const invDtype = document.getElementById('discount_type')?.value || 'value';
+  const discount = invDtype === 'percent' ? (subtotal + taxTotal) * invDval / 100 : invDval;
+  document.getElementById('subtotal').textContent        = formatINR(subtotal);
+  document.getElementById('taxTotal').textContent        = formatINR(taxTotal);
+  document.getElementById('discountDisplay').textContent = formatINR(discount) + (invDtype === 'percent' && invDval ? ` (${invDval}%)` : '');
+  document.getElementById('grandTotal').textContent      = formatINR(subtotal + taxTotal - discount);
 }
 
-// Set today's date default and recalc on load
+// ── Refresh warehouse stock for products already in line items ────────────────
+async function refreshStock(btn) {
+  const orig = btn.innerHTML;
+  btn.disabled = true; btn.style.opacity = '0.6';
+  btn.innerHTML = 'Refreshing…';
+  try {
+    const res = await fetch('/invoices/api/stock-refresh');
+    if (!res.ok) throw new Error('refresh failed');
+    const data = await res.json();
+    const pMap = new Map(data.products.map(p => [String(p.id), p.stock_qty]));
+    const sMap = new Map(data.sub_products.map(s => [String(s.id), s.stock_qty]));
+    // Update CATALOG entries so subsequent product selections see new stock too
+    CATALOG.forEach(p => {
+      if (p.sub_product_id && sMap.has(String(p.sub_product_id))) p.stock_qty = sMap.get(String(p.sub_product_id));
+      else if (p.product_id && pMap.has(String(p.product_id)))    p.stock_qty = pMap.get(String(p.product_id));
+    });
+    // Update each row's qty input dataset.stockQty + re-validate
+    document.querySelectorAll('#lineItems tr').forEach(tr => {
+      const pid  = tr.querySelector('.cb-pid')?.value;
+      const spid = tr.querySelector('.cb-spid')?.value;
+      const qty  = tr.querySelector('[name$="[quantity]"]');
+      if (!qty) return;
+      let val;
+      if (spid && sMap.has(String(spid)))       val = sMap.get(String(spid));
+      else if (pid && pMap.has(String(pid)))    val = pMap.get(String(pid));
+      if (val !== undefined) { qty.dataset.stockQty = val; validateInvQty(qty); }
+    });
+    btn.innerHTML = '✓ Updated';
+    setTimeout(() => { btn.innerHTML = orig; btn.disabled = false; btn.style.opacity = ''; }, 1200);
+  } catch (e) {
+    btn.innerHTML = '✗ Failed';
+    setTimeout(() => { btn.innerHTML = orig; btn.disabled = false; btn.style.opacity = ''; }, 1500);
+  }
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
+  const clientIdVal  = document.getElementById('client_id').value;
+  const savedCompany = "{{ invoice.get('company_id', '')|string }}";
+
+  if (clientIdVal) {
+    const found = CLIENT_LIST.find(c => String(c.id) === String(clientIdVal));
+    if (found) document.getElementById('client_search').value = found.name;
+    // Edit mode: preselect saved company (null if none saved → no auto-select)
+    loadClientCompanies(clientIdVal, savedCompany !== '' ? savedCompany : null);
+  }
+  updateLockBanner();
+
+  document.getElementById('invoiceForm').addEventListener('submit', function(e) {
+    if (!document.getElementById('client_id').value) {
+      e.preventDefault();
+      document.getElementById('client_error').style.display = '';
+      document.getElementById('client_search').focus();
+    }
+  }, true);
+
   const issueDate = document.getElementById('issue_date');
-  if (!issueDate.value) issueDate.value = new Date().toISOString().slice(0,10);
-  if ({{ items|length }} === 0) addRow();
+  const dueDate   = document.getElementById('due_date');
+  function syncDueDate() {
+    if (issueDate.value && !dueDate._userSet) {
+      const days = dueDate._clientTerms || 60;
+      const d = new Date(issueDate.value);
+      d.setDate(d.getDate() + days);
+      dueDate.value = d.toISOString().slice(0, 10);
+    }
+  }
+  if (!issueDate.value) issueDate.value = new Date().toISOString().slice(0, 10);
+  dueDate._userSet = !!dueDate.value;
+  dueDate._clientTerms = null;
+  dueDate.addEventListener('change', () => { dueDate._userSet = true; });
+  issueDate.addEventListener('change', syncDueDate);
+  if (!dueDate.value) syncDueDate();
+
+  if (clientIdVal) {
+    const found = CLIENT_LIST.find(c => String(c.id) === String(clientIdVal));
+    if (found && found.payment_terms > 0) dueDate._clientTerms = found.payment_terms;
+  }
+
+  if (document.querySelectorAll('#lineItems tr').length === 0) addLineItem();
+
+  document.querySelectorAll('#lineItems .cb-sku-inp').forEach(inp => {
+    inp._userEdited = !!inp.value;
+    inp.addEventListener('input', function() { this._userEdited = true; });
+  });
+
   recalcTotals();
+
+  document.getElementById('invoiceForm').addEventListener('submit', function(e) {
+    // Drafts may be saved even when qty exceeds stock — they can't be issued until stock catches up.
+    const isDraft = (document.getElementById('status')?.value || '') === 'draft';
+    if (isDraft) return;
+    const bad = [];
+    document.querySelectorAll('#lineItems tr').forEach(tr => {
+      const qtyInp  = tr.querySelector('[name$="[quantity]"]');
+      const descInp = tr.querySelector('[name$="[description]"]');
+      if (!qtyInp || !descInp?.value.trim()) return;
+      const stock = parseFloat(qtyInp.dataset.stockQty);
+      if (!isNaN(stock) && (parseFloat(qtyInp.value) || 0) > stock)
+        bad.push(`${descInp.value.trim()} (stock: ${stock})`);
+    });
+    if (bad.length) {
+      e.stopImmediatePropagation(); e.preventDefault();
+      alert('Quantity exceeds available warehouse stock for:\n\n' + bad.map(s => '• ' + s).join('\n') + '\n\nTip: use "Save as Draft" to save anyway; you can issue once stock arrives.');
+    }
+  });
+
+  let _invFormDirty = false;
+  document.querySelectorAll('#invoiceForm input, #invoiceForm select, #invoiceForm textarea')
+    .forEach(el => el.addEventListener('input', () => { _invFormDirty = true; }));
+  document.getElementById('invoiceForm').addEventListener('submit', () => { _invFormDirty = false; });
+  new MutationObserver(() => { _invFormDirty = true; }).observe(document.getElementById('lineItems'), { childList: true });
+  window.__dirtyCheck = () => ({ isDirty: _invFormDirty, label: 'Invoice', save: null });
 });
 </script>
+
+<style>
+.cb-wrap { position: relative; }
+.cb-input { width: 100%; }
+.cb-option {
+  padding: 8px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border, #e2e8f0);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.cb-option:last-child { border-bottom: none; }
+.cb-option:hover, .cb-option.cb-active { background: var(--bg-alt, #f8fafc); }
+.cb-opt-name  { font-weight: 600; color: var(--text-primary); }
+.cb-opt-meta  { font-size: 11px; color: var(--text-muted, #64748b); margin-top: 2px; display: flex; gap: 6px; align-items: center; }
+.cb-sku-tag   { background: var(--bg-alt, #f1f5f9); border-radius: 3px; padding: 1px 5px; font-family: monospace; }
+.cb-price-tag { font-weight: 600; color: var(--success, #10b981); }
+.cb-no-match  { padding: 10px 12px; color: var(--text-muted, #64748b); font-size: 13px; font-style: italic; }
+.cb-sku-inp {
+  margin-top: 4px;
+  width: 100%;
+  font-size: 11px;
+  color: var(--text-muted, #64748b);
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  padding: 3px 8px !important;
+  height: auto !important;
+}
+</style>
 {% endblock %}

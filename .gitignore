@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+*.egg-info/
+
+# Environment & secrets
+.env
+*.env
+
+# Database (never commit production data)
+data/
+*.db
+*.db-shm
+*.db-wal
+*.bak
+*.bak-*
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Claude Code (machine-specific settings and worktrees)
+.claude/
+
+# Android - Firebase config (contains secrets, added manually per device)
+android/app/google-services.json
+firebase-credentials.json
+
+# Android build artifacts
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties

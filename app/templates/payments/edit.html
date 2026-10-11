@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Edit Payment #{{ p.id }}{% endblock %}
+{% block page_title %}Edit Payment #{{ p.id }}{% endblock %}
+{% block topbar_actions %}
+  <a href="{{ url_for('payments.detail', payment_id=p.id) }}" class="btn btn-secondary">Cancel</a>
+{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width:680px">
+  <div class="card-header">
+    <span class="card-title">Edit Payment</span>
+    <span style="font-size:12px;color:var(--text-muted)">Changing amount, date or the opening-balance flag re-allocates the client's payments</span>
+  </div>
+  <div class="card-body">
+    <form method="post" action="{{ url_for('payments.edit_payment', payment_id=p.id) }}">
+      <div class="form-grid form-grid-2">
+
+        <div class="form-group span-2">
+          <label>Client</label>
+          <input type="text" value="{{ p.client_name }}" disabled
+                 style="background:var(--bg);color:var(--text-muted)">
+          <div style="font-size:11px;color:var(--text-muted);margin-top:3px">A payment stays with its client. To move it, delete and re-add.</div>
+        </div>
+
+        <div class="form-group">
+          <label for="amount">Amount (₹) *</label>
+          <input type="number" id="amount" name="amount" value="{{ p.amount }}"
+                 step="0.01" min="0.01" required>
+        </div>
+
+        <div class="form-group">
+          <label for="payment_date">Payment Date *</label>
+          <input type="date" id="payment_date" name="payment_date" value="{{ p.payment_date }}" required>
+        </div>
+
+        <div class="form-group">
+          <label for="method">Payment Method</label>
+          <select id="method" name="method">
+            {% for val, lbl in [('cash','Cash'),('bank_transfer','Bank Transfer'),('upi','UPI'),('card','Card'),('cheque','Cheque'),('other','Other')] %}
+            <option value="{{ val }}" {% if p.method == val %}selected{% endif %}>{{ lbl }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="company_id">Received from Company</label>
+          <select id="company_id" name="company_id">
+            <option value="">— No specific company —</option>
+            {% for co in companies %}
+            <option value="{{ co.id }}" {% if p.company_id == co.id %}selected{% endif %}>{{ co.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="form-group span-2">
+          <label for="reference">Reference / Transaction ID</label>
+          <input type="text" id="reference" name="reference" value="{{ p.reference or '' }}" placeholder="TXN-123456">
+        </div>
+
+        <div class="form-group span-2">
+          <label for="notes">Notes / Bank message</label>
+          <textarea id="notes" name="notes" rows="3" placeholder="Bank message / sender details…">{{ p.notes or '' }}</textarea>
+        </div>
+
+        <div class="form-group span-2">
+          <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-weight:500">
+            <input type="checkbox" id="is_opening_balance" name="is_opening_balance" value="1"
+                   style="width:auto;margin-top:2px" {% if p.is_opening_balance %}checked{% endif %}>
+            <span>This payment is for the <strong>opening balance</strong>
+              <span style="display:block;font-weight:400;font-size:12px;color:var(--text-muted)">
+                Assigned to the old balance only — never allocated to invoices, and skipped by reconciliation.
+              </span>
+            </span>
+          </label>
+        </div>
+
+      </div>
+      <div class="form-actions mt-16">
+        <button type="submit" class="btn btn-primary">Save Changes</button>
+        <a href="{{ url_for('payments.detail', payment_id=p.id) }}" class="btn btn-secondary">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

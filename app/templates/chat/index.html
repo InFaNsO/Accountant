@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Chat{% endblock %}
+{% block page_title %}Chat{% endblock %}
+
+{% block topbar_actions %}
+  <button class="btn btn-secondary btn-sm" id="newChat">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+    </svg>
+    New chat
+  </button>
+  <button class="btn btn-secondary btn-sm" id="downloadChat" title="Download this conversation as markdown">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+    </svg>
+    Download
+  </button>
+{% endblock %}
+
+{% block content %}
+{% if not chat_available %}
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-body" style="display:flex;gap:12px;align-items:flex-start">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--warning)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:2px">
+        <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+      </svg>
+      <div>
+        <div style="font-weight:700;margin-bottom:4px">The assistant isn't configured yet</div>
+        <div style="font-size:13px;color:var(--text-secondary)">
+          Set <code>GLM_API_KEY</code> in the server environment and restart the
+          service. Everything else in Ledger works as normal meanwhile.
+        </div>
+      </div>
+    </div>
+  </div>
+{% endif %}
+
+<div class="chat-page" id="chatPage"></div>
+
+<p style="margin-top:12px;font-size:12px;color:var(--text-muted)">
+  This conversation is not saved. It stays in this browser tab and is gone when
+  you close it — use <b>Save</b> on any answer to keep it in your inbox.
+</p>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var panel = new LedgerChat.ChatPanel(document.getElementById('chatPage'), {
+    mode: 'chat',
+    emptyTitle: 'What do you need?',
+    emptyBody: 'I can look things up, build reports, and make changes — every change is shown to you for confirmation first.',
+    suggestions: [
+      'Who owes us the most right now?',
+      'Show monthly sales for this financial year as a chart',
+      'Which products are below their minimum stock?'
+    ]
+  });
+
+  document.getElementById('newChat').addEventListener('click', function () {
+    panel.clear();
+  });
+
+  document.getElementById('downloadChat').addEventListener('click', function () {
+    var lines = panel.history.filter(function (m) {
+      return (m.role === 'user' || m.role === 'assistant') && m.content;
+    }).map(function (m) {
+      return (m.role === 'user' ? '## You\n\n' : '## Assistant\n\n') + m.content;
+    });
+    if (!lines.length) return;
+    var blob = new Blob([lines.join('\n\n')], { type: 'text/markdown' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'ledger-chat-' + new Date().toISOString().slice(0, 10) + '.md';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+})();
+</script>
+{% endblock %}
