@@ -2,6 +2,11 @@
 {% block title %}{{ invoice.invoice_number }}{% endblock %}
 {% block page_title %}{{ invoice.invoice_number }}{% endblock %}
 {% block chat_context %}data-chat-context='{"module": "invoices", "entity": "invoice", "id": {{ invoice.id }}, "label": {{ (invoice.invoice_number)|tojson }}}'{% endblock %}
+{% if possible_dup %}
+{% set dup_confirm_msg = possible_dup.invoice_number ~ ' (' ~ possible_dup.status ~ ', dated '
+     ~ (possible_dup.issue_date | dmy) ~ ') has the same client and the same total, '
+     ~ (possible_dup.total | inr) ~ '.\n\nThis may be the same bill entered twice. Issue this draft anyway?' %}
+{% endif %}
 {% block topbar_actions %}
   <div class="invoice-nav" style="display:inline-flex;gap:6px;margin-right:auto">
     {% if prev_id %}
@@ -29,7 +34,8 @@
   </div>
   {% if invoice.status == 'draft' %}
   {% set _all_ok = (stock_status | selectattr('sufficient') | list | length) == (stock_status | length) %}
-  <form method="post" action="{{ url_for('invoices.update_status', invoice_id=invoice.id) }}" id="issueForm">
+  <form method="post" action="{{ url_for('invoices.update_status', invoice_id=invoice.id) }}" id="issueForm"
+        {% if possible_dup %}onsubmit='return confirm({{ dup_confirm_msg | tojson }})'{% endif %}>
     <input type="hidden" name="status" value="issued">
     <button class="btn btn-primary" id="issueBtn"
             {% if client_lock.locked %}disabled title="Cannot issue: client is locked ({{ client_lock.reasons | join('; ') }})."
@@ -64,6 +70,16 @@
 </div>
 {% endif %}
 
+{% if possible_dup %}
+<div style="margin-bottom:18px;padding:12px 16px;border-radius:var(--radius);
+     background:var(--warning-light);border:1px solid var(--warning);color:#92400E;font-size:13.5px;line-height:1.5">
+  ⚠ This draft may be a copy of
+  <a href="{{ url_for('invoices.detail', invoice_id=possible_dup.id) }}" style="color:#92400E;font-weight:600">{{ possible_dup.invoice_number }}</a>
+  ({{ possible_dup.status }}, dated {{ possible_dup.issue_date | dmy }}): same client and the same total,
+  {{ possible_dup.total | inr }}. Check it isn't the same bill before issuing.
+</div>
+{% endif %}
+
 <!-- Status bar -->
 <div class="card" style="margin-bottom:18px">
   <div class="card-body invoice-status-bar" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
@@ -86,7 +102,8 @@
     </div>
     {% endif %}
     <!-- Quick status change -->
-    <form method="post" action="{{ url_for('invoices.update_status', invoice_id=invoice.id) }}" style="display:flex;gap:6px;align-items:center">
+    <form method="post" action="{{ url_for('invoices.update_status', invoice_id=invoice.id) }}" style="display:flex;gap:6px;align-items:center"
+          {% if possible_dup %}onsubmit='return this.elements.status.value !== "issued" || confirm({{ dup_confirm_msg | tojson }})'{% endif %}>
       <select name="status" style="width:130px;padding:6px 10px;font-size:13px">
         {% if invoice.status == 'draft' %}
         <option value="draft" selected>Draft</option>

@@ -1,4 +1,5 @@
 import re
+import secrets
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, abort
 from flask_login import login_required, current_user
 from ..services import invoice_service, client_service, product_service
@@ -144,22 +145,64 @@ def new_invoice():
     if request.method == "POST":
         data = request.form.to_dict()
         items = _parse_items(request.form)
+        # Re-renders keep the form's token, so the corrected form still saves once.
+        form_token = data.get("form_token") or secrets.token_urlsafe(16)
         if not data.get("client_id"):
             flash("Please select a client.", "error")
-            return render_template("invoices/form.html", invoice=data, items=[], clients=clients, products=products, all_companies=all_companies, locked_clients=locked_clients, action="new")
+            return render_template("invoices/form.html", invoice=data, items=[], clients=clients, products=products, all_companies=all_companies, locked_clients=locked_clients, action="new", form_token=form_token)
         if scope is not None and int(data["client_id"]) not in scope:
             abort(403)
         if not items:
             flash("Add at least one line item.", "error")
-            return render_template("invoices/form.html", invoice=data, items=[], clients=clients, products=products, all_companies=all_companies, locked_clients=locked_clients, action="new")
+            return render_template("invoices/form.html", invoice=data, items=[], clients=clients, products=products, all_companies=all_companies, locked_clients=locked_clients, action="new", form_token=form_token)
         lock = client_service.get_client_lock_status(int(data["client_id"]))
+        try:
+            invoice_id = invoice_service.create_invoice(data, items)
+        except invoice_service.AlreadySaved as e:
+            # This exact form was saved before (Back button, double click, retry).
+            # Open what it made instead of creating a copy.
+            existing = invoice_service.get_invoice(e.invoice_id)
+            flash(f"This invoice was already saved as {existing['invoice_number']}, so nothing "
+                  "new was created. Make any changes here.", "info")
+            return redirect(url_for("invoices.detail", invoice_id=e.invoice_id))
         if lock["locked"] and data.get("status", "issued") != "draft":
             flash("Client is locked (" + "; ".join(lock["reasons"]) + ") — "
                   "invoice saved as a draft. Issue it once the lock clears.", "info")
-        invoice_id = invoice_service.create_invoice(data, items)
         flash("Invoice created successfully.", "success")
         return redirect(url_for("invoices.detail", invoice_id=invoice_id))
-    return render_template("invoices/form.html", invoice={}, items=[], clients=clients, products=products, all_companies=all_companies, locked_clients=locked_clients, action="new")
+    return render_template("invoices/form.html", invoice={}, items=[], clients=clients, products=products, all_companies=all_companies, locked_clients=locked_clients, action="new", form_token=secrets.token_urlsafe(16))
+
+
+@bp.route("/api/possible-duplicate", methods=["POST"])
+@login_required
+@permission_required("invoices", "view")
+def api_possible_duplicate():
+    """Checked by the invoice form just before it saves: is there already a live
+    invoice for this client with the same total from the last few days?
+    Posts the whole form; ?exclude=<id> skips the invoice being edited."""
+    data = request.form.to_dict()
+    items = _parse_items(request.form)
+    if not data.get("client_id") or not items:
+        return jsonify({"match": None})
+    scope = _scope()
+    try:
+        client_id = int(data["client_id"])
+        if scope is not None and client_id not in scope:
+            abort(403)
+        dup = invoice_service.find_possible_duplicate_for_form(
+            data, items, exclude_id=request.args.get("exclude", type=int))
+    except (TypeError, ValueError):
+        return jsonify({"match": None})
+    if not dup:
+        return jsonify({"match": None})
+    return jsonify({"match": {
+        "id":             dup["id"],
+        "invoice_number": dup["invoice_number"],
+        "status":         dup["status"],
+        "total":          dup["total"],
+        "issue_date":     dup["issue_date"],
+        "client_name":    dup["client_name"],
+    }})
 
 
 @bp.route("/<int:invoice_id>")
@@ -202,10 +245,15 @@ def detail(invoice_id):
     client_lock = (client_service.get_client_lock_status(invoice["client_id"])
                    if invoice["status"] == "draft"
                    else {"locked": False, "reasons": []})
+    # A draft that matches a recent invoice may be the same bill entered twice:
+    # warn on the page and ask again before issuing it.
+    possible_dup = (invoice_service.find_possible_duplicate(
+                        invoice["client_id"], invoice["total"], exclude_id=invoice_id)
+                    if invoice["status"] == "draft" else None)
     return render_template("invoices/detail.html", invoice=invoice, items=items,
                            payments=payments, stock_status=stock_status,
                            item_ppc=item_ppc, prev_id=prev_id, next_id=next_id,
-                           client_lock=client_lock)
+                           client_lock=client_lock, possible_dup=possible_dup)
 
 
 @bp.route("/<int:invoice_id>/edit", methods=["GET", "POST"])

@@ -7,6 +7,11 @@
 
 {% block content %}
 <form method="post" action="{{ url_for('invoices.edit_invoice', invoice_id=invoice_id) if action == 'edit' else url_for('invoices.new_invoice') }}" id="invoiceForm">
+  {% if action == 'new' %}
+  <!-- One-time token: saving this same form again (Back button, double click) opens
+       the invoice it already made instead of creating a copy. -->
+  <input type="hidden" name="form_token" value="{{ form_token }}" autocomplete="off">
+  {% endif %}
 
   <!-- Locked-client warning (shown by JS when a locked client is selected) -->
   <div id="lockBanner" style="display:none;margin-bottom:18px;padding:12px 16px;border-radius:var(--radius);
@@ -821,12 +826,52 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  // Same client and total as an invoice saved in the last few days? It may be the
+  // same bill entered twice, so ask first. Runs for new invoices, and for a draft
+  // being issued from this form. A failed check never blocks the save.
+  const invForm = document.getElementById('invoiceForm');
+  const saveButtons = invForm.querySelectorAll('button[type="submit"]');
+  const setSaving = on => saveButtons.forEach(b => { b.disabled = on; });
+  const DUP_CHECK   = {{ 'true' if action == 'new' or invoice.get('status') == 'draft' else 'false' }};
+  const DUP_EXCLUDE = {{ (invoice_id if action == 'edit' else none) | tojson }};
+  let dupConfirmed = false;
+  invForm.addEventListener('submit', function(e) {
+    if (dupConfirmed || !DUP_CHECK) return;
+    if (DUP_EXCLUDE && (document.getElementById('status').value || '') === 'draft') return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    const submitter = e.submitter;
+    setSaving(true);
+    fetch("{{ url_for('invoices.api_possible_duplicate') }}" + (DUP_EXCLUDE ? '?exclude=' + DUP_EXCLUDE : ''),
+          { method: 'POST', body: new FormData(invForm) })
+      .then(r => r.ok ? r.json() : { match: null })
+      .catch(() => ({ match: null }))
+      .then(d => {
+        const m = d && d.match;
+        setSaving(false);
+        if (m && !confirm(`${m.client_name} already has ${m.invoice_number} (${m.status}, dated ${fmtDMY(m.issue_date)}) ` +
+                          `for ${formatINR(m.total)}.\n\nThis looks like the same bill. Save another one anyway?`)) return;
+        dupConfirmed = true;
+        invForm.requestSubmit(submitter && submitter.form === invForm ? submitter : undefined);
+      });
+  });
+
   let _invFormDirty = false;
   document.querySelectorAll('#invoiceForm input, #invoiceForm select, #invoiceForm textarea')
     .forEach(el => el.addEventListener('input', () => { _invFormDirty = true; }));
   document.getElementById('invoiceForm').addEventListener('submit', () => { _invFormDirty = false; });
   new MutationObserver(() => { _invFormDirty = true; }).observe(document.getElementById('lineItems'), { childList: true });
   window.__dirtyCheck = () => ({ isDirty: _invFormDirty, label: 'Invoice', save: null });
+
+  // Lock the save buttons once the save is really going ahead, so a second click
+  // can't send the form twice. Registered last: the checks above cancel the submit
+  // first when they fail. Coming back with the browser's Back button unlocks them;
+  // saving again then opens the invoice already made (the one-time token).
+  invForm.addEventListener('submit', function(e) {
+    if (!e.defaultPrevented) setSaving(true);
+  });
+  window.addEventListener('pageshow', function(e) {
+    if (e.persisted) { setSaving(false); dupConfirmed = false; }
+  });
 });
 </script>
 

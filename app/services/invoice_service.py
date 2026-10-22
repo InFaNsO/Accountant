@@ -1,7 +1,22 @@
+import sqlite3
 from datetime import date
 from ..database import get_db
 from . import product_service
 from .payment_service import _refresh_invoice_paid
+
+
+class AlreadySaved(Exception):
+    """The new-invoice form carrying this token was saved before (browser Back,
+    double click, retry). `invoice_id` is the invoice that save created."""
+
+    def __init__(self, invoice_id):
+        super().__init__(invoice_id)
+        self.invoice_id = invoice_id
+
+
+def _invoice_id_for_token(db, token):
+    row = db.execute("SELECT id FROM invoices WHERE form_token = ?", (token,)).fetchone()
+    return row["id"] if row else None
 
 
 def _max_seq(db, prefix):
@@ -227,8 +242,45 @@ def _compute_totals(items, invoice_discount_value, invoice_discount_type):
     return subtotal, tax_total, discount_amount, total
 
 
+# A bill typed in twice looks like this: same client, same total, saved within a
+# few days. Only ever a prompt before saving or issuing (repeat orders can match).
+DUPLICATE_WINDOW_DAYS = 7
+
+
+def find_possible_duplicate(client_id, total, exclude_id=None):
+    """Newest live (not cancelled) invoice for the client whose total is within
+    Rs 1 of `total`, created in the last DUPLICATE_WINDOW_DAYS days, or None."""
+    return get_db().execute(
+        """SELECT i.id, i.invoice_number, i.status, i.total, i.issue_date, i.created_at,
+                  c.name AS client_name
+           FROM invoices i JOIN clients c ON c.id = i.client_id
+           WHERE i.client_id = ? AND i.status != 'cancelled'
+             AND ABS(i.total - ?) < 1
+             AND i.created_at >= datetime('now', ?)
+             AND i.id != ?
+           ORDER BY i.id DESC LIMIT 1""",
+        (int(client_id), float(total), f"-{DUPLICATE_WINDOW_DAYS} days", int(exclude_id or 0)),
+    ).fetchone()
+
+
+def find_possible_duplicate_for_form(data, items, exclude_id=None):
+    """find_possible_duplicate for a submitted invoice form, using the same total
+    create_invoice / update_invoice would store."""
+    inv_dtype = (data.get("discount_type") or "value").lower()
+    inv_dval  = float(data.get("discount_amount", 0) or 0)
+    total = _compute_totals(items, inv_dval, inv_dtype)[3]
+    return find_possible_duplicate(data["client_id"], total, exclude_id)
+
+
 def create_invoice(data, items):
+    """Create an invoice and return its id. Raises AlreadySaved when
+    data["form_token"] was already used, so one form can only ever make one invoice."""
     db = get_db()
+    form_token = (data.get("form_token") or "").strip() or None
+    if form_token:
+        existing = _invoice_id_for_token(db, form_token)
+        if existing:
+            raise AlreadySaved(existing)
     is_draft = data.get("status", "issued") == "draft"
     # A locked client can still get drafts, never a direct issue — demote silently;
     # callers that want to warn the user pre-check get_client_lock_status themselves.
@@ -245,19 +297,30 @@ def create_invoice(data, items):
 
     company_id = int(data["company_id"]) if data.get("company_id") else None
 
-    cur = db.execute(
-        """INSERT INTO invoices (invoice_number, client_id, company_id, status, issue_date, due_date,
-           notes, subtotal, tax_total, discount_amount, discount_type, discount_value, total)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (
-            invoice_number, data["client_id"], company_id,
-            data.get("status", "issued"),
-            data.get("issue_date", str(date.today())),
-            data.get("due_date"),
-            data.get("notes"),
-            subtotal, tax_total, discount, inv_dtype, inv_dval, total,
-        ),
-    )
+    try:
+        cur = db.execute(
+            """INSERT INTO invoices (invoice_number, client_id, company_id, status, issue_date, due_date,
+               notes, subtotal, tax_total, discount_amount, discount_type, discount_value, total,
+               form_token)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                invoice_number, data["client_id"], company_id,
+                data.get("status", "issued"),
+                data.get("issue_date", str(date.today())),
+                data.get("due_date"),
+                data.get("notes"),
+                subtotal, tax_total, discount, inv_dtype, inv_dval, total,
+                form_token,
+            ),
+        )
+    except sqlite3.IntegrityError:
+        # Two POSTs of the same form arrived together and the other one committed
+        # first: the unique index on form_token refuses this copy.
+        db.rollback()
+        existing = form_token and _invoice_id_for_token(db, form_token)
+        if existing:
+            raise AlreadySaved(existing)
+        raise
     invoice_id = cur.lastrowid
 
     for it in items:

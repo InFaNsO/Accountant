@@ -564,6 +564,13 @@ def _create_schema(db):
     # Timestamp set the moment a draft is issued (drafts stay NULL). Used to order
     # issued invoices by true issue order, independent of when the draft was created.
     _add_column(db, "invoices",         "issued_at",       "TIMESTAMP")
+    # One-time token from the new-invoice form. A second POST of the same form
+    # (browser Back, double click, retry) finds the invoice it already made instead
+    # of creating a copy. NULL for invoices created through the API.
+    _add_column(db, "invoices",         "form_token",      "TEXT")
+    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_invoices_form_token "
+               "ON invoices(form_token) WHERE form_token IS NOT NULL")
+    db.commit()
     _add_column(db, "payments",         "company_id",      "INTEGER")
     _add_column(db, "products",         "category_id",     "INTEGER")
     _add_column(db, "products",         "min_quantity",    "REAL DEFAULT 0")
