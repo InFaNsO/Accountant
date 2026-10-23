@@ -131,6 +131,17 @@ TOOL_POLICY = {
     "create_palm_purchase":         ("palm_purchase", "create"),
     "delete_palm_purchase":         ("palm_purchase", "delete"),
 
+    # ── Leads ────────────────────────────────────────────────────────────
+    "list_leads":                   ("leads", "view"),
+    "get_lead":                     ("leads", "view"),
+    "list_lead_segments":           ("leads", "view"),
+    "create_lead":                  ("leads", "create"),
+    "create_lead_segment":          ("leads", "create"),
+    "update_lead":                  ("leads", "edit"),
+    "set_lead_status":              ("leads", "edit"),
+    "add_lead_note":                ("leads", "edit"),
+    "delete_lead":                  ("leads", "delete"),
+
     # ── Chat-local tools (not from mcp_server) ───────────────────────────
     # Free-form SQL sees every table, so it needs view on every module.
     "describe_schema":              ("*", "view"),

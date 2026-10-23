@@ -639,7 +639,104 @@ def _create_schema(db):
 
     _create_chat_schema(db)
     _create_settings_schema(db)
+    _create_leads_schema(db)
 
+    db.commit()
+
+
+def _create_leads_schema(db):
+    """Sales leads (exhibition contacts and other prospects) before they become
+    clients.
+
+    A lead's area of work reuses the client region machinery: lead_regions
+    links a lead to the same shared area_boundaries cache client_regions uses,
+    so a lead and a client who picked "Ludhiana" point at one polygon and
+    overlap checks compare like with like.
+    """
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS leads (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_name      TEXT NOT NULL,
+            contact_person    TEXT,
+            phone             TEXT,
+            alt_phone         TEXT,
+            email             TEXT,
+            city              TEXT,
+            state             TEXT,
+            address           TEXT,
+            source            TEXT,                         -- e.g. the exhibition it came from
+            status            TEXT NOT NULL DEFAULT 'need_to_talk',
+            status_changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            assigned_to       INTEGER,
+            next_follow_up    DATE,
+            notes             TEXT,
+            client_id         INTEGER,                      -- set once converted to a client
+            created_by        INTEGER,
+            created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (assigned_to) REFERENCES users(id)   ON DELETE SET NULL,
+            FOREIGN KEY (client_id)   REFERENCES clients(id) ON DELETE SET NULL,
+            FOREIGN KEY (created_by)  REFERENCES users(id)   ON DELETE SET NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status);
+
+        CREATE TABLE IF NOT EXISTS lead_regions (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            lead_id           INTEGER NOT NULL,
+            boundary_id       INTEGER NOT NULL,
+            geometry_override TEXT,
+            created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(lead_id, boundary_id),
+            FOREIGN KEY (lead_id)     REFERENCES leads(id)           ON DELETE CASCADE,
+            FOREIGN KEY (boundary_id) REFERENCES area_boundaries(id) ON DELETE CASCADE
+        );
+
+        -- Owner-managed interest tags beyond the product catalogue
+        -- (trade types, industries, …).
+        CREATE TABLE IF NOT EXISTS lead_segments (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            name       TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        -- What a lead is interested in: categories, products and segments.
+        CREATE TABLE IF NOT EXISTS lead_categories (
+            lead_id     INTEGER NOT NULL,
+            category_id INTEGER NOT NULL,
+            PRIMARY KEY (lead_id, category_id),
+            FOREIGN KEY (lead_id)     REFERENCES leads(id)      ON DELETE CASCADE,
+            FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS lead_products (
+            lead_id    INTEGER NOT NULL,
+            product_id INTEGER NOT NULL,
+            PRIMARY KEY (lead_id, product_id),
+            FOREIGN KEY (lead_id)    REFERENCES leads(id)    ON DELETE CASCADE,
+            FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS lead_segment_links (
+            lead_id    INTEGER NOT NULL,
+            segment_id INTEGER NOT NULL,
+            PRIMARY KEY (lead_id, segment_id),
+            FOREIGN KEY (lead_id)    REFERENCES leads(id)         ON DELETE CASCADE,
+            FOREIGN KEY (segment_id) REFERENCES lead_segments(id) ON DELETE CASCADE
+        );
+
+        -- Timeline: notes, status changes, conversion.
+        CREATE TABLE IF NOT EXISTS lead_activities (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            lead_id    INTEGER NOT NULL,
+            user_id    INTEGER,
+            kind       TEXT NOT NULL,                       -- created | note | status | converted
+            body       TEXT,
+            old_status TEXT,
+            new_status TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (lead_id) REFERENCES leads(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_lead_activities_lead ON lead_activities(lead_id, created_at);
+    """)
     db.commit()
 
 

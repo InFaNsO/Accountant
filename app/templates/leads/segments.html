@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Lead Segments{% endblock %}
+{% block page_title %}Lead Segments{% endblock %}
+{% block topbar_actions %}
+  <a href="{{ url_for('leads.list_leads') }}" class="btn btn-secondary">All Leads</a>
+{% endblock %}
+
+{% block content %}
+{% set can_add = current_user.has_permission('leads', 'create') or current_user.has_permission('leads', 'edit') %}
+<div style="max-width:640px">
+  <p style="font-size:13px;color:var(--text-muted);margin:0 0 16px">
+    Segments tag what a lead is interested in beyond your product categories — trade types, industries,
+    channels (e.g. <i>Paint dealer</i>, <i>Woodworking</i>, <i>Auto refinish</i>). Product categories and
+    products are picked straight from the catalogue.
+  </p>
+
+  {% if can_add %}
+  <form method="post" action="{{ url_for('leads.create_segment') }}" class="card" style="margin-bottom:18px">
+    <div class="card-body" style="display:flex;gap:8px;align-items:center">
+      <input type="text" name="name" placeholder="New segment name…" required maxlength="80" style="flex:1">
+      <button class="btn btn-primary">Add segment</button>
+    </div>
+  </form>
+  {% endif %}
+
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Segments</span>
+      <span class="badge" style="margin-left:auto">{{ segments|length }}</span>
+    </div>
+    {% if segments %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Name</th><th style="text-align:right">Leads</th><th></th></tr></thead>
+        <tbody>
+          {% for s in segments %}
+          <tr>
+            <td class="fw-700">{{ s.name }}</td>
+            <td style="text-align:right">{{ s.lead_count }}</td>
+            <td style="text-align:right;white-space:nowrap">
+              {% if current_user.has_permission('leads', 'edit') %}
+              <form method="post" action="{{ url_for('leads.rename_segment', segment_id=s.id) }}" class="confirm-inline"
+                    onsubmit="const n = prompt('Rename segment:', {{ s.name|tojson|forceescape }}); if (!n || !n.trim()) return false; this.elements.namedItem('name').value = n.trim(); return true;">
+                <input type="hidden" name="name">
+                <button class="btn btn-secondary btn-sm">Rename</button>
+              </form>
+              {% endif %}
+              {% if current_user.has_permission('leads', 'delete') %}
+              <form method="post" action="{{ url_for('leads.delete_segment', segment_id=s.id) }}" class="confirm-inline"
+                    onsubmit="return confirm({{ ('Delete “' ~ s.name ~ '”?' ~ (' It is removed from ' ~ s.lead_count ~ ' lead(s).' if s.lead_count else ''))|tojson|forceescape }})">
+                <button class="btn btn-danger btn-sm">Delete</button>
+              </form>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty-state" style="padding:30px">
+      <p>No segments yet.</p>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

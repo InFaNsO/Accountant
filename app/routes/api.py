@@ -4730,3 +4730,367 @@ def checkup():
     client_ids = [int(x) for x in raw.split(",") if x.strip().isdigit()] if raw else None
     payload, status = checkup_service.checkup_from_args(request.args, client_ids)
     return jsonify(payload), status
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# LEADS
+# ═════════════════════════════════════════════════════════════════════════════
+# Structured JSON throughout. Interests and assignees can be given by name as
+# well as id, since the assistant usually knows "Discs" and "Himanshu", not 4
+# and 5. The API has no signed-in user, so timeline entries it writes carry no
+# author (the lead page shows them as "via API").
+
+_LEAD_FIELDS = ("company_name", "contact_person", "phone", "alt_phone", "email", "city",
+                "state", "address", "source", "notes", "next_follow_up")
+
+
+def _lead_user_id(value):
+    """assigned_to as a user id, or a user's name (case-insensitive; a unique
+    prefix is enough). Returns (id_or_None, error_or_None)."""
+    if value in (None, ""):
+        return None, None
+    if isinstance(value, int) or str(value).strip().isdigit():
+        row = get_db().execute("SELECT id FROM users WHERE id=? AND is_active=1", (int(value),)).fetchone()
+        return (row["id"], None) if row else (None, f"No active user with ID {value}.")
+    name = str(value).strip().lower()
+    rows = get_db().execute("SELECT id, name FROM users WHERE is_active=1").fetchall()
+    exact = [r for r in rows if r["name"].strip().lower() == name]
+    hits = exact or [r for r in rows if r["name"].strip().lower().startswith(name)]
+    if len(hits) == 1:
+        return hits[0]["id"], None
+    if not hits:
+        return None, f"No active user named '{value}'."
+    return None, f"'{value}' matches several users: " + ", ".join(r["name"] for r in hits)
+
+
+def _lead_interests(data):
+    """Interest ids from a body that may give ids (category_ids, product_ids,
+    segment_ids) and/or names (categories, products, segments). Unknown
+    category/product names are reported back; unknown segment names are
+    created. A kind that isn't mentioned at all comes back as None, so an
+    update leaves it alone. Returns (interests, warnings)."""
+    from ..services import lead_service
+    db = get_db()
+    out, warnings = {}, []
+    for kind, table in (("category", "categories"), ("product", "products")):
+        ids_key, names_key = f"{kind}_ids", ("categories" if kind == "category" else "products")
+        if ids_key not in data and names_key not in data:
+            out[ids_key] = None
+            continue
+        ids = lead_service.parse_ids(data.get(ids_key) or [])
+        known = {r["id"] for r in db.execute(f"SELECT id FROM {table}")}
+        bad = [i for i in ids if i not in known]
+        if bad:
+            warnings.append(f"Unknown {kind} IDs ignored: {bad}")
+        ids = [i for i in ids if i in known]
+        by_name = {r["name"].strip().lower(): r["id"] for r in db.execute(f"SELECT id, name FROM {table}")}
+        for name in data.get(names_key) or []:
+            hit = by_name.get(str(name).strip().lower())
+            if hit:
+                ids.append(hit)
+            else:
+                warnings.append(f"No {kind} named '{name}'")
+        out[ids_key] = sorted(set(ids))
+    if "segment_ids" not in data and "segments" not in data:
+        out["segment_ids"] = None
+    else:
+        ids = lead_service.parse_ids(data.get("segment_ids") or [])
+        for name in data.get("segments") or []:
+            seg_id, created = lead_service.create_segment(str(name))
+            if seg_id:
+                ids.append(seg_id)
+                if created:
+                    warnings.append(f"New segment created: '{' '.join(str(name).split())}'")
+        out["segment_ids"] = sorted(set(ids))
+    return out, warnings
+
+
+def _lead_add_areas(lead_id, places):
+    from ..services import region_service
+    added, missing = [], []
+    for place in places or []:
+        b = region_service.add_region_by_name(lead_id, str(place), "lead")
+        if b:
+            added.append({"requested": place, "matched": b["name"], "area_type": b["area_type"]})
+        else:
+            missing.append(place)
+    return added, missing
+
+
+def _lead_overlaps_brief(lead_id):
+    from ..services import overlap_service
+    return [{k: o[k] for k in ("kind", "id", "name", "status", "share_here", "share_there",
+                               "shared_km2", "their_regions", "our_regions")}
+            for o in overlap_service.overlaps_for("lead", lead_id)]
+
+
+def _lead_item(row, interests=None, regions=None):
+    from ..services import lead_service
+    st = lead_service.STATUS_MAP.get(row["status"], {})
+    today = date.today().isoformat()
+    follow = row["next_follow_up"] if row["status"] in lead_service.OPEN_STATUSES else None
+    d = {
+        "id": row["id"], "company_name": row["company_name"], "contact_person": row["contact_person"],
+        "phone": row["phone"], "alt_phone": row["alt_phone"], "email": row["email"],
+        "city": row["city"], "state": row["state"], "address": row["address"], "source": row["source"],
+        "status": row["status"], "status_label": st.get("label"),
+        "assigned_to": row["assigned_to"], "assigned_name": row["assigned_name"],
+        "next_follow_up": row["next_follow_up"],
+        "follow_up_overdue": bool(follow and follow < today),
+        "notes": row["notes"], "client_id": row["client_id"], "client_name": row["client_name"],
+        "created_at": row["created_at"],
+    }
+    if interests is not None:
+        d["interests"] = interests
+    if regions is not None:
+        d["areas"] = regions
+    return d
+
+
+@bp.route("/leads")
+@require_auth
+def leads_list():
+    """Leads with filters: status (CSV of keys), q (company / person / phone /
+    city / source text), source, state, assigned_to (user id or 'none'),
+    follow_up (overdue | today | week | none), segment_id, category_id,
+    include=overlaps, limit (default 100, max 500). Newest first."""
+    from ..services import lead_service, overlap_service
+    leads = lead_service.list_leads()
+    statuses = _csv_set(request.args.get("status"))
+    q = (request.args.get("q") or "").strip().lower()
+    source = (request.args.get("source") or "").strip().lower()
+    state = (request.args.get("state") or "").strip().lower()
+    assigned = (request.args.get("assigned_to") or "").strip()
+    if assigned and assigned != "none" and not assigned.isdigit():
+        uid, err = _lead_user_id(assigned)
+        if err:
+            return jsonify({"error": err}), 400
+        assigned = str(uid)
+    follow = (request.args.get("follow_up") or "").strip()
+    seg_id, cat_id = request.args.get("segment_id", type=int), request.args.get("category_id", type=int)
+    today = date.today()
+    week_end = date.fromordinal(today.toordinal() + 7).isoformat()
+    today = today.isoformat()
+
+    def keep(l):
+        if statuses and l["status"] not in statuses:
+            return False
+        if q:
+            hay = " ".join(str(l.get(k) or "") for k in ("company_name", "contact_person", "phone",
+                                                        "alt_phone", "email", "city", "state", "source"))
+            if q not in hay.lower() and q.replace(" ", "") not in hay.replace(" ", "").lower():
+                return False
+        if source and source not in (l["source"] or "").lower():
+            return False
+        if state and state != (l["state"] or "").strip().lower():
+            return False
+        if assigned == "none" and l["assigned_to"]:
+            return False
+        if assigned.isdigit() and l["assigned_to"] != int(assigned):
+            return False
+        f = l["next_follow_up"] if l["status"] in lead_service.OPEN_STATUSES else None
+        if follow == "none" and f:
+            return False
+        if follow == "overdue" and not (f and f < today):
+            return False
+        if follow == "today" and f != today:
+            return False
+        if follow == "week" and not (f and today <= f <= week_end):
+            return False
+        if seg_id and not any(i["kind"] == "segment" and i["id"] == seg_id for i in l["interests"]):
+            return False
+        if cat_id and not any(i["kind"] == "category" and i["id"] == cat_id for i in l["interests"]):
+            return False
+        return True
+
+    matched = [l for l in leads if keep(l)]
+    counts = {}
+    for l in matched:
+        counts[l["status"]] = counts.get(l["status"], 0) + 1
+    limit = _arg_int("limit", 100, 1, 500)
+    page = matched[:limit]
+    want_overlaps = "overlaps" in _csv_set(request.args.get("include"))
+    overlaps = overlap_service.overlaps_for_many("lead", [l["id"] for l in page]) if want_overlaps else {}
+    items = []
+    for l in page:
+        interests = {k: [i["name"] for i in l["interests"] if i["kind"] == k]
+                     for k in ("category", "segment", "product")}
+        d = _lead_item(l, interests={"categories": interests["category"], "segments": interests["segment"],
+                                     "products": interests["product"]},
+                       regions=l["region_names"])
+        if want_overlaps:
+            found = overlaps[l["id"]]
+            d["overlaps"] = {"clients": [o["name"] for o in found if o["kind"] == "client"],
+                             "leads": [o["name"] for o in found if o["kind"] == "lead"]}
+        items.append(d)
+    return jsonify({"result": {
+        "items": items, "count": len(items), "total_matching": len(matched),
+        "status_counts": counts, "truncated": len(matched) > limit, "limit": limit,
+        "statuses": [{"key": k, "label": l} for k, l, *_ in lead_service.STATUSES],
+    }})
+
+
+@bp.route("/leads/<int:lead_id>")
+@require_auth
+def lead_get(lead_id):
+    """One lead in full: details, interests, areas of work, overlaps with
+    clients/other leads, possible duplicates and the latest timeline entries."""
+    from ..services import lead_service, region_service
+    row = lead_service.get_lead(lead_id)
+    if not row:
+        return jsonify({"error": f"Lead ID {lead_id} not found."}), 404
+    i = lead_service.get_interests(lead_id)
+    interests = {
+        "categories": [{"id": r["id"], "name": r["name"]} for r in i["categories"]],
+        "segments":   [{"id": r["id"], "name": r["name"]} for r in i["segments"]],
+        "products":   [{"id": r["id"], "name": r["name"], "category": r["category_name"]} for r in i["products"]],
+    }
+    areas = [{"link_id": r["link_id"], "name": r["name"], "area_type": r["area_type"], "source": r["source"]}
+             for r in region_service.get_regions(lead_id, "lead")]
+    d = _lead_item(row, interests=interests, regions=areas)
+    d["overlaps"] = _lead_overlaps_brief(lead_id)
+    dups = lead_service.find_duplicates(row["phone"], row["company_name"], lead_id, row["alt_phone"])
+    d["possible_duplicates"] = [x for x in dups if not (x["kind"] == "client" and x["id"] == row["client_id"])]
+    status_label = lambda k: lead_service.STATUS_MAP.get(k, {}).get("label") if k else None
+    d["timeline"] = [{
+        "id": a["id"], "at_ist": a["created_local"], "kind": a["kind"], "by": a["user_name"],
+        "from_status": status_label(a["old_status"]), "to_status": status_label(a["new_status"]),
+        "text": a["body"],
+    } for a in lead_service.get_activities(lead_id)[:30]]
+    return jsonify({"result": d})
+
+
+def _lead_changes(data):
+    """Validated column changes from a create/update body: (changes, error)."""
+    from ..services import lead_service
+    changes = {k: "" if data[k] is None else str(data[k]) for k in _LEAD_FIELDS if k in data}
+    if "next_follow_up" in changes and changes["next_follow_up"]:
+        try:
+            changes["next_follow_up"] = date.fromisoformat(str(changes["next_follow_up"])).isoformat()
+        except ValueError:
+            return None, "next_follow_up must be YYYY-MM-DD."
+    if "status" in data:
+        if data["status"] not in lead_service.STATUS_MAP:
+            return None, ("Unknown status. Use one of: "
+                          + ", ".join(k for k, *_ in lead_service.STATUSES) + ".")
+        changes["status"] = data["status"]
+    if "assigned_to" in data:
+        uid, err = _lead_user_id(data["assigned_to"])
+        if err:
+            return None, err
+        changes["assigned_to"] = uid
+    return changes, None
+
+
+@bp.route("/leads", methods=["POST"])
+@require_auth
+def lead_create():
+    """Body: company_name (required) + any lead field, status, assigned_to (id
+    or name), interests by id or name, areas (list of place names)."""
+    from ..services import lead_service
+    data = _jb()
+    if not (data.get("company_name") or "").strip():
+        return jsonify({"error": "company_name is required."}), 400
+    changes, err = _lead_changes(data)
+    if err:
+        return jsonify({"error": err}), 400
+    interests, warnings = _lead_interests(data)
+    lead_id = lead_service.create_lead(changes, {k: v or [] for k, v in interests.items()}, None)
+    added, missing = _lead_add_areas(lead_id, data.get("areas"))
+    row = lead_service.get_lead(lead_id)
+    return jsonify({"result": {
+        "lead_id": lead_id,
+        "message": f"✓ Lead '{row['company_name']}' created (ID: {lead_id}).",
+        "areas_added": added, "areas_not_found": missing, "warnings": warnings,
+        "possible_duplicates": lead_service.find_duplicates(row["phone"], row["company_name"], lead_id, row["alt_phone"]),
+        "overlaps": _lead_overlaps_brief(lead_id),
+    }})
+
+
+@bp.route("/leads/<int:lead_id>", methods=["PATCH", "PUT"])
+@require_auth
+def lead_update(lead_id):
+    """Change only what's in the body. Interests: giving a kind (e.g.
+    categories) replaces that kind. add_areas: place names to add;
+    remove_area_ids: link_ids (from get_lead) to drop."""
+    from ..services import lead_service, region_service
+    if not lead_service.get_lead(lead_id):
+        return jsonify({"error": f"Lead ID {lead_id} not found."}), 404
+    data = _jb()
+    if "company_name" in data and not (data.get("company_name") or "").strip():
+        return jsonify({"error": "company_name can't be blank."}), 400
+    changes, err = _lead_changes(data)
+    if err:
+        return jsonify({"error": err}), 400
+    interests, warnings = _lead_interests(data)
+    lead_service.patch_lead(lead_id, changes, interests, None)
+    removed = [i for i in lead_service.parse_ids(data.get("remove_area_ids") or [])
+               if region_service.remove_region(lead_id, i, "lead")]
+    added, missing = _lead_add_areas(lead_id, data.get("add_areas"))
+    row = lead_service.get_lead(lead_id)
+    return jsonify({"result": {
+        "lead_id": lead_id, "message": f"✓ Lead '{row['company_name']}' (ID: {lead_id}) updated.",
+        "status": row["status"], "areas_added": added, "areas_not_found": missing,
+        "areas_removed": removed, "warnings": warnings,
+        "overlaps": _lead_overlaps_brief(lead_id),
+    }})
+
+
+@bp.route("/leads/<int:lead_id>/status", methods=["POST"])
+@require_auth
+def lead_status(lead_id):
+    """Body: status (key), note (optional) — logged on the lead's timeline."""
+    from ..services import lead_service
+    data = _jb()
+    if not lead_service.get_lead(lead_id):
+        return jsonify({"error": f"Lead ID {lead_id} not found."}), 404
+    status = data.get("status")
+    if status not in lead_service.STATUS_MAP:
+        return jsonify({"error": "Unknown status. Use one of: "
+                                 + ", ".join(k for k, *_ in lead_service.STATUSES) + "."}), 400
+    lead_service.set_status(lead_id, status, None, data.get("note"))
+    return jsonify({"result": {"lead_id": lead_id, "status": status,
+                               "message": f"✓ Lead {lead_id} is now '{lead_service.STATUS_MAP[status]['label']}'."}})
+
+
+@bp.route("/leads/<int:lead_id>/notes", methods=["POST"])
+@require_auth
+def lead_note(lead_id):
+    from ..services import lead_service
+    if not lead_service.get_lead(lead_id):
+        return jsonify({"error": f"Lead ID {lead_id} not found."}), 404
+    if not lead_service.add_note(lead_id, None, _jb().get("note")):
+        return jsonify({"error": "note is required."}), 400
+    return jsonify({"result": {"lead_id": lead_id, "message": f"✓ Note added to lead {lead_id}."}})
+
+
+@bp.route("/leads/<int:lead_id>", methods=["DELETE"])
+@require_auth
+def lead_delete(lead_id):
+    from ..services import lead_service
+    row = lead_service.get_lead(lead_id)
+    if not row:
+        return jsonify({"error": f"Lead ID {lead_id} not found."}), 404
+    lead_service.delete_lead(lead_id)
+    return jsonify({"result": {"lead_id": lead_id,
+                               "message": f"✓ Lead '{row['company_name']}' (ID: {lead_id}) permanently deleted."}})
+
+
+@bp.route("/lead-segments")
+@require_auth
+def lead_segments():
+    from ..services import lead_service
+    items = [{"id": s["id"], "name": s["name"], "lead_count": s["lead_count"]}
+             for s in lead_service.get_segments()]
+    return jsonify({"result": {"items": items, "count": len(items)}})
+
+
+@bp.route("/lead-segments", methods=["POST"])
+@require_auth
+def lead_segment_create():
+    from ..services import lead_service
+    seg_id, created = lead_service.create_segment(_jb().get("name"))
+    if not seg_id:
+        return jsonify({"error": "name is required."}), 400
+    return jsonify({"result": {"id": seg_id, "created": created,
+                               "message": "✓ Segment created." if created else "That segment already exists."}})

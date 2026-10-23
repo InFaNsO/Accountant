@@ -56,6 +56,21 @@ Key tables: `clients`, `client_companies`, `products`, `sub_products`, `invoices
 - Nav entry appears after Transit in `base.html` (only if the user has `palm_purchase:view`).
 - API (used by MCP): `GET/POST /api/palm-purchases`, `GET/DELETE /api/palm-purchases/<id>`.
 
+## Leads (`/leads/`, permission module `leads`)
+Prospects (e.g. exhibition contacts) tracked until they become clients.
+- Tables (`_create_leads_schema` in `app/database.py`): `leads`, `lead_regions` (same shape as `client_regions`, links the shared `area_boundaries` cache), `lead_segments` (owner-managed interest tags), `lead_categories` / `lead_products` / `lead_segment_links` (interests), `lead_activities` (timeline: created | note | status | converted).
+- Statuses live in `lead_service.STATUSES` (key, label, colour, bg, dark-mode colour), in the team's order: need_to_talk, rates_given, samples_sent, other, first_order_sent, closed, abandoned. `OPEN_STATUSES` = all but closed/abandoned (follow-ups only count for these). Status changes go through `set_status()` so they land on the timeline.
+- **Regions are shared code:** `region_service` functions take `owner="client"|"lead"`; `routes/region_routes.register_region_routes(bp, owner, module, guard)` mounts the editor endpoints on both blueprints (same URLs/endpoint names as before); `templates/_region_editor.html` is the one map editor (set `region_base`, `region_lookup`, `region_can_edit`, `region_title` before including). It exposes `setRegionOverlay(fc)` and calls `window.onRegionsLoaded(regions)` after every reload.
+- **Overlaps** (`overlap_service`, needs `shapely`): each client's/lead's regions are unioned; two overlap when the shared area is ≥ `MIN_SHARE` (5%) of the smaller. Calibrated on live data — bordering districts overlap ≤ ~1.5% after simplification, real shared territory is 10%+. A lead never overlaps the client it was converted into. Out-of-scope clients/leads are shown as "Another client/lead" (`_redact` in `routes/leads.py`).
+- Duplicates: `find_duplicates()` matches phones after `normalize_phone()` (+91 / leading 0 stripped) and exact company names across leads, clients and client_companies — a warning, never a block.
+- Convert: lead page → `/clients/new?from_lead=<id>` prefills the client form; on save `mark_converted()` links `leads.client_id` and `copy_regions()` (custom areas are duplicated, not shared).
+- Sales-role users only see leads assigned to / added by their team (`visible_lead_ids`).
+- Timestamps display in IST via `datetime(col, '+330 minutes')` in the lead queries (SQLite stores UTC).
+- **Lead form map** (`leads/form.html`): search results show as numbered pins; picking one calls `GET /<prefix>/regions/resolve?osm_type&osm_id&name` (in `region_routes`, backed by `region_service.resolve_boundary` — caches the polygon, links nothing) and draws it; "Pick on map" uses `/regions/reverse`. Choices post as hidden `add_areas` (JSON with `boundary_id`) / `remove_regions` (link ids), applied by `_apply_area_changes` after the lead is saved.
+- **MCP / API:** tools `list_leads`, `get_lead`, `create_lead`, `update_lead` (partial — only given fields; giving an interest kind replaces that kind), `set_lead_status`, `add_lead_note`, `delete_lead`, `list_lead_segments`, `create_lead_segment` → `/api/leads…`, `/api/lead-segments` (structured JSON). Interests and `assigned_to` accept names as well as ids; `areas` / `add_areas` take place names resolved by `region_service.add_region_by_name` (first India result). Policy entries under "Leads" in `app/chat/policy.py`. The API has no signed-in user, so its timeline entries have no author (shown "via API").
+- `overlap_service` deliberately does **not** cache on `g`: the assistant runs several tools inside one request, and a cache there served stale overlaps after an area change. Use `overlaps_for_many()` to share one load across many leads.
+- Tests: `python test_leads.py` (pages, overlaps, conversion, permissions) and `python test_leads_api.py` (every MCP tool through the in-process transport). Snapshot copies, no geocoding calls.
+
 ## Draft mode (production orders / dispatches / palm purchases)
 Each of these three can be **saved as a draft** (no stock side-effects) and later **activated** (which applies them). Mirrors the invoice draft pattern: draft = nothing moves until you commit.
 

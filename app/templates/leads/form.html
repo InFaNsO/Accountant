@@ -1,0 +1,607 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if action == 'edit' else 'New' }} Lead{% endblock %}
+{% block page_title %}{{ 'Edit Lead' if action == 'edit' else 'New Lead' }}{% endblock %}
+{% block topbar_actions %}
+  <a href="{{ url_for('leads.detail', lead_id=lead_id) if action == 'edit' else url_for('leads.list_leads') }}" class="btn btn-secondary">Cancel</a>
+{% endblock %}
+
+{% block content %}
+<style>
+  .pick-group { display:flex; flex-wrap:wrap; gap:6px; }
+  .pick-chip { display:inline-flex; align-items:center; gap:6px; cursor:pointer; user-select:none;
+    border:1px solid var(--border); border-radius:999px; padding:5px 11px; font-size:12.5px; font-weight:500;
+    background:var(--surface); color:var(--text-primary); transition:background .12s, border-color .12s; }
+  .pick-chip input { display:none; }
+  .pick-chip:hover { border-color:var(--accent); }
+  .pick-chip.on { background:var(--accent-light); border-color:var(--accent); color:var(--accent); font-weight:700; }
+  body.dark .pick-chip.on { background:rgba(99,102,241,.22); color:#C7D2FE; }
+  .pick-label { font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em;
+    margin:0 0 8px; display:flex; align-items:center; gap:8px; }
+  .prod-box { max-height:240px; overflow-y:auto; border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px; }
+  .prod-cat { font-size:11.5px; font-weight:700; color:var(--text-muted); margin:8px 0 6px; }
+  .prod-cat:first-child { margin-top:0; }
+  .area-results { display:none; position:absolute; top:100%; left:0; right:0; z-index:30; margin-top:4px; background:var(--bg);
+    border:1px solid var(--border); border-radius:var(--radius); max-height:260px; overflow-y:auto; box-shadow:0 8px 24px rgba(0,0,0,.18); }
+  .area-row { display:flex; align-items:center; gap:8px; padding:9px 12px; cursor:pointer; font-size:13px; }
+  .area-row:hover, .area-row.hot { background:var(--bg-alt); }
+  .area-row:not(:last-child) { border-bottom:1px solid var(--border); }
+  .area-num, .area-marker { display:inline-flex; align-items:center; justify-content:center; border-radius:50%;
+    font-size:11px; font-weight:800; color:#fff; background:#111827; flex-shrink:0; }
+  .area-num { width:19px; height:19px; }
+  .area-row.hot .area-num { background:var(--accent); }
+  .area-marker { width:22px; height:22px; border:2px solid #fff; box-shadow:0 1px 4px rgba(0,0,0,.45); cursor:pointer;
+    transition:transform .1s, background .1s; }
+  .area-marker.hot { transform:scale(1.35); background:var(--accent); z-index:2; }
+  .area-layout { display:grid; grid-template-columns:1fr 250px; gap:14px; }
+  @media (max-width:720px) { .area-layout { grid-template-columns:1fr; } }
+  #areaMap { height:360px; border-radius:var(--radius); background:var(--bg-alt); }
+  #areaMap.picking .maplibregl-canvas { cursor:crosshair; }
+  .area-item { display:flex; align-items:center; gap:8px; padding:7px 9px; border:1px solid var(--border);
+    border-radius:var(--radius-sm); font-size:12.5px; }
+  .area-item .sw { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
+  .area-item .nm { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:pointer; }
+  .area-item .nm:hover { color:var(--accent); }
+  .area-item .ty { font-size:11px; color:var(--text-muted); text-transform:capitalize; }
+  .area-item .tag { font-size:10px; font-weight:800; color:var(--success); text-transform:uppercase; }
+  .area-item.removed { opacity:.5; } .area-item.removed .nm { text-decoration:line-through; }
+  .area-item button { border:none; background:none; cursor:pointer; color:var(--text-muted); font-size:13px; padding:0 3px; }
+  .pin-row { display:flex; align-items:center; gap:8px; padding:8px 12px; cursor:pointer; font-size:13px; }
+  .pin-row:hover { background:var(--bg-alt); }
+  .pin-row:not(:last-child) { border-bottom:1px solid var(--border); }
+  .pin-sw { width:12px; height:12px; border-radius:3px; flex-shrink:0; }
+  .dup-box { display:none; border:1px solid var(--warning); background:var(--warning-light); color:#92400E;
+    border-radius:var(--radius-sm); padding:9px 12px; font-size:12.5px; margin-top:4px; }
+  body.dark .dup-box { background:rgba(245,158,11,.12); color:#FCD34D; }
+  .dup-box a { color:inherit; font-weight:700; }
+  .opt { color:var(--text-muted); font-size:12px; font-weight:400; }
+</style>
+
+<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
+<div style="max-width:880px">
+  <form method="post" id="leadForm"
+        action="{{ url_for('leads.edit_lead', lead_id=lead_id) if action == 'edit' else url_for('leads.new_lead') }}">
+
+    <div class="card" style="margin-bottom:18px">
+      <div class="card-header"><span class="card-title">Lead</span></div>
+      <div class="card-body">
+        <div class="form-grid form-grid-2">
+          <div class="form-group">
+            <label for="company_name">Company name *</label>
+            <input type="text" id="company_name" name="company_name" required autofocus
+                   value="{{ lead.get('company_name') or '' }}" placeholder="e.g. Shree Balaji Hardware">
+          </div>
+          <div class="form-group">
+            <label for="contact_person">Contact person</label>
+            <input type="text" id="contact_person" name="contact_person"
+                   value="{{ lead.get('contact_person') or '' }}" placeholder="e.g. Rakesh Jain">
+          </div>
+          <div class="form-group">
+            <label for="phone">Phone</label>
+            <input type="tel" id="phone" name="phone" value="{{ lead.get('phone') or '' }}" placeholder="+91 98765 43210">
+          </div>
+          <div class="form-group">
+            <label for="alt_phone">Other phone <span class="opt">(optional)</span></label>
+            <input type="tel" id="alt_phone" name="alt_phone" value="{{ lead.get('alt_phone') or '' }}">
+          </div>
+          <div class="form-group span-2" style="margin-top:-6px">
+            <div class="dup-box" id="dupBox"></div>
+          </div>
+          <div class="form-group">
+            <label for="email">Email <span class="opt">(optional)</span></label>
+            <input type="email" id="email" name="email" value="{{ lead.get('email') or '' }}">
+          </div>
+          <div class="form-group">
+            <label for="source">Source</label>
+            <input type="text" id="source" name="source" list="sourceList"
+                   value="{{ lead.get('source') or '' }}" placeholder="e.g. Hardware Expo Delhi 2026">
+            <datalist id="sourceList">{% for s in sources %}<option value="{{ s }}">{% endfor %}</datalist>
+          </div>
+          <div class="form-group">
+            <label for="city">City</label>
+            <input type="text" id="city" name="city" value="{{ lead.get('city') or '' }}" placeholder="e.g. Ludhiana">
+          </div>
+          <div class="form-group">
+            <label for="state">State</label>
+            <input type="text" id="state" name="state" value="{{ lead.get('state') or '' }}" placeholder="e.g. Punjab">
+          </div>
+          <div class="form-group span-2">
+            <label for="address">Address <span class="opt">(optional)</span></label>
+            <input type="text" id="address" name="address" value="{{ lead.get('address') or '' }}">
+          </div>
+          <div class="form-group">
+            <label for="status">Status</label>
+            <select id="status" name="status">
+              {% set cur = lead.get('status') or 'need_to_talk' %}
+              {% for key, label, color, bg, dark in statuses %}
+              <option value="{{ key }}"{% if key == cur %} selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="assigned_to">Assigned to</label>
+            <select id="assigned_to" name="assigned_to">
+              <option value="">— Nobody yet —</option>
+              {% for u in users %}
+              <option value="{{ u.id }}"{% if (lead.get('assigned_to') or '')|string == u.id|string %} selected{% endif %}>{{ u.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="next_follow_up">Next follow-up</label>
+            <input type="date" id="next_follow_up" name="next_follow_up" value="{{ lead.get('next_follow_up') or '' }}">
+          </div>
+          <div class="form-group span-2">
+            <label for="notes">Notes</label>
+            <textarea id="notes" name="notes" rows="3" placeholder="What did they ask about? Current suppliers, volumes, price points…">{{ lead.get('notes') or '' }}</textarea>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:18px">
+      <div class="card-header"><span class="card-title">Interested in</span></div>
+      <div class="card-body" style="display:flex;flex-direction:column;gap:18px">
+        <div>
+          <div class="pick-label">Categories</div>
+          <div class="pick-group">
+            {% for c in categories %}
+            <label class="pick-chip{% if c.id in interest_ids.category_ids %} on{% endif %}">
+              <input type="checkbox" name="category_ids" value="{{ c.id }}"{% if c.id in interest_ids.category_ids %} checked{% endif %}>{{ c.name }}
+            </label>
+            {% else %}<span class="text-muted" style="font-size:13px">No categories yet.</span>{% endfor %}
+          </div>
+        </div>
+
+        <div>
+          <div class="pick-label">Segments
+            <a href="{{ url_for('leads.segments') }}" style="text-transform:none;letter-spacing:0;font-weight:500;color:var(--accent);text-decoration:none" target="_blank">manage</a>
+          </div>
+          <div class="pick-group" id="segmentGroup">
+            {% for s in segments %}
+            <label class="pick-chip{% if s.id in interest_ids.segment_ids %} on{% endif %}">
+              <input type="checkbox" name="segment_ids" value="{{ s.id }}"{% if s.id in interest_ids.segment_ids %} checked{% endif %}>{{ s.name }}
+            </label>
+            {% endfor %}
+            <span style="display:inline-flex;gap:6px;align-items:center">
+              <input type="text" id="newSegment" placeholder="New segment…" style="width:160px;font-size:12.5px;padding:5px 9px"
+                     onkeydown="if(event.key==='Enter'){event.preventDefault();addSegment();}">
+              <button type="button" class="btn btn-secondary btn-sm" onclick="addSegment()">+ Add</button>
+            </span>
+          </div>
+        </div>
+
+        <div>
+          <div class="pick-label">Products <span class="badge" id="prodCount">0</span>
+            <input type="search" id="prodFilter" placeholder="Find a product…" oninput="filterProducts()"
+                   style="margin-left:auto;width:200px;font-size:12.5px;padding:5px 9px;text-transform:none;letter-spacing:0">
+          </div>
+          <div class="prod-box" id="prodBox">
+            {% for cat, items in products|groupby('category') %}
+            <div class="prod-group">
+              <div class="prod-cat">{{ cat }}</div>
+              <div class="pick-group">
+                {% for p in items %}
+                <label class="pick-chip{% if p.id in interest_ids.product_ids %} on{% endif %}" data-name="{{ p.name|lower }}">
+                  <input type="checkbox" name="product_ids" value="{{ p.id }}"{% if p.id in interest_ids.product_ids %} checked{% endif %}>{{ p.name }}
+                </label>
+                {% endfor %}
+              </div>
+            </div>
+            {% else %}<span class="text-muted" style="font-size:13px">No products yet.</span>{% endfor %}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:18px">
+      <div class="card-header">
+        <span class="card-title">Areas of work</span>
+        <span style="font-size:12px;color:var(--text-muted);margin-left:10px">Checked against clients and other leads for overlap</span>
+      </div>
+      <div class="card-body">
+        <div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap;margin-bottom:12px">
+          <div style="position:relative;flex:1;min-width:220px;max-width:440px">
+            <input type="text" id="areaSearch" placeholder="Search a city, district or state…" autocomplete="off" oninput="onAreaInput()">
+            <div class="area-results" id="areaResults"></div>
+          </div>
+          <button type="button" class="btn btn-secondary" id="pickBtn" onclick="togglePick()"
+                  title="Click a spot on the map to choose its city, district or state outline">📍 Pick on map</button>
+        </div>
+        <div id="pickHint" style="display:none;font-size:12px;color:var(--text-muted);margin:-4px 0 10px">
+          Click the place on the map — you'll get its boundaries at each level (state, district, city…) to choose from.
+        </div>
+        <div id="pinPanel" style="display:none;margin-bottom:12px;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden"></div>
+        <div class="area-layout">
+          <div id="areaMap"></div>
+          <div style="display:flex;flex-direction:column;gap:6px;max-height:360px;overflow-y:auto">
+            <div class="pick-label" style="margin-bottom:2px">Selected <span class="badge" id="areaCount">0</span></div>
+            <div id="areaList" style="display:flex;flex-direction:column;gap:6px"></div>
+          </div>
+        </div>
+        <div id="areaHidden"></div>
+        <p style="font-size:12px;color:var(--text-muted);margin:10px 0 0">
+          Search results appear as numbered pins, so you can see which place each one is before choosing; the chosen
+          area's boundary is drawn on the map. Nothing is saved until you save the lead.
+          {% if action == 'edit' %}Hand-drawn areas are edited on the lead's page.{% else %}Hand-drawn areas can be added on the lead's page after saving.{% endif %}
+        </p>
+      </div>
+    </div>
+
+    <div class="form-actions">
+      <button type="submit" name="submit" value="save" class="btn btn-primary">{{ 'Save Changes' if action == 'edit' else 'Save Lead' }}</button>
+      {% if action != 'edit' %}
+      <button type="submit" name="submit" value="add_another" class="btn btn-secondary"
+              title="Save, then start the next lead with the same source, assignee and state">Save &amp; add another</button>
+      {% endif %}
+      <a href="{{ url_for('leads.detail', lead_id=lead_id) if action == 'edit' else url_for('leads.list_leads') }}" class="btn btn-ghost">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script>
+const LEAD_ID = {{ lead_id|tojson }};
+const esc = s => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+
+/* ── Chips: a checked box shows as a filled chip ── */
+document.addEventListener('change', (e) => {
+  if (e.target.matches('.pick-chip input')) {
+    e.target.closest('.pick-chip').classList.toggle('on', e.target.checked);
+    if (e.target.name === 'product_ids') countProducts();
+  }
+});
+
+function countProducts() {
+  document.getElementById('prodCount').textContent =
+    document.querySelectorAll('input[name=product_ids]:checked').length;
+}
+
+function filterProducts() {
+  const q = document.getElementById('prodFilter').value.toLowerCase().trim();
+  document.querySelectorAll('#prodBox .prod-group').forEach(group => {
+    let any = false;
+    group.querySelectorAll('.pick-chip').forEach(chip => {
+      const show = !q || chip.dataset.name.includes(q) || chip.classList.contains('on');
+      chip.style.display = show ? '' : 'none';
+      any = any || show;
+    });
+    group.style.display = any ? '' : 'none';
+  });
+}
+
+async function addSegment() {
+  const input = document.getElementById('newSegment');
+  const name = input.value.trim();
+  if (!name) return;
+  const res = await fetch('{{ url_for("leads.create_segment") }}', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.error) { alert(data.error || 'Could not add the segment.'); return; }
+  input.value = '';
+  let box = document.querySelector(`input[name=segment_ids][value="${data.id}"]`);
+  if (!box) {
+    const chip = document.createElement('label');
+    chip.className = 'pick-chip';
+    chip.innerHTML = `<input type="checkbox" name="segment_ids" value="${data.id}">${esc(data.name)}`;
+    input.parentElement.before(chip);
+    box = chip.querySelector('input');
+  }
+  box.checked = true;
+  box.closest('.pick-chip').classList.add('on');
+}
+
+/* ── Areas of work: search or pick on the map; saved with the form ── */
+const OLA_KEY = {{ ola_maps_api_key|tojson }};
+const AREA_PALETTE = ['#E2703A','#3B6FB5','#0C7A64','#B5485D','#7A5CB8','#C98F1B','#2E9E88','#C9455C'];
+const PIN_PALETTE = ['#EF4444','#3B82F6','#10B981','#F59E0B','#8B5CF6','#EC4899','#06B6D4'];
+// Areas already saved on this lead (edit form) — removing one only marks it until Save.
+const areas = {{ regions|tojson }}.map(r => ({ ...r, removed: false, isNew: false }));
+let areaMap = null, mapReady = false, rebuild = false;
+let searchCands = [], searchMarkers = [], areaDebounce = null;
+let picking = false, pinMarker = null, pinCands = [];
+
+const styleUrl = dark =>
+  `https://api.olamaps.io/tiles/vector/v1/styles/${dark ? 'default-dark-standard' : 'default-light-standard'}/style.json`;
+const areaColor = i => AREA_PALETTE[i % AREA_PALETTE.length];
+
+function retry(fn, n = 0) {
+  // Sources can't be added while a (re)loading style isn't ready yet.
+  try { fn(); } catch (e) { if (n < 30) setTimeout(() => retry(fn, n + 1), 200); else console.error(e); }
+}
+
+function initAreaMap() {
+  areaMap = new maplibregl.Map({
+    container: 'areaMap',
+    style: styleUrl(document.body.classList.contains('dark')),
+    center: [78.9, 23.5], zoom: 3.5,
+    transformRequest: (url) => url.startsWith('https://api.olamaps.io')
+      ? { url: `${url}${url.includes('?') ? '&' : '?'}api_key=${OLA_KEY}` } : { url },
+  });
+  areaMap.addControl(new maplibregl.NavigationControl(), 'top-left');
+  const ready = () => {
+    if (mapReady) return;
+    mapReady = true;
+    retry(redraw);
+    const live = areas.filter(a => !a.removed);
+    if (live.length) fitTo(live.map(a => a.geometry));
+  };
+  areaMap.on('load', ready);
+  // 'load' can wait forever for a first paint in some environments — poll as a backstop.
+  (function poll(n) {
+    if (mapReady) return;
+    if (areaMap.isStyleLoaded() || areaMap.areTilesLoaded() || n > 15) { ready(); return; }
+    setTimeout(() => poll(n + 1), 200);
+  })(0);
+  areaMap.on('click', (e) => {
+    const hit = areaMap.getLayer('pin-cands-fill')
+      ? areaMap.queryRenderedFeatures(e.point, { layers: ['pin-cands-fill'] }) : [];
+    if (hit.length) { choosePin(hit[0].properties.idx); return; }
+    if (picking) lookupPoint(e.lngLat);
+  });
+  window.addEventListener('ledger:theme-changed', (e) => {
+    rebuild = true;   // setStyle wipes our layers; the old sources linger until the new style lands
+    areaMap.setStyle(styleUrl(e.detail.dark));
+    retry(redraw);
+  });
+}
+
+function fc(features) { return { type: 'FeatureCollection', features }; }
+
+function drawLayer(id, data, opacity, dashed) {
+  if (!rebuild && areaMap.getSource(id)) { areaMap.getSource(id).setData(data); return; }
+  areaMap.addSource(id, { type: 'geojson', data });
+  areaMap.addLayer({ id: `${id}-fill`, type: 'fill', source: id,
+    paint: { 'fill-color': ['get', 'color'], 'fill-opacity': opacity } });
+  areaMap.addLayer({ id: `${id}-line`, type: 'line', source: id,
+    paint: { 'line-color': ['get', 'color'], 'line-width': 2.5, ...(dashed ? { 'line-dasharray': [2, 1.5] } : {}) } });
+}
+
+function redraw() {
+  if (!mapReady) return;
+  drawLayer('sel-areas', fc(areas.map((a, i) => a.removed ? null : {
+    type: 'Feature', geometry: a.geometry, properties: { color: areaColor(i) } }).filter(Boolean)), 0.25);
+  drawLayer('pin-cands', fc(pinCands.map((c, i) => ({
+    type: 'Feature', geometry: c.geometry, properties: { color: PIN_PALETTE[i % PIN_PALETTE.length], idx: i } }))), 0.18, true);
+  rebuild = false;
+}
+
+function fitTo(geometries, maxZoom) {
+  if (!areaMap || !mapReady) return;
+  const b = new maplibregl.LngLatBounds();
+  const walk = c => (typeof c[0] === 'number' ? b.extend(c) : c.forEach(walk));
+  geometries.forEach(g => g && walk(g.coordinates));
+  if (!b.isEmpty()) areaMap.fitBounds(b, { padding: 30, maxZoom: maxZoom || 11, duration: 400 });
+}
+
+/* Selected list + the hidden inputs the form posts */
+function syncAreas() {
+  const list = document.getElementById('areaList');
+  list.innerHTML = areas.length ? areas.map((a, i) => `
+    <div class="area-item${a.removed ? ' removed' : ''}">
+      <span class="sw" style="background:${areaColor(i)}"></span>
+      <span class="nm" title="${esc(a.name)} — show on map" onclick="zoomArea(${i})">${esc(a.name)}</span>
+      ${a.isNew ? '<span class="tag">new</span>' : `<span class="ty">${esc(a.source === 'custom' ? 'drawn' : (a.area_type || ''))}</span>`}
+      <button type="button" onclick="toggleArea(${i})" title="${a.removed ? 'Keep' : 'Remove'}">${a.removed ? '↺' : '✕'}</button>
+    </div>`).join('')
+    : '<div style="font-size:12.5px;color:var(--text-muted);padding:6px 0">None yet — search above or pick on the map.</div>';
+  document.getElementById('areaCount').textContent = areas.filter(a => !a.removed).length;
+
+  const hidden = document.getElementById('areaHidden');
+  hidden.innerHTML = '';
+  areas.forEach(a => {
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    if (a.isNew) { input.name = 'add_areas'; input.value = JSON.stringify({ boundary_id: a.boundary_id, name: a.name }); }
+    else if (a.removed) { input.name = 'remove_regions'; input.value = a.link_id; }
+    else return;
+    hidden.appendChild(input);
+  });
+  if (areaMap) retry(redraw);
+}
+
+function addArea(b) {
+  const existing = areas.find(a => a.boundary_id === b.boundary_id);
+  if (existing) existing.removed = false;
+  else areas.push({ boundary_id: b.boundary_id, link_id: null, name: b.name, area_type: b.area_type,
+                    source: b.source, geometry: b.geometry, removed: false, isNew: true });
+  syncAreas();
+  fitTo([b.geometry]);
+}
+
+function toggleArea(i) {
+  if (areas[i].isNew) areas.splice(i, 1); else areas[i].removed = !areas[i].removed;
+  syncAreas();
+}
+
+function zoomArea(i) { fitTo([areas[i].geometry]); }
+
+/* Search: results become numbered pins so same-named places can be told apart */
+function onAreaInput() {
+  clearTimeout(areaDebounce);
+  const q = document.getElementById('areaSearch').value.trim();
+  if (!q) { clearSearch(); return; }
+  areaDebounce = setTimeout(() => {
+    fetch(`/leads/regions/search?q=${encodeURIComponent(q)}`)
+      .then(r => r.json())
+      .then(cands => { searchCands = Array.isArray(cands) ? cands : []; renderSearch(); })
+      .catch(() => clearSearch());
+  }, 300);
+}
+
+function renderSearch() {
+  const box = document.getElementById('areaResults');
+  box.innerHTML = searchCands.length
+    ? searchCands.map((c, i) => `<div class="area-row" data-i="${i}">
+        <span class="area-num">${i + 1}</span>
+        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(c.name)}">${esc(c.name)}</span>
+        <span style="font-size:11px;color:var(--text-muted);text-transform:capitalize">${esc(c.type)}</span></div>`).join('')
+    : '<div class="area-row" style="color:var(--text-muted);cursor:default">No matches.</div>';
+  box.querySelectorAll('.area-row[data-i]').forEach(row => {
+    const i = +row.dataset.i;
+    row.addEventListener('mouseenter', () => hot(i));
+    row.addEventListener('mouseleave', () => hot(null));
+    row.addEventListener('click', () => pickSearch(i));
+  });
+  box.style.display = 'block';
+
+  searchMarkers.forEach(m => m && m.remove());
+  searchMarkers = [];
+  if (!areaMap) return;
+  const pts = [];
+  searchCands.forEach((c, i) => {
+    if (c.lat == null || c.lon == null) { searchMarkers.push(null); return; }
+    const el = document.createElement('div');
+    el.className = 'area-marker';
+    el.textContent = i + 1;
+    el.title = c.name;
+    el.addEventListener('mouseenter', () => hot(i));
+    el.addEventListener('mouseleave', () => hot(null));
+    el.addEventListener('click', (e) => { e.stopPropagation(); pickSearch(i); });
+    searchMarkers.push(new maplibregl.Marker({ element: el }).setLngLat([c.lon, c.lat]).addTo(areaMap));
+    pts.push([c.lon, c.lat]);
+  });
+  if (pts.length) fitTo([{ type: 'MultiPoint', coordinates: pts }], 9);
+}
+
+function hot(i) {
+  document.querySelectorAll('#areaResults .area-row[data-i]').forEach(r => r.classList.toggle('hot', +r.dataset.i === i));
+  searchMarkers.forEach((m, j) => m && m.getElement().classList.toggle('hot', j === i));
+}
+
+async function pickSearch(i) {
+  const c = searchCands[i];
+  const row = document.querySelector(`#areaResults .area-row[data-i="${i}"]`);
+  if (row) row.style.opacity = '.55';
+  const q = new URLSearchParams({ osm_type: c.osm_type || '', osm_id: c.osm_id || '', name: c.name });
+  try {
+    const res = await fetch(`/leads/regions/resolve?${q}`);
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || res.statusText);
+    clearSearch();
+    addArea(data);
+  } catch (e) {
+    if (row) row.style.opacity = '';
+    alert(`${c.name.split(',')[0]}: ${e.message} Try a nearby district or state, or pick on the map.`);
+  }
+}
+
+function clearSearch() {
+  const box = document.getElementById('areaResults');
+  box.style.display = 'none';
+  box.innerHTML = '';
+  document.getElementById('areaSearch').value = '';
+  searchCands = [];
+  searchMarkers.forEach(m => m && m.remove());
+  searchMarkers = [];
+}
+
+/* Pick on map: every boundary level covering the clicked point */
+function togglePick() {
+  picking = !picking;
+  const btn = document.getElementById('pickBtn');
+  btn.classList.toggle('btn-primary', picking);
+  btn.classList.toggle('btn-secondary', !picking);
+  document.getElementById('pickHint').style.display = picking ? '' : 'none';
+  document.getElementById('areaMap').classList.toggle('picking', picking);
+  if (!picking) clearPin();
+}
+
+function lookupPoint(lngLat) {
+  clearPin();
+  pinMarker = new maplibregl.Marker({ color: '#111827' }).setLngLat(lngLat).addTo(areaMap);
+  const panel = document.getElementById('pinPanel');
+  panel.style.display = '';
+  panel.innerHTML = '<div style="padding:12px;font-size:13px;color:var(--text-muted)">Looking up boundaries…</div>';
+  fetch(`/leads/regions/reverse?lat=${lngLat.lat}&lon=${lngLat.lng}`)
+    .then(r => r.json())
+    .then(cands => {
+      pinCands = Array.isArray(cands) ? cands : [];
+      if (!pinCands.length) {
+        panel.innerHTML = '<div style="padding:12px;font-size:13px;color:var(--text-muted)">No boundary found for that point.</div>';
+        return;
+      }
+      panel.innerHTML = pinCands.map((c, i) => `
+        <div class="pin-row" onclick="choosePin(${i})">
+          <span class="pin-sw" style="background:${PIN_PALETTE[i % PIN_PALETTE.length]}"></span>
+          <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(c.name)}">${esc(c.name)}</span>
+          <span style="font-size:11px;color:var(--text-muted);text-transform:capitalize">${esc(c.area_type || '')}</span>
+        </div>`).join('');
+      retry(redraw);
+    })
+    .catch(() => {
+      panel.innerHTML = '<div style="padding:12px;font-size:13px;color:var(--danger)">Lookup failed — try again.</div>';
+    });
+}
+
+function choosePin(i) {
+  const c = pinCands[i];
+  if (!c) return;
+  togglePick();          // leaves pick mode, which also clears the candidates
+  addArea(c);
+}
+
+function clearPin() {
+  pinCands = [];
+  if (pinMarker) { pinMarker.remove(); pinMarker = null; }
+  document.getElementById('pinPanel').style.display = 'none';
+  if (areaMap) retry(redraw);
+}
+
+document.addEventListener('click', (e) => {
+  // Clicks on the map keep the results open — you may be looking at the pins.
+  const box = document.getElementById('areaResults');
+  if (box.style.display !== 'none' && !box.contains(e.target) && e.target.id !== 'areaSearch'
+      && !document.getElementById('areaMap').contains(e.target)) box.style.display = 'none';
+});
+document.getElementById('areaSearch').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') e.preventDefault();   // Enter never submits the form from here
+  if (e.key === 'Escape') clearSearch();
+});
+document.getElementById('areaSearch').addEventListener('focus', () => {
+  if (searchCands.length) document.getElementById('areaResults').style.display = 'block';
+});
+
+try { initAreaMap(); }
+catch (e) {
+  console.error('Area map unavailable:', e);
+  document.getElementById('areaMap').innerHTML =
+    '<div style="padding:16px;font-size:13px;color:var(--text-muted)">The map could not load — search still works.</div>';
+}
+syncAreas();
+
+/* ── Possible duplicates: same phone or company name elsewhere ── */
+let dupDebounce = null;
+function checkDuplicates() {
+  clearTimeout(dupDebounce);
+  dupDebounce = setTimeout(() => {
+    const p = new URLSearchParams({
+      phone: document.getElementById('phone').value,
+      alt_phone: document.getElementById('alt_phone').value,
+      company: document.getElementById('company_name').value,
+    });
+    if (LEAD_ID) p.set('exclude', LEAD_ID);
+    fetch(`{{ url_for('leads.duplicates') }}?${p}`)
+      .then(r => r.json())
+      .then(found => {
+        const box = document.getElementById('dupBox');
+        if (!found.length) { box.style.display = 'none'; return; }
+        box.innerHTML = '⚠ Possibly already in the system: ' + found.map(d => {
+          const url = d.id ? (d.kind === 'client' ? `/clients/${d.id}` : `/leads/${d.id}`) : null;
+          const name = url ? `<a href="${url}" target="_blank">${esc(d.name)}</a>` : esc(d.name);
+          return `${name} <span style="opacity:.8">(${d.kind}, same ${d.match === 'phone' ? 'phone' : 'name'})</span>`;
+        }).join(', ');
+        box.style.display = 'block';
+      })
+      .catch(() => {});
+  }, 350);
+}
+['phone', 'alt_phone', 'company_name'].forEach(id =>
+  document.getElementById(id).addEventListener('input', checkDuplicates));
+
+countProducts();
+if (document.getElementById('phone').value || document.getElementById('company_name').value) checkDuplicates();
+</script>
+{% endblock %}

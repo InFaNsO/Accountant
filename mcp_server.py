@@ -1599,6 +1599,199 @@ def checkup_from_invoice(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# LEADS — prospects (exhibition contacts etc.) before they become clients
+# ═════════════════════════════════════════════════════════════════════════════
+# Statuses, in pipeline order: need_to_talk, rates_given, samples_sent, other,
+# first_order_sent, closed (won), abandoned.
+
+def _given(**kwargs):
+    """Only the arguments the caller set — None means 'leave it alone'."""
+    return {k: v for k, v in kwargs.items() if v is not None}
+
+
+@mcp.tool()
+def list_leads(
+    status: str = None,
+    search: str = None,
+    source: str = None,
+    state: str = None,
+    assigned_to: str = None,
+    follow_up: str = None,
+    segment_id: int = None,
+    category_id: int = None,
+    include_overlaps: bool = False,
+    limit: int = 100,
+) -> dict:
+    """List sales leads (prospects, e.g. from an exhibition), newest first, with
+    status, contact, interests, areas of work and next follow-up.
+
+    Args:
+      status:      CSV of status keys — need_to_talk, rates_given, samples_sent,
+                   other, first_order_sent, closed, abandoned.
+      search:      text matched against company, person, phone, email, city, state, source.
+      source:      e.g. the exhibition name (substring match).
+      state:       exact state name.
+      assigned_to: user name or id, or "none" for unassigned.
+      follow_up:   "overdue" | "today" | "week" (next 7 days) | "none" (not set).
+                   Only open leads (not closed/abandoned) have a follow-up due.
+      segment_id / category_id: leads interested in that segment / product category
+                   (ids from list_lead_segments / list_categories).
+      include_overlaps: add, per lead, the clients and leads whose area overlaps it.
+      limit:       default 100, max 500.
+
+    Returns items, count, total_matching, status_counts and the status list.
+    """
+    return _call("GET", "leads", params={
+        "status": _csv(status), "q": search, "source": source, "state": state,
+        "assigned_to": assigned_to, "follow_up": follow_up, "segment_id": segment_id,
+        "category_id": category_id, "include": "overlaps" if include_overlaps else None,
+        "limit": limit,
+    })
+
+
+@mcp.tool()
+def get_lead(lead_id: int) -> dict:
+    """Everything about one lead: contact details, status, follow-up, interests
+    (categories / segments / products), areas of work (with link_ids), overlaps
+    — clients and other leads working in the same area, with how much of the
+    area they share — possible duplicates (same phone or company name) and the
+    latest timeline (status changes and notes, times in IST)."""
+    return _call("GET", f"leads/{lead_id}")
+
+
+@mcp.tool()
+def create_lead(
+    company_name: str,
+    contact_person: str = None,
+    phone: str = None,
+    alt_phone: str = None,
+    email: str = None,
+    city: str = None,
+    state: str = None,
+    address: str = None,
+    source: str = None,
+    status: str = None,
+    assigned_to: str = None,
+    next_follow_up: str = None,
+    notes: str = None,
+    categories: list = None,
+    products: list = None,
+    segments: list = None,
+    category_ids: list = None,
+    product_ids: list = None,
+    areas: list = None,
+) -> dict:
+    """Create a sales lead. ONLY call after explicit user confirmation.
+
+    Args:
+      company_name:   required.
+      status:         default need_to_talk; or rates_given, samples_sent, other,
+                      first_order_sent, closed, abandoned.
+      assigned_to:    user name or id.
+      next_follow_up: YYYY-MM-DD.
+      categories / products: names of product categories / products they want
+                      (exact names; unknown ones are reported, not created).
+      category_ids / product_ids: the same by id.
+      segments:       interest tags such as "Paint dealer" — created if new.
+      areas:          places they work in, e.g. ["Ludhiana", "Ghaziabad, Uttar Pradesh"];
+                      each is matched to a boundary (India preferred) — the result
+                      says what each matched, so check it against what was meant.
+
+    Returns lead_id, areas_added / areas_not_found, warnings, possible_duplicates
+    and overlaps with existing clients and leads — tell the user about both.
+    """
+    body = _given(company_name=company_name, contact_person=contact_person, phone=phone,
+                  alt_phone=alt_phone, email=email, city=city, state=state, address=address,
+                  source=source, status=status, assigned_to=assigned_to,
+                  next_follow_up=next_follow_up, notes=notes, categories=categories,
+                  products=products, segments=segments, category_ids=category_ids,
+                  product_ids=product_ids, areas=areas)
+    return _call("POST", "leads", body=body)
+
+
+@mcp.tool()
+def update_lead(
+    lead_id: int,
+    company_name: str = None,
+    contact_person: str = None,
+    phone: str = None,
+    alt_phone: str = None,
+    email: str = None,
+    city: str = None,
+    state: str = None,
+    address: str = None,
+    source: str = None,
+    status: str = None,
+    assigned_to: str = None,
+    next_follow_up: str = None,
+    notes: str = None,
+    categories: list = None,
+    products: list = None,
+    segments: list = None,
+    category_ids: list = None,
+    product_ids: list = None,
+    add_areas: list = None,
+    remove_area_ids: list = None,
+) -> dict:
+    """Change a lead — only the arguments given; everything else stays as it
+    is. ONLY call after explicit user confirmation.
+
+    Pass "" to clear a text field. Giving categories / products / segments (or
+    their *_ids) REPLACES that kind of interest — include the existing ones
+    (from get_lead) to add rather than replace. add_areas: place names to add
+    to their areas of work; remove_area_ids: area link_ids from get_lead.
+    A status change here is logged on the timeline; use set_lead_status to
+    attach a note to it.
+    """
+    body = _given(company_name=company_name, contact_person=contact_person, phone=phone,
+                  alt_phone=alt_phone, email=email, city=city, state=state, address=address,
+                  source=source, status=status, assigned_to=assigned_to,
+                  next_follow_up=next_follow_up, notes=notes, categories=categories,
+                  products=products, segments=segments, category_ids=category_ids,
+                  product_ids=product_ids, add_areas=add_areas, remove_area_ids=remove_area_ids)
+    return _call("PATCH", f"leads/{lead_id}", body=body)
+
+
+@mcp.tool()
+def set_lead_status(lead_id: int, status: str, note: str = None) -> dict:
+    """Move a lead to another status, optionally with a note saying why — both
+    go on the lead's timeline. status: need_to_talk, rates_given, samples_sent,
+    other, first_order_sent, closed, abandoned.
+    ONLY call after explicit user confirmation."""
+    return _call("POST", f"leads/{lead_id}/status", body=_given(status=status, note=note))
+
+
+@mcp.tool()
+def add_lead_note(lead_id: int, note: str) -> dict:
+    """Add a note to a lead's timeline (a call, a quote sent, what they said).
+    ONLY call after explicit user confirmation."""
+    return _call("POST", f"leads/{lead_id}/notes", body={"note": note})
+
+
+@mcp.tool()
+def delete_lead(lead_id: int) -> dict:
+    """
+    PERMANENTLY delete a lead with its interests, areas and timeline.
+    Only call after the user explicitly confirmed deletion.
+    """
+    return _call("DELETE", f"leads/{lead_id}")
+
+
+@mcp.tool()
+def list_lead_segments() -> dict:
+    """The interest segments leads can be tagged with (trade types, industries…),
+    with how many leads have each."""
+    return _call("GET", "lead-segments")
+
+
+@mcp.tool()
+def create_lead_segment(name: str) -> dict:
+    """Add an interest segment for leads (returns the existing one if the name
+    is already there, in any case). ONLY call after explicit user confirmation."""
+    return _call("POST", "lead-segments", body={"name": name})
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # ENTRY POINT
 # ═════════════════════════════════════════════════════════════════════════════
 

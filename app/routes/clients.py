@@ -5,7 +5,8 @@ from flask import (Blueprint, render_template, request, redirect, url_for, flash
                    jsonify, abort, send_file, current_app)
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from flask_login import login_required, current_user
-from ..services import client_service, region_service
+from ..services import client_service, lead_service, region_service
+from .region_routes import register_region_routes
 from ..services.payment_service import recalculate_client_balance, reconcile_all_clients
 from ..services.auth_service import (permission_required, get_scoped_client_ids,
                                      get_own_scoped_client_ids, has_short_terms)
@@ -87,23 +88,59 @@ def _parse_companies(form):
     return companies
 
 
+def _lead_to_convert(lead_id):
+    """The lead a new client is being made from (?from_lead=), when the user
+    may convert it; None otherwise — the form then behaves as a plain new client."""
+    if not lead_id or not current_user.has_permission("leads", "edit"):
+        return None
+    try:
+        lead_id = int(lead_id)
+    except (TypeError, ValueError):
+        return None
+    scope = lead_service.visible_lead_ids(current_user)
+    if scope is not None and lead_id not in scope:
+        return None
+    lead = lead_service.get_lead(lead_id)
+    return lead if lead and not lead["client_id"] else None
+
+
 @bp.route("/new", methods=["GET", "POST"])
 @login_required
 @permission_required("clients", "create")
 def new_client():
     can_locks = current_user.has_permission("clients", "locks_edit")
+    from_lead = _lead_to_convert(request.values.get("from_lead"))
     if request.method == "POST":
         data = request.form.to_dict()
         companies = _parse_companies(request.form)
         if not data.get("name"):
             flash("Client name is required.", "error")
-            return render_template("clients/form.html", client=data, companies=companies, action="new", can_locks=can_locks)
+            return render_template("clients/form.html", client=data, companies=companies, action="new",
+                                   can_locks=can_locks, from_lead=from_lead)
         if not companies:
             flash("At least one company is required.", "error")
-            return render_template("clients/form.html", client=data, companies=companies, action="new", can_locks=can_locks)
+            return render_template("clients/form.html", client=data, companies=companies, action="new",
+                                   can_locks=can_locks, from_lead=from_lead)
         client_id = client_service.create_client(data, companies, include_locks=can_locks)
-        flash("Client created successfully.", "success")
+        if from_lead:
+            lead_service.mark_converted(from_lead["id"], client_id, current_user.id)
+            flash(f"Client created from lead {from_lead['company_name']} — its areas of work came along.", "success")
+        else:
+            flash("Client created successfully.", "success")
         return redirect(url_for("clients.detail", client_id=client_id))
+    if from_lead:
+        # Same naming habit as existing clients: "Company - City".
+        name = " - ".join(filter(None, [from_lead["company_name"], from_lead["city"]]))
+        notes = "\n".join(filter(None, [
+            f"Contact: {from_lead['contact_person']}" if from_lead["contact_person"] else None,
+            f"Lead source: {from_lead['source']}" if from_lead["source"] else None,
+            from_lead["notes"],
+        ]))
+        client = {"name": name, "phone": from_lead["phone"] or "", "city": from_lead["city"] or "",
+                  "state": from_lead["state"] or "", "notes": notes}
+        return render_template("clients/form.html", client=client,
+                               companies=[{"name": from_lead["company_name"]}], action="new",
+                               can_locks=can_locks, from_lead=from_lead)
     return render_template("clients/form.html", client={}, companies=[], action="new", can_locks=can_locks)
 
 
@@ -606,127 +643,7 @@ def regions_all():
     return jsonify(region_service.get_client_region_shapes(_scope()))
 
 
-@bp.route("/<int:client_id>/regions")
-@login_required
-@permission_required("clients", "view")
-def regions_list(client_id):
-    _guard_client(client_id)
-    return jsonify(region_service.get_client_regions(client_id))
-
-
-@bp.route("/regions/search")
-@login_required
-@permission_required("clients", "view")
-def regions_search():
-    return jsonify(region_service.search_areas(request.args.get("q", "")))
-
-
-@bp.route("/regions/reverse")
-@login_required
-@permission_required("clients", "view")
-def regions_reverse():
-    """Boundary candidates (state/district/city/town/suburb, from Nominatim
-    + BharatMaps) covering a dropped map pin, for the click-to-pick UI."""
-    try:
-        lat = float(request.args.get("lat"))
-        lon = float(request.args.get("lon"))
-    except (TypeError, ValueError):
-        return jsonify({"error": "Invalid coordinates."}), 400
-    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
-        return jsonify({"error": "Invalid coordinates."}), 400
-    return jsonify(region_service.reverse_candidates(lat, lon))
-
-
-@bp.route("/<int:client_id>/regions", methods=["POST"])
-@login_required
-@permission_required("clients", "edit")
-def regions_add(client_id):
-    _guard_client(client_id)
-    data = request.get_json(silent=True) or {}
-    if data.get("boundary_id"):
-        # Pin-drop picker — candidate boundary already resolved & cached.
-        try:
-            boundary_id = region_service.add_region_by_boundary_id(client_id, int(data["boundary_id"]))
-        except (TypeError, ValueError):
-            boundary_id = None
-    else:
-        boundary_id = region_service.add_region(
-            client_id, data.get("osm_type"), data.get("osm_id"), data.get("name"),
-        )
-    if boundary_id is None:
-        return jsonify({"error": "No boundary data found for that area."}), 404
-    return jsonify({"ok": True})
-
-
-@bp.route("/<int:client_id>/regions/<int:link_id>/delete", methods=["POST"])
-@login_required
-@permission_required("clients", "edit")
-def regions_remove(client_id, link_id):
-    _guard_client(client_id)
-    region_service.remove_region(client_id, link_id)
-    return jsonify({"ok": True})
-
-
-def _valid_trim_geometry(geometry):
-    return (isinstance(geometry, dict) and geometry.get("type") in ("Polygon", "MultiPolygon")
-            and isinstance(geometry.get("coordinates"), list))
-
-
-@bp.route("/<int:client_id>/regions/custom", methods=["POST"])
-@login_required
-@permission_required("clients", "edit")
-def regions_save_custom(client_id):
-    """Save a brush/erase-drawn custom area — creates a new one, or updates
-    an existing one in place when boundary_id is given (a client can have
-    several independent custom areas, each edited/extended separately)."""
-    _guard_client(client_id)
-    data = request.get_json(silent=True) or {}
-    geometry = data.get("geometry")
-    if not _valid_trim_geometry(geometry):
-        return jsonify({"error": "Invalid or empty shape."}), 400
-    name = (data.get("name") or "Custom Area").strip()[:200]
-    try:
-        boundary_id = int(data["boundary_id"]) if data.get("boundary_id") else None
-    except (TypeError, ValueError):
-        boundary_id = None
-    result = region_service.save_custom_region(client_id, geometry, name, boundary_id)
-    if result is None:
-        return jsonify({"error": "Custom area not found."}), 404
-    return jsonify({"ok": True, "boundary_id": result})
-
-
-@bp.route("/<int:client_id>/regions/<int:link_id>/trim", methods=["POST"])
-@login_required
-@permission_required("clients", "edit")
-def regions_trim(client_id, link_id):
-    """Apply an erase-tool trim to an existing (named or custom) region.
-    geometry: null means the erase removed it entirely — unlinked instead."""
-    _guard_client(client_id)
-    data = request.get_json(silent=True) or {}
-    geometry = data.get("geometry")
-    if geometry is not None and not _valid_trim_geometry(geometry):
-        return jsonify({"error": "Invalid shape."}), 400
-    ok = region_service.trim_region(client_id, link_id, geometry)
-    if not ok:
-        return jsonify({"error": "Region not found."}), 404
-    return jsonify({"ok": True})
-
-
-@bp.route("/<int:client_id>/regions/<int:link_id>/rename", methods=["POST"])
-@login_required
-@permission_required("clients", "edit")
-def regions_rename(client_id, link_id):
-    """Rename a custom area (named places can't be renamed — see
-    region_service.rename_region)."""
-    _guard_client(client_id)
-    data = request.get_json(silent=True) or {}
-    name = (data.get("name") or "").strip()
-    if not name:
-        return jsonify({"error": "Name is required."}), 400
-    ok = region_service.rename_region(client_id, link_id, name)
-    if not ok:
-        return jsonify({"error": "Only custom areas can be renamed."}), 404
-    return jsonify({"ok": True})
+register_region_routes(bp, owner="client", module="clients", guard=_guard_client)
 
 
 # ── Company endpoints ─────────────────────────────────────────────────────────

@@ -63,6 +63,14 @@
       Clients
     </a>
     {% endif %}
+    {% if current_user.has_permission('leads', 'view') %}
+    <a href="{{ url_for('leads.list_leads') }}" class="nav-item {% if request.endpoint and request.endpoint.startswith('leads.') %}active{% endif %}">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>
+      </svg>
+      Leads
+    </a>
+    {% endif %}
     {% if current_user.has_permission('products', 'view') %}
     <a href="{{ url_for('products.list_products') }}" class="nav-item {% if 'products' in request.endpoint %}active{% endif %}">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

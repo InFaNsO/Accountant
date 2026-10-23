@@ -10,6 +10,14 @@
   <form method="post" id="clientForm"
         action="{{ url_for('clients.edit_client', client_id=client_id) if action == 'edit' else url_for('clients.new_client') }}">
 
+    {% if from_lead %}
+    <input type="hidden" name="from_lead" value="{{ from_lead.id }}">
+    <div class="flash flash-info" style="margin-bottom:18px">
+      Converting lead <b>{{ from_lead.company_name }}</b> — check the details below. The lead's areas of work
+      are copied to the new client and the lead is linked to it.
+    </div>
+    {% endif %}
+
     <!-- Basic Info -->
     <div class="card" style="margin-bottom:18px">
       <div class="card-header"><span class="card-title">Client Information</span></div>

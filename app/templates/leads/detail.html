@@ -1,0 +1,317 @@
+{% extends "base.html" %}
+{% block title %}{{ lead.company_name }}{% endblock %}
+{% block page_title %}{{ lead.company_name }}{% endblock %}
+{% block topbar_actions %}
+  {% if lead.client_id %}
+  <a href="{{ url_for('clients.detail', client_id=lead.client_id) }}" class="btn btn-success">View client</a>
+  {% elif can_convert %}
+  <a href="{{ url_for('clients.new_client', from_lead=lead.id) }}" class="btn btn-primary"
+     title="Create a client from this lead — its details and areas of work carry over">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><polyline points="17 11 19 13 23 9"/></svg>
+    <span class="btn-label-mobile">Convert to client</span>
+  </a>
+  {% endif %}
+  {% if current_user.has_permission('leads', 'edit') %}
+  <a href="{{ url_for('leads.edit_lead', lead_id=lead.id) }}" class="btn btn-secondary">Edit</a>
+  {% endif %}
+  {% if current_user.has_permission('leads', 'delete') %}
+  <form class="confirm-inline" method="post" action="{{ url_for('leads.delete_lead', lead_id=lead.id) }}"
+        onsubmit="return confirm('Delete this lead and its timeline? This cannot be undone.')">
+    <button class="btn btn-danger">Del</button>
+  </form>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+{% set can_edit = current_user.has_permission('leads', 'edit') %}
+{% set st = status_map.get(lead.status) or status_map['need_to_talk'] %}
+<style>
+  .stage-row { display:flex; flex-wrap:wrap; gap:6px; }
+  .stage-btn { border:1px solid var(--border); background:var(--surface); color:var(--text-muted); border-radius:999px;
+    padding:6px 13px; font-size:12.5px; font-weight:600; cursor:pointer; transition:border-color .12s, color .12s; }
+  .stage-btn:hover { border-color:currentColor; }
+  .stage-btn.current { cursor:default; }
+  /* Status colours come in as --sc (light) / --sd (dark mode). */
+  .lstat { color:var(--sc); } body.dark .lstat { color:var(--sd); }
+  .ls-badge { display:inline-block; border-radius:999px; padding:3px 10px; font-size:12px; font-weight:700; white-space:nowrap; }
+  .lead-chip { display:inline-block; font-size:12px; padding:3px 9px; border-radius:999px; margin:2px 3px 2px 0;
+    background:var(--bg-alt); border:1px solid var(--border); color:var(--text-primary); text-decoration:none; }
+  a.lead-chip:hover { border-color:var(--accent); color:var(--accent); }
+  .chip-label { font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em; margin:0 0 5px; }
+  .tl { list-style:none; margin:0; padding:0; }
+  .tl li { position:relative; padding:0 0 16px 22px; }
+  .tl li::before { content:""; position:absolute; left:5px; top:6px; bottom:-6px; width:2px; background:var(--border); }
+  .tl li:last-child::before { display:none; }
+  .tl .tl-dot { position:absolute; left:0; top:3px; width:12px; height:12px; border-radius:50%; background:var(--border);
+    box-shadow:0 0 0 3px var(--surface); }
+  .tl .tl-head { font-size:13px; color:var(--text-primary); display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  .tl .tl-meta { font-size:11.5px; color:var(--text-muted); }
+  .tl .tl-body { font-size:13px; margin-top:4px; white-space:pre-wrap; color:var(--text-primary);
+    background:var(--bg-alt); border:1px solid var(--border); border-radius:var(--radius-sm); padding:8px 10px; }
+  .ov-item { padding:11px 0; border-bottom:1px solid var(--border); }
+  .ov-item:last-child { border-bottom:none; padding-bottom:0; }
+  .ov-item:first-child { padding-top:0; }
+  .ov-kind { display:inline-block; font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.05em;
+    padding:2px 7px; border-radius:4px; margin-right:6px; }
+  .ov-kind.client { background:rgba(239,68,68,.12); color:#B91C1C; }
+  .ov-kind.lead   { background:rgba(245,158,11,.16); color:#B45309; }
+  body.dark .ov-kind.client { color:#FCA5A5; } body.dark .ov-kind.lead { color:#FCD34D; }
+  .ov-name { font-weight:700; font-size:13.5px; color:var(--accent); text-decoration:none; }
+  .ov-meta { font-size:12px; color:var(--text-muted); margin-top:3px; }
+  .ov-bar { height:5px; border-radius:99px; background:var(--bg-alt); overflow:hidden; margin-top:6px; }
+  .ov-bar > span { display:block; height:100%; border-radius:99px; }
+  .dup-warn { border:1px solid var(--warning); background:var(--warning-light); color:#92400E; border-radius:var(--radius-sm);
+    padding:10px 12px; font-size:12.5px; margin-bottom:14px; }
+  body.dark .dup-warn { background:rgba(245,158,11,.12); color:#FCD34D; }
+  .dup-warn a { color:inherit; font-weight:700; }
+  .fu-overdue { color:var(--danger); font-weight:700; }
+  .fu-today { color:var(--warning); font-weight:700; }
+</style>
+
+<div class="detail-grid">
+  <!-- Left: progress + timeline -->
+  <div style="display:flex;flex-direction:column;gap:22px;min-width:0">
+
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Status</span>
+        <span class="ls-badge lstat" style="margin-left:10px;--sc:{{ st.color }};--sd:{{ st.dark }};background:{{ st.bg }}">{{ st.label }}</span>
+        <span style="margin-left:auto;font-size:12px;color:var(--text-muted)">since {{ lead.status_changed_local|dmyt }}</span>
+      </div>
+      <div class="card-body">
+        {% if can_edit %}
+        <form method="post" action="{{ url_for('leads.set_status', lead_id=lead.id) }}" id="statusForm">
+          <textarea name="note" rows="2" placeholder="What happened? (optional — saved on the timeline with the change, or on its own with Add note)"
+                    style="margin-bottom:10px"></textarea>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span style="font-size:12px;color:var(--text-muted);font-weight:600">Move to:</span>
+            <div class="stage-row">
+              {% for key, label, color, bg, dark in statuses %}
+              <button type="submit" name="status" value="{{ key }}" class="stage-btn lstat{% if key == lead.status %} current{% endif %}"
+                      style="--sc:{{ color }};--sd:{{ dark }};{% if key == lead.status %}background:{{ bg }};border-color:currentColor{% endif %}"
+                      {% if key == lead.status %}title="Current status — click to just add the note"{% endif %}>{{ label }}</button>
+              {% endfor %}
+            </div>
+            <button type="submit" formaction="{{ url_for('leads.add_note', lead_id=lead.id) }}" class="btn btn-secondary btn-sm" style="margin-left:auto">Add note</button>
+          </div>
+        </form>
+        <div style="height:1px;background:var(--border);margin:16px 0"></div>
+        <form method="post" action="{{ url_for('leads.set_follow_up', lead_id=lead.id) }}" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <label for="fu" style="font-size:12.5px;font-weight:600;color:var(--text-muted);margin:0">Next follow-up</label>
+          <input type="date" id="fu" name="next_follow_up" value="{{ lead.next_follow_up or '' }}" style="width:auto">
+          <button class="btn btn-secondary btn-sm">Save</button>
+          {% if lead.next_follow_up %}
+          <button class="btn btn-ghost btn-sm" onclick="document.getElementById('fu').value=''">Clear</button>
+          {% if lead.status in open_statuses %}
+          <span class="{{ 'fu-overdue' if lead.next_follow_up < today_iso else ('fu-today' if lead.next_follow_up == today_iso else '') }}" style="font-size:12.5px">
+            {{ 'Overdue' if lead.next_follow_up < today_iso else ('Due today' if lead.next_follow_up == today_iso else 'Due ' ~ (lead.next_follow_up|dmy)) }}
+          </span>
+          {% endif %}
+          {% endif %}
+        </form>
+        {% else %}
+        <div style="font-size:13px">Next follow-up: <b>{{ lead.next_follow_up|dmy }}</b></div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="card" id="activity">
+      <div class="card-header">
+        <span class="card-title">Timeline</span>
+        <span class="badge" style="margin-left:auto">{{ activities|length }}</span>
+      </div>
+      <div class="card-body">
+        {% if activities %}
+        <ul class="tl">
+          {% for a in activities %}
+          {% set ns = status_map.get(a.new_status) %}
+          {% set os_ = status_map.get(a.old_status) %}
+          <li>
+            <span class="tl-dot" style="{% if a.kind == 'status' and ns %}background:{{ ns.color }}{% elif a.kind == 'converted' %}background:var(--success){% elif a.kind == 'created' %}background:var(--accent){% endif %}"></span>
+            <div class="tl-head">
+              {% if a.kind == 'created' %}
+                <b>Lead added</b>{% if ns %} as <span class="ls-badge lstat" style="--sc:{{ ns.color }};--sd:{{ ns.dark }};background:{{ ns.bg }}">{{ ns.label }}</span>{% endif %}
+              {% elif a.kind == 'status' %}
+                {% if os_ %}<span class="ls-badge lstat" style="--sc:{{ os_.color }};--sd:{{ os_.dark }};background:{{ os_.bg }};opacity:.7">{{ os_.label }}</span> →{% endif %}
+                {% if ns %}<span class="ls-badge lstat" style="--sc:{{ ns.color }};--sd:{{ ns.dark }};background:{{ ns.bg }}">{{ ns.label }}</span>{% endif %}
+              {% elif a.kind == 'converted' %}
+                <b style="color:var(--success)">Converted to client</b>
+              {% else %}
+                <b>Note</b>
+              {% endif %}
+              <span class="tl-meta">· {{ a.created_local|dmyt }} · {{ a.user_name or 'via API' }}</span>
+              {% if a.kind == 'note' and can_edit %}
+              <form method="post" action="{{ url_for('leads.delete_note', lead_id=lead.id, activity_id=a.id) }}" style="margin-left:auto"
+                    onsubmit="return confirm('Delete this note?')">
+                <button class="btn btn-ghost btn-sm" style="padding:1px 7px" title="Delete note">✕</button>
+              </form>
+              {% endif %}
+            </div>
+            {% if a.body and a.kind != 'converted' %}<div class="tl-body">{{ a.body }}</div>
+            {% elif a.body %}<div class="tl-meta" style="margin-top:3px">{{ a.body }}</div>{% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p style="font-size:13px;color:var(--text-muted);margin:0">Nothing yet.</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Right: who they are + where they clash -->
+  <div style="display:flex;flex-direction:column;gap:22px;min-width:0">
+    <div class="card">
+      <div class="card-header"><span class="card-title">Contact</span></div>
+      <div class="card-body">
+        <div class="info-list">
+          {% if lead.contact_person %}<div class="info-row"><span class="info-label">Person</span><span class="info-value">{{ lead.contact_person }}</span></div>{% endif %}
+          <div class="info-row"><span class="info-label">Phone</span>
+            <span class="info-value">
+              {% if lead.phone %}
+              <a href="tel:{{ lead.phone|replace(' ', '') }}" style="color:var(--accent);text-decoration:none;font-weight:600">{{ lead.phone }}</a>
+              {% if wa_number %}<a href="https://wa.me/{{ wa_number }}" target="_blank" rel="noopener" class="lead-chip" style="margin-left:6px">WhatsApp</a>{% endif %}
+              {% else %}—{% endif %}
+            </span>
+          </div>
+          {% if lead.alt_phone %}<div class="info-row"><span class="info-label">Other</span><span class="info-value"><a href="tel:{{ lead.alt_phone|replace(' ', '') }}" style="color:inherit">{{ lead.alt_phone }}</a></span></div>{% endif %}
+          {% if lead.email %}<div class="info-row"><span class="info-label">Email</span><span class="info-value"><a href="mailto:{{ lead.email }}" style="color:var(--accent)">{{ lead.email }}</a></span></div>{% endif %}
+          <div class="info-row"><span class="info-label">Location</span><span class="info-value">{{ [lead.city, lead.state]|select|join(', ') or '—' }}</span></div>
+          {% if lead.address %}<div class="info-row"><span class="info-label">Address</span><span class="info-value">{{ lead.address }}</span></div>{% endif %}
+          <div class="info-row"><span class="info-label">Source</span><span class="info-value">{{ lead.source or '—' }}</span></div>
+          <div class="info-row"><span class="info-label">Assigned</span><span class="info-value">{{ lead.assigned_name or '—' }}</span></div>
+          {% if lead.client_id %}
+          <div class="info-row"><span class="info-label">Client</span><span class="info-value"><a href="{{ url_for('clients.detail', client_id=lead.client_id) }}" style="color:var(--accent);font-weight:600">{{ lead.client_name }}</a></span></div>
+          {% endif %}
+          <div class="info-row"><span class="info-label">Added</span><span class="info-value" style="font-size:13px">{{ lead.created_local|dmy }}{% if lead.created_by_name %} by {{ lead.created_by_name }}{% endif %}</span></div>
+        </div>
+        {% if lead.notes %}
+        <div style="margin-top:14px;font-size:13px;white-space:pre-wrap;background:var(--bg-alt);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px">{{ lead.notes }}</div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><span class="card-title">Interested in</span></div>
+      <div class="card-body" style="display:flex;flex-direction:column;gap:12px">
+        {% set any_interest = interests.categories or interests.segments or interests.products %}
+        {% if interests.categories %}
+        <div><div class="chip-label">Categories</div>
+          {% for c in interests.categories %}<span class="lead-chip" style="border-color:rgba(99,102,241,.35)">{{ c.name }}</span>{% endfor %}</div>
+        {% endif %}
+        {% if interests.segments %}
+        <div><div class="chip-label">Segments</div>
+          {% for s in interests.segments %}<span class="lead-chip" style="border-color:rgba(20,184,166,.4)">{{ s.name }}</span>{% endfor %}</div>
+        {% endif %}
+        {% if interests.products %}
+        <div><div class="chip-label">Products</div>
+          {% for p in interests.products %}
+          {% if current_user.has_permission('products', 'view') %}<a href="{{ url_for('products.product_detail', product_id=p.id) }}" class="lead-chip" title="{{ p.category_name or '' }}">{{ p.name }}</a>
+          {% else %}<span class="lead-chip">{{ p.name }}</span>{% endif %}
+          {% endfor %}</div>
+        {% endif %}
+        {% if not any_interest %}
+        <p style="font-size:13px;color:var(--text-muted);margin:0">Nothing recorded{% if can_edit %} — <a href="{{ url_for('leads.edit_lead', lead_id=lead.id) }}" style="color:var(--accent)">add interests</a>{% endif %}.</p>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Overlaps</span>
+        <span class="badge" id="ovCount" style="margin-left:auto">0</span>
+      </div>
+      <div class="card-body">
+        {% if duplicates %}
+        <div class="dup-warn">⚠ Possibly already in the system:
+          {% for d in duplicates %}
+            {% if d.id %}<a href="{{ url_for('clients.detail', client_id=d.id) if d.kind == 'client' else url_for('leads.detail', lead_id=d.id) }}">{{ d.name }}</a>
+            {% else %}{{ d.name }}{% endif %}
+            <span style="opacity:.8">({{ d.kind }}, same {{ 'phone' if d.match == 'phone' else 'name' }})</span>{{ ',' if not loop.last }}
+          {% endfor %}
+        </div>
+        {% endif %}
+        <div id="ovList"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% set region_base = url_for('leads.detail', lead_id=lead.id) %}
+{% set region_lookup = '/leads/regions' %}
+{% set region_can_edit = can_edit %}
+{% set region_title = 'Areas of work' %}
+{% include "_region_editor.html" %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+const LEAD_OVERLAPS = {{ overlaps|tojson }};
+const OVERLAP_READY = {{ 'true' if overlap_ready else 'false' }};
+const STATUS_MAP = {{ status_map|tojson }};
+const OV_COLOR = { client: '#EF4444', lead: '#F59E0B' };
+const ovEsc = s => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const pct = f => (f >= 0.995 ? '100' : f < 0.01 ? '<1' : Math.round(f * 100)) + '%';
+let leadHasAreas = {{ 'true' if lead.region_count else 'false' }};
+let lastRegionSig = null;
+
+function ovUrl(o) { return o.id ? (o.kind === 'client' ? `/clients/${o.id}` : `/leads/${o.id}`) : null; }
+
+function renderOverlaps(list) {
+  document.getElementById('ovCount').textContent = list.length;
+  const box = document.getElementById('ovList');
+  if (!OVERLAP_READY) {
+    box.innerHTML = '<p style="font-size:13px;color:var(--text-muted);margin:0">Overlap checks are unavailable on this server (the shapely package is missing).</p>';
+  } else if (!list.length) {
+    box.innerHTML = `<p style="font-size:13px;color:var(--text-muted);margin:0">${leadHasAreas
+      ? 'No client or other lead works in this area.'
+      : 'Add this lead’s areas of work on the map below to check them against clients and other leads.'}</p>`;
+  } else {
+    box.innerHTML = list.map(o => {
+      const url = ovUrl(o);
+      const name = url ? `<a class="ov-name" href="${url}">${ovEsc(o.name)}</a>` : `<span class="ov-name" style="color:var(--text-muted)">${ovEsc(o.name)}</span>`;
+      const s = o.kind === 'lead' && o.status ? STATUS_MAP[o.status] : null;
+      const badge = s ? ` <span class="ls-badge lstat" style="font-size:11px;padding:2px 8px;--sc:${s.color};--sd:${s.dark};background:${s.bg}">${ovEsc(s.label)}</span>` : '';
+      const theirs = (o.their_regions || []).join(', ');
+      const ours = (o.our_regions || []).join(', ');
+      return `<div class="ov-item">
+        <div><span class="ov-kind ${o.kind}">${o.kind}</span>${name}${badge}</div>
+        <div class="ov-meta">Shares <b>${pct(o.share_here)}</b> of this lead's area · ${pct(o.share_there)} of theirs${o.shared_km2 ? ` · ≈ ${o.shared_km2.toLocaleString('en-IN')} km²` : ''}</div>
+        ${theirs || ours ? `<div class="ov-meta">${ours ? `Here: ${ovEsc(ours)}` : ''}${ours && theirs ? ' · ' : ''}${theirs ? `Theirs: ${ovEsc(theirs)}` : ''}</div>` : ''}
+        <div class="ov-bar"><span style="width:${Math.max(3, Math.round(o.share_here * 100))}%;background:${OV_COLOR[o.kind]}"></span></div>
+      </div>`;
+    }).join('') + `<div style="display:flex;gap:14px;margin-top:12px;font-size:11.5px;color:var(--text-muted)">
+        <span><span style="display:inline-block;width:14px;border-top:2px dashed ${OV_COLOR.client};vertical-align:middle;margin-right:5px"></span>client areas on the map</span>
+        <span><span style="display:inline-block;width:14px;border-top:2px dashed ${OV_COLOR.lead};vertical-align:middle;margin-right:5px"></span>lead areas</span></div>`;
+  }
+  // Draw the overlapping areas underneath this lead's own, dashed.
+  setRegionOverlay({
+    type: 'FeatureCollection',
+    features: list.filter(o => o.geometry).map(o => ({
+      type: 'Feature',
+      geometry: o.geometry,
+      properties: {
+        name: o.name, color: OV_COLOR[o.kind], url: ovUrl(o) || '',
+        label: `${o.kind === 'client' ? 'Client' : 'Lead'} · shares ${pct(o.share_here)} of this lead's area`,
+      },
+    })),
+  });
+}
+
+// The map editor reloads the area list after every add / remove / reshape —
+// re-check overlaps whenever the areas actually changed.
+window.onRegionsLoaded = (regions) => {
+  const sig = regions.map(r => `${r.link_id}:${JSON.stringify(r.geometry).length}`).join('|');
+  const changed = lastRegionSig !== null && sig !== lastRegionSig;
+  lastRegionSig = sig;
+  leadHasAreas = regions.length > 0;
+  if (!changed) { renderOverlaps(LEAD_OVERLAPS); return; }
+  fetch('{{ url_for("leads.overlaps", lead_id=lead.id) }}')
+    .then(r => r.json())
+    .then(list => { LEAD_OVERLAPS.length = 0; LEAD_OVERLAPS.push(...list); renderOverlaps(list); })
+    .catch(e => console.error('Overlap refresh failed:', e));
+};
+
+renderOverlaps(LEAD_OVERLAPS);
+</script>
+{% endblock %}
