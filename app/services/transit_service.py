@@ -386,9 +386,11 @@ def _refresh_status(db, dispatch_id):
     db.execute("UPDATE dispatches SET status=? WHERE id=?", (status, dispatch_id))
 
 
-def update_dispatch(dispatch_id, data, item_updates):
+def update_dispatch(dispatch_id, data, item_updates, new_items=None, remove_ids=None):
     """Edit a dispatch: header fields, line quantities, and switching a line
-    between its Normal and Eco counterpart.
+    between its Normal and Eco counterpart. While it is a draft, lines can also be
+    added (`new_items`, shaped like create_dispatch's items) and removed
+    (`remove_ids`, dispatch_item ids); a live dispatch refuses both.
 
     `item_updates` maps dispatch_item id → {quantity, price, cbm, gross_weight,
     product_id, sub_product_id}. The caller resolves an eco switch into concrete
@@ -418,12 +420,18 @@ def update_dispatch(dispatch_id, data, item_updates):
     items     = {it["id"]: it for it in get_dispatch_items(dispatch_id)}
     new_supplier = int(data["supplier_id"]) if data.get("supplier_id") else None
     supplier_changed = (new_supplier != d["supplier_id"])
+    new_items  = new_items or []
+    remove_ids = {i for i in (remove_ids or []) if i in items}
 
     # ── Validate everything first ────────────────────────────────────────────
+    if (new_items or remove_ids) and not is_draft:
+        return False, ["Lines can only be added or removed while the dispatch is a draft."], []
+    if len(items) - len(remove_ids) + len(new_items) < 1:
+        return False, ["A dispatch needs at least one product line — delete it instead."], []
     errors, plans = [], []
     for di_id, upd in item_updates.items():
         it = items.get(di_id)
-        if not it:
+        if not it or di_id in remove_ids:
             continue
         received = it["qty_received"] or 0
         new_qty  = float(upd.get("quantity") or 0)
@@ -549,6 +557,23 @@ def update_dispatch(dispatch_id, data, item_updates):
                        VALUES (?,?,?)""",
                     (it["id"], po_item_id, alloc_qty),
                 )
+
+    # Draft only (checked above): no stock has moved, so lines just come and go.
+    for di_id in remove_ids:
+        db.execute("DELETE FROM dispatch_items WHERE id=?", (di_id,))
+    for it in new_items:
+        db.execute(
+            """INSERT INTO dispatch_items
+                   (dispatch_id, product_id, sub_product_id, quantity, price, cbm, gross_weight)
+               VALUES (?,?,?,?,?,?,?)""",
+            (dispatch_id,
+             int(it["product_id"]) if it.get("product_id") else None,
+             int(it["sub_product_id"]) if it.get("sub_product_id") else None,
+             float(it["quantity"]),
+             float(it["price"]) if it.get("price") else None,
+             float(it["cbm"]) if it.get("cbm") else None,
+             float(it["gross_weight"]) if it.get("gross_weight") else None),
+        )
 
     if not is_draft:
         _refresh_status(db, dispatch_id)

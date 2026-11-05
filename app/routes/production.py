@@ -1,3 +1,4 @@
+import re
 from flask import Blueprint, render_template, request, redirect, url_for, flash
 from flask_login import login_required
 from ..services import production_service, supplier_service, product_service
@@ -7,24 +8,25 @@ bp = Blueprint("production", __name__, url_prefix="/production")
 
 
 def _parse_items(form):
+    """Picker rows posted as product_id_<i>, quantity_<i>, ... Every index present
+    is read: a row deleted on the page leaves a gap, and the rows after it still count."""
+    indices = sorted({
+        int(m.group(1))
+        for key in form.keys()
+        for m in [re.match(r"(?:sub_)?product_id_(\d+)$", key)]
+        if m
+    })
     items = []
-    i = 0
-    while True:
-        if f"product_id_{i}" not in form and f"sub_product_id_{i}" not in form:
-            break
-        pid  = form.get(f"product_id_{i}") or None
-        sid  = form.get(f"sub_product_id_{i}") or None
-        qty  = form.get(f"quantity_{i}", "")
+    for i in indices:
+        pid = form.get(f"product_id_{i}") or None
+        sid = form.get(f"sub_product_id_{i}") or None
         if not pid and not sid:
-            i += 1
             continue
         try:
-            qty = float(qty)
-            if qty <= 0:
-                i += 1
-                continue
+            qty = float(form.get(f"quantity_{i}", ""))
         except ValueError:
-            i += 1
+            continue
+        if qty <= 0:
             continue
         items.append({
             "product_id":     pid,
@@ -32,7 +34,6 @@ def _parse_items(form):
             "quantity":       qty,
             "price":          form.get(f"price_{i}") or None,
         })
-        i += 1
     return items
 
 
@@ -113,8 +114,17 @@ def edit_production(po_id):
                     "quantity": request.form.get(qty_key),
                     "price":    request.form.get(f"existing_price_{it['id']}"),
                 })
+        remove_ids = [it["id"] for it in items if request.form.get(f"remove_{it['id']}")]
         new_items = _parse_items(request.form)
-        production_service.update_production_order(po_id, data, item_updates, new_items)
+        if len(items) - len(remove_ids) + len(new_items) < 1:
+            flash("An order needs at least one product line — delete the order instead.", "error")
+            return render_template("production/edit.html", po=data, po_id=po_id,
+                                   suppliers=suppliers, items=items, products=products,
+                                   eco_map=eco_map)
+        kept = production_service.update_production_order(
+            po_id, data, item_updates, new_items, remove_ids)
+        for name in kept:
+            flash(f"{name} was not removed: some of it has already been dispatched.", "warning")
         flash("Production order updated.", "success")
         return redirect(url_for("production.detail", po_id=po_id))
     return render_template("production/edit.html", po=dict(po), po_id=po_id,

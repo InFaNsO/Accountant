@@ -56,8 +56,13 @@ def _refresh_invoice_paid(db, invoice_id):
     inv = db.execute("SELECT total, status FROM invoices WHERE id=?", (invoice_id,)).fetchone()
     if not inv:
         return
-    if paid <= 0:
-        status = inv["status"] if inv["status"] == "draft" else "issued"
+    if inv["status"] == "draft":
+        # A draft can take payments (money received before it goes out), but only
+        # issuing it moves it out of draft: that is what gives it its serial and
+        # takes its stock (invoice_service.update_invoice_status).
+        status = "draft"
+    elif paid <= 0:
+        status = "issued"
     elif paid >= float(inv["total"]):
         status = "paid"
     else:
@@ -66,6 +71,66 @@ def _refresh_invoice_paid(db, invoice_id):
         "UPDATE invoices SET amount_paid=?, status=? WHERE id=?",
         (paid, status, invoice_id),
     )
+
+
+def _credit_sources(db, client_id):
+    """[(payment_id, free_amount)], oldest first: the money in the client's ordinary
+    payments that is not on any invoice and not needed for the opening balance.
+    Payments flagged as opening-balance never go to invoices; whatever OB debt they
+    leave uncovered is taken from the oldest free money first, as
+    recalculate_client_balance does."""
+    client = db.execute("SELECT opening_balance FROM clients WHERE id=?", (client_id,)).fetchone()
+    if not client:
+        return []
+    pmts = db.execute(
+        """SELECT p.id, p.amount, COALESCE(p.is_opening_balance, 0) AS is_ob,
+                  COALESCE((SELECT SUM(amount) FROM payment_allocations
+                            WHERE payment_id = p.id), 0) AS allocated
+           FROM payments p WHERE p.client_id = ?
+           ORDER BY p.payment_date ASC, p.id ASC""",
+        (client_id,),
+    ).fetchall()
+    flagged = sum(float(p["amount"]) for p in pmts if p["is_ob"])
+    reserve = max(0.0, max(0.0, float(client["opening_balance"] or 0)) - flagged)
+    out = []
+    for p in pmts:
+        if p["is_ob"]:
+            continue
+        free = float(p["amount"]) - float(p["allocated"])
+        take = min(max(free, 0.0), reserve)
+        reserve -= take
+        free -= take
+        if free > 0.001:
+            out.append((p["id"], free))
+    return out
+
+
+def client_credit(db, client_id):
+    """Money the client has paid that is waiting for an invoice (what
+    apply_client_credit would put on one)."""
+    return sum(free for _pid, free in _credit_sources(db, client_id))
+
+
+def apply_client_credit(db, client_id, invoice_id):
+    """Put the client's waiting credit on this invoice, oldest payment first, as far
+    as the invoice's unpaid balance goes. Run when an invoice goes out, so an advance
+    paid before it existed is counted. Does not commit."""
+    inv = db.execute("SELECT total, amount_paid FROM invoices WHERE id=?", (invoice_id,)).fetchone()
+    if not inv:
+        return
+    gap = float(inv["total"]) - float(inv["amount_paid"] or 0)
+    applied = 0.0
+    for payment_id, free in _credit_sources(db, client_id):
+        if gap - applied < 0.01:
+            break
+        take = min(free, gap - applied)
+        db.execute(
+            "INSERT INTO payment_allocations (payment_id, invoice_id, amount) VALUES (?,?,?)",
+            (payment_id, invoice_id, take),
+        )
+        applied += take
+    if applied > 0.001:
+        _refresh_invoice_paid(db, invoice_id)
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -167,10 +232,13 @@ def recalculate_client_balance(client_id):
             inv_gaps[inv_id] = gap - alloc
             remaining -= alloc
             inv_row = db.execute(
-                "SELECT total, amount_paid FROM invoices WHERE id=?", (inv_id,)
+                "SELECT total, amount_paid, status FROM invoices WHERE id=?", (inv_id,)
             ).fetchone()
             new_paid = float(inv_row["amount_paid"]) + alloc
-            new_status = "paid" if new_paid >= float(inv_row["total"]) else "partial"
+            if inv_row["status"] == "draft":
+                new_status = "draft"
+            else:
+                new_status = "paid" if new_paid >= float(inv_row["total"]) else "partial"
             db.execute(
                 "UPDATE invoices SET amount_paid=?, status=? WHERE id=?",
                 (new_paid, new_status, inv_id),

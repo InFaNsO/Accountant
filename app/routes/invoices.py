@@ -23,6 +23,35 @@ def _guard_invoice(invoice):
         abort(403)
 
 
+def _flash_status_errors(errors, saved=False):
+    """Flash why update_invoice_status refused. saved=True: the edit itself was
+    stored and only the status change was refused."""
+    for e in errors:
+        if e.get("type") == "locked":
+            flash(("Saved as draft — cannot issue" if saved else "Cannot issue")
+                  + ": client is locked (" + "; ".join(e["reasons"]) + ").", "error")
+        elif e.get("type") == "undraft":
+            flash(("Saved, but " if saved else "") + f"{e['number']} is already issued, so it "
+                  "cannot go back to draft. Cancel it instead if it should not stand.", "error")
+        else:
+            flash(
+                ("Saved as draft — cannot issue" if saved else "Cannot issue")
+                + f": insufficient stock for '{e['name']}': "
+                f"need {e['required']:.0f}, have {e['available']:.0f} in warehouse.",
+                "error",
+            )
+
+
+def _issued_message(inv):
+    """Flash text for an invoice that has just gone out."""
+    msg = f"Issued as {inv['invoice_number']}. Stock deducted."
+    if inv["status"] == "paid":
+        msg += " The payments already received cover it in full."
+    elif inv["status"] == "partial":
+        msg += f" ₹{inv['amount_paid']:,.2f} already received is counted against it."
+    return msg
+
+
 def _build_product_choices():
     choices = []
     for p in product_service.get_all_products(active_only=True):
@@ -250,10 +279,14 @@ def detail(invoice_id):
     possible_dup = (invoice_service.find_possible_duplicate(
                         invoice["client_id"], invoice["total"], exclude_id=invoice_id)
                     if invoice["status"] == "draft" else None)
+    # Money the client paid that is not on any invoice yet; issuing puts it on this one.
+    from ..services.payment_service import client_credit
+    waiting_credit = client_credit(db, invoice["client_id"]) if invoice["status"] == "draft" else 0
     return render_template("invoices/detail.html", invoice=invoice, items=items,
                            payments=payments, stock_status=stock_status,
                            item_ppc=item_ppc, prev_id=prev_id, next_id=next_id,
-                           client_lock=client_lock, possible_dup=possible_dup)
+                           client_lock=client_lock, possible_dup=possible_dup,
+                           waiting_credit=waiting_credit)
 
 
 @bp.route("/<int:invoice_id>/edit", methods=["GET", "POST"])
@@ -286,19 +319,20 @@ def edit_invoice(invoice_id):
         if scope is not None and int(data["client_id"]) not in scope:
             abort(403)
         ok, errors = invoice_service.update_invoice(invoice_id, data, items)
-        if not ok:
+        if not ok and any(e.get("type") == "short_edit" for e in errors):
+            # Nothing was saved: show the form again with what they typed.
             for e in errors:
-                if e.get("type") == "locked":
-                    flash("Saved as draft — cannot issue: client is locked ("
-                          + "; ".join(e["reasons"]) + ").", "error")
-                else:
-                    flash(
-                        f"Saved as draft — cannot issue: insufficient stock for '{e['name']}': "
-                        f"need {e['required']:.0f}, have {e['available']:.0f} in warehouse.",
-                        "error",
-                    )
+                flash(f"Not saved — this edit needs {e['required']:.0f} more of '{e['name']}', "
+                      f"and only {e['available']:.0f} is in the warehouse.", "error")
+            return render_template("invoices/form.html", invoice=data, items=items, clients=clients, products=products, all_companies=all_companies, locked_clients=locked_clients, action="edit", invoice_id=invoice_id)
+        if not ok:
+            _flash_status_errors(errors, saved=True)
         else:
-            flash("Invoice updated.", "success")
+            after = invoice_service.get_invoice(invoice_id)
+            if invoice["status"] in ("draft", "cancelled") and after["status"] in invoice_service.LIVE_STATUSES:
+                flash("Invoice updated. " + _issued_message(after), "success")
+            else:
+                flash("Invoice updated.", "success")
         return redirect(url_for("invoices.detail", invoice_id=invoice_id))
     items = invoice_service.get_invoice_items(invoice_id)
     return render_template("invoices/form.html", invoice=dict(invoice), items=[dict(i) for i in items], clients=clients, products=products, all_companies=all_companies, locked_clients=locked_clients, action="edit", invoice_id=invoice_id)
@@ -308,7 +342,8 @@ def edit_invoice(invoice_id):
 @login_required
 @permission_required("invoices", "edit")
 def update_status(invoice_id):
-    _guard_invoice(invoice_service.get_invoice(invoice_id))
+    before = invoice_service.get_invoice(invoice_id)
+    _guard_invoice(before)
     status = request.form.get("status")
     valid = {"draft", "issued", "paid", "cancelled", "partial"}
     if status not in valid:
@@ -316,18 +351,13 @@ def update_status(invoice_id):
         return redirect(url_for("invoices.detail", invoice_id=invoice_id))
     ok, errors = invoice_service.update_invoice_status(invoice_id, status)
     if not ok:
-        for e in errors:
-            if e.get("type") == "locked":
-                flash("Cannot issue — client is locked ("
-                      + "; ".join(e["reasons"]) + ").", "error")
-            else:
-                flash(
-                    f"Cannot issue — insufficient stock for '{e['name']}': "
-                    f"need {e['required']:.0f}, have {e['available']:.0f} in warehouse.",
-                    "error",
-                )
+        _flash_status_errors(errors)
     else:
-        flash(f"Status updated to {status}.", "success")
+        after = invoice_service.get_invoice(invoice_id)
+        if before["status"] in ("draft", "cancelled") and after["status"] in invoice_service.LIVE_STATUSES:
+            flash(_issued_message(after), "success")
+        else:
+            flash(f"Status updated to {status}.", "success")
     return redirect(url_for("invoices.detail", invoice_id=invoice_id))
 
 

@@ -2,7 +2,10 @@ import sqlite3
 from datetime import date
 from ..database import get_db
 from . import product_service
-from .payment_service import _refresh_invoice_paid
+from .payment_service import _refresh_invoice_paid, apply_client_credit
+
+# Statuses of an invoice that is out: it has its INV serial and its stock is gone.
+LIVE_STATUSES = ("issued", "sent", "partial", "paid")
 
 
 class AlreadySaved(Exception):
@@ -161,49 +164,79 @@ def _apply_company_ob_credit(db, client_id, company_id, invoice_id, issue_date):
     _refresh_invoice_paid(db, invoice_id)
 
 
-def check_stock_for_issue(invoice_id):
-    """Return list of catalog items in the invoice with their stock status.
-    Each dict: {name, description, required, available, sufficient}
-    Only includes items linked to a product or sub-product.
-    """
-    db = get_db()
-    items = db.execute(
-        """SELECT ii.description, ii.quantity, ii.product_id, ii.sub_product_id,
-                  p.name AS product_name, sp.name AS sub_name
-           FROM invoice_items ii
-           LEFT JOIN products p ON ii.product_id = p.id
-           LEFT JOIN sub_products sp ON ii.sub_product_id = sp.id
-           WHERE ii.invoice_id = ?""",
+def _item_name(db, pid, spid, fallback=""):
+    """'Parent — Variant' for a sub-product, the product name otherwise."""
+    row = db.execute(
+        """SELECT p.name AS product_name, sp.name AS sub_name
+           FROM (SELECT ? AS pid, ? AS spid) k
+           LEFT JOIN sub_products sp ON sp.id = k.spid
+           LEFT JOIN products p ON p.id = COALESCE(sp.product_id, k.pid)""",
+        (pid, spid),
+    ).fetchone()
+    if row["sub_name"] and row["product_name"]:
+        return f"{row['product_name']} — {row['sub_name']}"
+    return row["sub_name"] or row["product_name"] or fallback
+
+
+def _warehouse_qty(db, pid, spid):
+    tbl = "sub_products" if spid else "products"
+    row = db.execute(f"SELECT stock_qty FROM {tbl} WHERE id=?", (spid or pid,)).fetchone()
+    return float(row["stock_qty"] or 0) if row else 0.0
+
+
+def _move_stock(db, invoice_id, pid, spid, qty, movement, note):
+    """Take `qty` out of the warehouse ('sale') or put it back ('sale_cancelled'),
+    logging the stock movement against the invoice."""
+    tbl = "sub_products" if spid else "products"
+    sign = -1 if movement == "sale" else 1
+    db.execute(f"UPDATE {tbl} SET stock_qty = stock_qty + ? WHERE id = ?", (sign * qty, spid or pid))
+    db.execute(
+        "INSERT INTO stock_movements (product_id, sub_product_id, movement_type, quantity, notes, invoice_id) VALUES (?,?,?,?,?,?)",
+        (pid, spid, movement, qty, note, invoice_id),
+    )
+
+
+def _linked_qty(lines):
+    """{(product_id, sub_product_id): total quantity} over the lines that are linked
+    to the catalog. Two lines of the same item add up."""
+    out = {}
+    for it in lines:
+        pid  = int(it["product_id"]) if it["product_id"] else None
+        spid = int(it["sub_product_id"]) if it["sub_product_id"] else None
+        if pid or spid:
+            out[(pid, spid)] = out.get((pid, spid), 0.0) + float(it["quantity"])
+    return out
+
+
+def _invoice_lines(db, invoice_id):
+    return db.execute(
+        "SELECT product_id, sub_product_id, quantity, description FROM invoice_items WHERE invoice_id=? ORDER BY id",
         (invoice_id,),
     ).fetchall()
+
+
+def check_stock_for_issue(invoice_id):
+    """Warehouse check for issuing: one entry per catalog item on the invoice, its
+    lines added up. Each dict: {name, description, product_id, sub_product_id,
+    required, available, sufficient}. Lines not linked to the catalog are left out.
+    """
+    db = get_db()
+    lines = _invoice_lines(db, invoice_id)
+    first_desc = {}
+    for it in lines:
+        key = (it["product_id"] or None, it["sub_product_id"] or None)
+        first_desc.setdefault(key, it["description"])
     result = []
-    for it in items:
-        pid  = it["product_id"]
-        spid = it["sub_product_id"]
-        if not pid and not spid:
-            continue
-        tbl = "sub_products" if spid else "products"
-        pk  = spid if spid else pid
-        row = db.execute(f"SELECT stock_qty FROM {tbl} WHERE id=?", (pk,)).fetchone()
-        available = float(row["stock_qty"] or 0) if row else 0.0
-        required  = float(it["quantity"])
-        # Build a full name matching the line items display: "Parent — Variant"
-        if it["sub_name"] and it["product_name"]:
-            name = f"{it['product_name']} — {it['sub_name']}"
-        elif it["sub_name"]:
-            name = it["sub_name"]
-        elif it["product_name"]:
-            name = it["product_name"]
-        else:
-            name = it["description"]
+    for (pid, spid), required in _linked_qty(lines).items():
+        available = _warehouse_qty(db, pid, spid)
         result.append({
-            "name":           name,
-            "description":    it["description"],
+            "name":           _item_name(db, pid, spid, first_desc.get((pid, spid), "")),
+            "description":    first_desc.get((pid, spid), ""),
             "product_id":     pid,
             "sub_product_id": spid,
             "required":       required,
             "available":      available,
-            "sufficient":     available >= required,
+            "sufficient":     available >= required - 1e-9,
         })
     return result
 
@@ -347,26 +380,27 @@ def create_invoice(data, items):
         )
         # Deduct warehouse stock only when not saving as draft
         if not is_draft and (pid or spid):
-            tbl = "sub_products" if spid else "products"
-            pk  = spid if spid else pid
-            db.execute(f"UPDATE {tbl} SET stock_qty = stock_qty - ? WHERE id = ?", (qty, pk))
-            db.execute(
-                "INSERT INTO stock_movements (product_id, sub_product_id, movement_type, quantity, notes, invoice_id) VALUES (?,?,?,?,?,?)",
-                (pid, spid, "sale", qty, f"Invoice {invoice_number}", invoice_id),
-            )
+            _move_stock(db, invoice_id, pid, spid, qty, "sale", f"Invoice {invoice_number}")
+
+    # Credit the client already has goes on an invoice that is out (a draft
+    # waits until it is issued).
+    if not is_draft:
+        if company_id:
+            issue_date = data.get("issue_date", str(date.today()))
+            _apply_company_ob_credit(db, int(data["client_id"]), company_id, invoice_id, issue_date)
+        apply_client_credit(db, int(data["client_id"]), invoice_id)
     db.commit()
-
-    # Auto-apply company credit OB only for non-draft invoices
-    if not is_draft and company_id:
-        issue_date = data.get("issue_date", str(date.today()))
-        _apply_company_ob_credit(db, int(data["client_id"]), company_id, invoice_id, issue_date)
-
     return invoice_id
 
 
 def update_invoice_status(invoice_id, status):
-    """Update invoice status. Returns (ok, errors).
-    errors is a list of stock shortage dicts when draft→issued fails the stock check.
+    """Move an invoice to `status`. Returns (ok, errors).
+
+    Only issuing takes an invoice out of draft: choosing any live status for a draft
+    (issued, sent, partial, paid) issues it, and so does reopening a cancelled
+    invoice. Nothing goes back to draft once issued (errors type 'undraft'): its
+    serial is given and its stock is gone, so cancel it instead.
+    errors also holds 'locked' dicts and stock-shortage dicts (see check_stock_for_issue).
     """
     db = get_db()
     inv = db.execute(
@@ -377,73 +411,94 @@ def update_invoice_status(invoice_id, status):
         return True, []
     prev_status = inv["status"]
 
-    # Draft → Issued: check client lock + stock first, then apply deductions + OB credit
-    if prev_status == "draft" and status == "issued":
-        from .client_service import get_client_lock_status
-        lock = get_client_lock_status(inv["client_id"])
-        if lock["locked"]:
-            return False, [{"type": "locked", "reasons": lock["reasons"]}]
-        stock_items = check_stock_for_issue(invoice_id)
-        short = [s for s in stock_items if not s["sufficient"]]
-        if short:
-            return False, short
-        # Assign the real serial now (replaces the D-### draft number) so issued
-        # invoices are numbered in true issue order.
-        new_number = (_next_invoice_number(db)
-                      if str(inv["invoice_number"]).startswith("D-")
-                      else inv["invoice_number"])
-        items = db.execute(
-            "SELECT product_id, sub_product_id, quantity FROM invoice_items WHERE invoice_id=?",
-            (invoice_id,),
-        ).fetchall()
-        for it in items:
-            pid  = it["product_id"]
-            spid = it["sub_product_id"]
-            qty  = float(it["quantity"])
-            if pid or spid:
-                tbl = "sub_products" if spid else "products"
-                pk  = spid if spid else pid
-                db.execute(f"UPDATE {tbl} SET stock_qty = stock_qty - ? WHERE id = ?", (qty, pk))
-                db.execute(
-                    "INSERT INTO stock_movements (product_id, sub_product_id, movement_type, quantity, notes, invoice_id) VALUES (?,?,?,?,?,?)",
-                    (pid, spid, "sale", qty, f"Invoice {new_number}", invoice_id),
-                )
-        db.execute(
-            "UPDATE invoices SET status=?, invoice_number=?, issued_at=CURRENT_TIMESTAMP WHERE id=?",
-            (status, new_number, invoice_id),
-        )
-        db.commit()
-        if inv["company_id"]:
-            _apply_company_ob_credit(db, inv["client_id"], inv["company_id"], invoice_id, inv["issue_date"])
-        return True, []
+    if status == "draft":
+        if prev_status == "draft":
+            return True, []
+        return False, [{"type": "undraft", "number": inv["invoice_number"]}]
+
+    if prev_status in ("draft", "cancelled") and status in LIVE_STATUSES:
+        return _issue(db, inv, invoice_id)
 
     db.execute("UPDATE invoices SET status=? WHERE id=?", (status, invoice_id))
+    # Restore stock when cancelling an invoice that took it (a draft never did)
+    if status == "cancelled" and prev_status in LIVE_STATUSES:
+        for it in _invoice_lines(db, invoice_id):
+            if it["product_id"] or it["sub_product_id"]:
+                _move_stock(db, invoice_id, it["product_id"], it["sub_product_id"], float(it["quantity"]),
+                            "sale_cancelled", f"Cancelled: Invoice {inv['invoice_number']}")
+    db.commit()
+    return True, []
 
-    # Restore stock when cancelling a previously-issued invoice (draft never held stock)
-    if status == "cancelled" and prev_status not in ("cancelled", "draft"):
-        items = db.execute(
-            "SELECT product_id, sub_product_id, quantity FROM invoice_items WHERE invoice_id=?",
-            (invoice_id,),
-        ).fetchall()
-        for it in items:
-            pid  = it["product_id"]
-            spid = it["sub_product_id"]
-            qty  = it["quantity"]
-            if pid or spid:
-                tbl = "sub_products" if spid else "products"
-                pk  = spid if spid else pid
-                db.execute(f"UPDATE {tbl} SET stock_qty = stock_qty + ? WHERE id = ?", (qty, pk))
-                db.execute(
-                    "INSERT INTO stock_movements (product_id, sub_product_id, movement_type, quantity, notes, invoice_id) VALUES (?,?,?,?,?,?)",
-                    (pid, spid, "sale_cancelled", qty,
-                     f"Cancelled: Invoice {inv['invoice_number']}", invoice_id),
-                )
+
+def _issue(db, inv, invoice_id):
+    """Send out a draft, or reopen a cancelled invoice. Checks the client lock and
+    the warehouse, gives a draft its real serial (D-### becomes the next INV-####, so
+    issued invoices are numbered in true issue order), takes the stock, applies any
+    credit waiting for the client, then lets the payments decide issued / partial /
+    paid: money recorded against the draft counts from here. All in one commit."""
+    from .client_service import get_client_lock_status
+    lock = get_client_lock_status(inv["client_id"])
+    if lock["locked"]:
+        return False, [{"type": "locked", "reasons": lock["reasons"]}]
+    short = [s for s in check_stock_for_issue(invoice_id) if not s["sufficient"]]
+    if short:
+        return False, short
+
+    number = (_next_invoice_number(db)
+              if str(inv["invoice_number"]).startswith("D-")
+              else inv["invoice_number"])
+    for it in _invoice_lines(db, invoice_id):
+        if it["product_id"] or it["sub_product_id"]:
+            _move_stock(db, invoice_id, it["product_id"], it["sub_product_id"], float(it["quantity"]),
+                        "sale", f"Invoice {number}")
+    db.execute(
+        """UPDATE invoices SET status='issued', invoice_number=?,
+                  issued_at=COALESCE(issued_at, CURRENT_TIMESTAMP)
+           WHERE id=?""",
+        (number, invoice_id),
+    )
+    if inv["company_id"]:
+        _apply_company_ob_credit(db, inv["client_id"], inv["company_id"], invoice_id, inv["issue_date"])
+    apply_client_credit(db, inv["client_id"], invoice_id)
+    _refresh_invoice_paid(db, invoice_id)
     db.commit()
     return True, []
 
 
 def update_invoice(invoice_id, data, items):
+    """Save the edit form. Returns (ok, errors) like update_invoice_status.
+
+    Header and lines are saved under the invoice's current status, then a status
+    change goes through update_invoice_status, which owns every move between
+    statuses (issuing a draft, cancelling, ...). A draft holds no stock, so its lines
+    are simply rewritten. On a live invoice the warehouse follows the lines: more of
+    an item takes the difference out of stock, less (or a removed line) puts it back.
+    If stock cannot cover an increase nothing is saved (errors type 'short_edit').
+    """
     db = get_db()
+    prev = db.execute(
+        "SELECT status, invoice_number, amount_paid FROM invoices WHERE id=?", (invoice_id,)
+    ).fetchone()
+    if not prev:
+        return False, [{"type": "missing"}]
+    prev_status = prev["status"]
+    live = prev_status in LIVE_STATUSES
+    requested_status = data.get("status") or prev_status
+
+    deltas = {}
+    if live:
+        before = _linked_qty(_invoice_lines(db, invoice_id))
+        after  = _linked_qty(items)
+        deltas = {k: after.get(k, 0.0) - before.get(k, 0.0) for k in set(before) | set(after)}
+        deltas = {k: d for k, d in deltas.items() if abs(d) > 1e-9}
+        short = []
+        for (pid, spid), d in deltas.items():
+            available = _warehouse_qty(db, pid, spid)
+            if d > 0 and available < d - 1e-9:
+                short.append({"type": "short_edit", "name": _item_name(db, pid, spid),
+                              "required": d, "available": available})
+        if short:
+            return False, short
 
     inv_dtype = (data.get("discount_type") or "value").lower()
     inv_dval  = float(data.get("discount_amount", 0) or 0)
@@ -451,20 +506,12 @@ def update_invoice(invoice_id, data, items):
 
     company_id = int(data["company_id"]) if data.get("company_id") else None
 
-    prev = db.execute("SELECT status FROM invoices WHERE id=?", (invoice_id,)).fetchone()
-    requested_status = data.get("status", "issued")
-    # Issuing a draft from the edit form: keep the row in 'draft' for this field/item
-    # update, then let update_invoice_status run the real transition (stock check +
-    # serial assignment). Single source of truth for draft→issued.
-    issuing = bool(prev) and prev["status"] == "draft" and requested_status == "issued"
-    effective_status = "draft" if issuing else requested_status
-
     db.execute(
-        """UPDATE invoices SET client_id=?, company_id=?, status=?, issue_date=?, due_date=?,
+        """UPDATE invoices SET client_id=?, company_id=?, issue_date=?, due_date=?,
            notes=?, subtotal=?, tax_total=?, discount_amount=?, discount_type=?, discount_value=?, total=?
            WHERE id=?""",
         (
-            data["client_id"], company_id, effective_status,
+            data["client_id"], company_id,
             data.get("issue_date"), data.get("due_date"),
             data.get("notes"), subtotal, tax_total, discount, inv_dtype, inv_dval, total,
             invoice_id,
@@ -492,11 +539,16 @@ def update_invoice(invoice_id, data, items):
                 line_net,
             ),
         )
+    for (pid, spid), d in deltas.items():
+        _move_stock(db, invoice_id, pid, spid, abs(d), "sale" if d > 0 else "sale_cancelled",
+                    f"Edited: Invoice {prev['invoice_number']}")
+    # With payments on it, a live invoice's paid / partial follows its new total.
+    if live and float(prev["amount_paid"] or 0) > 0:
+        _refresh_invoice_paid(db, invoice_id)
     db.commit()
 
-    if issuing:
-        # Runs stock check + serial assignment; returns (ok, stock-shortage errors).
-        return update_invoice_status(invoice_id, "issued")
+    if requested_status != prev_status:
+        return update_invoice_status(invoice_id, requested_status)
     return True, []
 
 

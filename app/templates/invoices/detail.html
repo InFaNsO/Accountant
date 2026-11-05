@@ -92,7 +92,17 @@
         {% if balance > 0 %} — <strong onclick="showClientLedger({{ invoice.client_id }}, {{ invoice.client_name|tojson }})" style="color:var(--danger);cursor:pointer" title="View client ledger">{{ balance|inr }} remaining</strong>{% endif %}
       </span>
       {% else %}
-      <span style="font-size:14px;color:var(--text-muted)">Not yet issued — no stock or balance impact</span>
+      {# Payment check before issuing: what is already received against this draft,
+         plus the client's credit that issuing will put on it. #}
+      {% set on_issue = [invoice.amount_paid + waiting_credit, invoice.total]|min %}
+      {% set still_due = invoice.total - on_issue %}
+      <span style="font-size:14px;color:var(--text-secondary)">
+        Not issued yet — no stock taken.
+        {{ invoice.amount_paid|inr }} received against it{% if waiting_credit > 0.005 %}, {{ [waiting_credit, invoice.total - invoice.amount_paid]|min|inr }} more from the client's credit on issue{% endif %}
+        —
+        {% if still_due > 0.005 %}<strong style="color:var(--danger)">{{ still_due|inr }} still to collect</strong>
+        {% else %}<strong style="color:var(--success)">fully paid</strong>{% endif %}
+      </span>
       {% endif %}
     </div>
     {% if invoice.status != 'draft' %}
@@ -111,6 +121,7 @@
         <option value="cancelled">Cancelled</option>
         {% else %}
         <option value="issued"    {{ 'selected' if invoice.status in ('sent','issued') }}>Issued</option>
+        {% if invoice.status == 'partial' %}<option value="partial" selected>Partial</option>{% endif %}
         <option value="paid"      {{ 'selected' if invoice.status=='paid' }}>Paid</option>
         <option value="cancelled" {{ 'selected' if invoice.status=='cancelled' }}>Cancelled</option>
         {% endif %}
@@ -302,11 +313,11 @@ function setUnitMode(mode) {
 }
 </script>
 
-<!-- Payments (hidden for drafts) -->
-{% if invoice.status != 'draft' %}
+<!-- Payments: a draft can take payments too (money received before it goes out);
+     they count towards paid / partial once it is issued. -->
 <div class="card">
   <div class="card-header">
-    <span class="card-title">Payment History</span>
+    <span class="card-title">{{ 'Payments Received (draft)' if invoice.status == 'draft' else 'Payment History' }}</span>
     <a href="{{ url_for('payments.new_payment') }}?invoice_id={{ invoice.id }}" class="btn btn-success btn-sm">+ Record Payment</a>
   </div>
   {% if payments %}
@@ -343,5 +354,4 @@ function setUnitMode(mode) {
   </div>
   {% endif %}
 </div>
-{% endif %}{# end draft check #}
 {% endblock %}

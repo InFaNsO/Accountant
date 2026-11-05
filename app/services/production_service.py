@@ -125,8 +125,9 @@ def activate_production_order(po_id):
     return True
 
 
-def update_production_order(po_id, data, item_updates=None, new_items=None):
-    """Update the header and (optionally) the line items.
+def update_production_order(po_id, data, item_updates=None, new_items=None, remove_ids=None):
+    """Update the header and (optionally) the line items. Returns the names of lines
+    in remove_ids that were kept because something was already dispatched from them.
 
     item_updates: list of {"id", "quantity", "price"} for existing po_items.
         The ordered quantity is clamped so it can never drop below the amount
@@ -134,11 +135,30 @@ def update_production_order(po_id, data, item_updates=None, new_items=None):
         production_qty is adjusted by the change in the *undispatched* remainder.
     new_items: list of {"product_id", "sub_product_id", "quantity", "price"} —
         brand-new lines, added exactly like create_production_order does.
+    remove_ids: po_item ids to take off the order. Only a line nothing has been
+        dispatched from can go; on a live order its quantity leaves production_qty.
     """
     db = get_db()
     po = db.execute("SELECT status FROM purchase_orders WHERE id=?", (po_id,)).fetchone()
     # A draft holds no production stock, so edits to a draft never touch production_qty.
     is_draft = bool(po and po["status"] == "draft")
+
+    kept = []
+    removed = set()
+    if remove_ids:
+        existing = {row["id"]: row for row in get_po_items(po_id)}
+        for item_id in remove_ids:
+            it = existing.get(item_id)
+            if not it:
+                continue
+            if (it["qty_dispatched"] or 0) > 1e-9:
+                kept.append(it["display_name"])
+                continue
+            db.execute("DELETE FROM purchase_order_items WHERE id=?", (item_id,))
+            if not is_draft:
+                _update_production_qty(db, it["product_id"], it["sub_product_id"], -it["quantity"])
+            removed.add(item_id)
+        item_updates = [u for u in (item_updates or []) if u["id"] not in removed]
     db.execute(
         """UPDATE purchase_orders SET name=?, supplier_id=?, expected_completion=?, notes=?
            WHERE id=?""",
@@ -189,6 +209,7 @@ def update_production_order(po_id, data, item_updates=None, new_items=None):
                 _update_production_qty(db, product_id, sub_product_id, qty)
 
     db.commit()
+    return kept
 
 
 def close_production_order(po_id):

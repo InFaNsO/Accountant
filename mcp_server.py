@@ -361,10 +361,14 @@ def update_invoice_status(invoice_id: int, status: str) -> str:
     """
     Change the status of an invoice. ONLY call after explicit user confirmation.
     status: draft | issued | sent | partial | paid | cancelled
-    draft→issued: blocked with an error if the client is locked (tally lock or
-    balance lock over debt limit), then checks warehouse stock — fails with error
-    if any item is short.
-    Setting to 'cancelled' restores warehouse stock (only if invoice was previously issued, not draft).
+    Issuing a draft (any of issued/sent/partial/paid on a draft): blocked with an
+    error if the client is locked (tally lock or balance lock over debt limit), then
+    checks warehouse stock — fails with error if any item is short. On success the
+    D-### number becomes the next INV-#### serial, stock is deducted, and payments
+    already recorded against the draft decide issued / partial / paid.
+    An issued invoice can never go back to 'draft' (error) — cancel it instead.
+    Setting to 'cancelled' restores warehouse stock (only if invoice was previously issued, not draft);
+    reopening a cancelled invoice takes the stock again.
     """
     return _call("PUT", f"invoices/{invoice_id}/status", body={"status": status})
 

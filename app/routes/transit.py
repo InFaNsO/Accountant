@@ -1,3 +1,4 @@
+import re
 from flask import Blueprint, render_template, request, redirect, url_for, flash
 from flask_login import login_required
 from ..services import transit_service, supplier_service, product_service
@@ -7,35 +8,36 @@ from ..database import get_db
 bp = Blueprint("transit", __name__, url_prefix="/transit")
 
 
-def _parse_items(form):
+def _parse_items(form, prefix=""):
+    """Picker rows posted as <prefix>product_id_<i>, <prefix>quantity_<i>, ...
+    Every index present is read: a row deleted on the page leaves a gap, and the
+    rows after it still count."""
+    indices = sorted({
+        int(m.group(1))
+        for key in form.keys()
+        for m in [re.match(rf"{prefix}(?:sub_)?product_id_(\d+)$", key)]
+        if m
+    })
     items = []
-    i = 0
-    while True:
-        if f"product_id_{i}" not in form and f"sub_product_id_{i}" not in form:
-            break
-        pid = form.get(f"product_id_{i}") or None
-        sid = form.get(f"sub_product_id_{i}") or None
-        qty = form.get(f"quantity_{i}", "")
+    for i in indices:
+        pid = form.get(f"{prefix}product_id_{i}") or None
+        sid = form.get(f"{prefix}sub_product_id_{i}") or None
         if not pid and not sid:
-            i += 1
             continue
         try:
-            qty = float(qty)
-            if qty <= 0:
-                i += 1
-                continue
+            qty = float(form.get(f"{prefix}quantity_{i}", ""))
         except ValueError:
-            i += 1
+            continue
+        if qty <= 0:
             continue
         items.append({
             "product_id":     pid,
             "sub_product_id": sid,
             "quantity":       qty,
-            "price":          form.get(f"price_{i}") or None,
-            "cbm":            form.get(f"cbm_{i}") or None,
-            "gross_weight":   form.get(f"gross_weight_{i}") or None,
+            "price":          form.get(f"{prefix}price_{i}") or None,
+            "cbm":            form.get(f"{prefix}cbm_{i}") or None,
+            "gross_weight":   form.get(f"{prefix}gross_weight_{i}") or None,
         })
-        i += 1
     return items
 
 
@@ -161,9 +163,9 @@ def receive(dispatch_id):
 def edit_dispatch(dispatch_id):
     """Edit a dispatch's header, line quantities, and each line's Normal/Eco range.
 
-    A draft is a plain rewrite; on a live dispatch the service applies the
-    changes as stock deltas. Line add/remove is deliberately not offered —
-    use the existing delete, or receive what arrived.
+    A draft is a plain rewrite, and lines can be added and removed. On a live
+    dispatch the service applies the changes as stock deltas; line add/remove is
+    deliberately not offered there — use the existing delete, or receive what arrived.
     """
     dispatch = transit_service.get_dispatch(dispatch_id)
     if not dispatch:
@@ -201,7 +203,12 @@ def edit_dispatch(dispatch_id):
                     "product_id":     int(pid) if pid else it["product_id"],
                     "sub_product_id": int(sid) if sid else None,
                 }
-            ok, errors, warnings = transit_service.update_dispatch(dispatch_id, data, item_updates)
+            new_items, remove_ids = [], []
+            if dispatch["status"] == "draft":
+                new_items  = _parse_items(request.form, prefix="new_")
+                remove_ids = [it["id"] for it in items if request.form.get(f"remove_{it['id']}")]
+            ok, errors, warnings = transit_service.update_dispatch(
+                dispatch_id, data, item_updates, new_items, remove_ids)
             if ok:
                 for w in warnings:
                     flash(w, "warning")

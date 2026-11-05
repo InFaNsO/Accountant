@@ -91,90 +91,6 @@ def _next_draft_number(db):
     return f"D-{_max_seq(db, 'D-') + 1:03d}"
 
 
-def _refresh_invoice_paid(db, invoice_id):
-    paid = db.execute(
-        "SELECT COALESCE(SUM(amount),0) AS paid FROM payment_allocations WHERE invoice_id=?",
-        (invoice_id,),
-    ).fetchone()["paid"]
-    inv = db.execute("SELECT total FROM invoices WHERE id=?", (invoice_id,)).fetchone()
-    if not inv:
-        return
-    status = "paid" if paid >= inv["total"] else ("partial" if paid > 0 else "issued")
-    db.execute(
-        "UPDATE invoices SET amount_paid=?, status=? WHERE id=?",
-        (paid, status, invoice_id),
-    )
-
-
-def _client_unallocated(db, client_id):
-    row = db.execute(
-        """SELECT COALESCE(SUM(p.amount),0) - COALESCE(SUM(pa.amount),0) AS unallocated
-           FROM payments p
-           LEFT JOIN (
-               SELECT payment_id, SUM(amount) AS amount
-               FROM payment_allocations GROUP BY payment_id
-           ) pa ON pa.payment_id = p.id
-           WHERE p.client_id = ?""",
-        (client_id,),
-    ).fetchone()
-    return _f(row["unallocated"])
-
-
-def _ob_remaining(db, client_id):
-    client = db.execute("SELECT opening_balance FROM clients WHERE id=?", (client_id,)).fetchone()
-    if not client:
-        return 0.0
-    debt = abs(_f(client["opening_balance"]))
-    if debt == 0:
-        return 0.0
-    return max(0.0, debt - _client_unallocated(db, client_id))
-
-
-def _apply_client_credit(db, client_id, invoice_id):
-    """If the client has surplus (unallocated payment money beyond OB), allocate it
-    to this freshly-issued invoice via payment_allocations rows."""
-    client = db.execute("SELECT opening_balance FROM clients WHERE id=?", (client_id,)).fetchone()
-    opening_debt = max(0.0, _f(client["opening_balance"])) if client else 0.0
-    unallocated = _client_unallocated(db, client_id)
-    credit = max(0.0, unallocated - opening_debt)
-    if credit < 0.01:
-        return
-    inv = db.execute("SELECT total, amount_paid FROM invoices WHERE id=?", (invoice_id,)).fetchone()
-    if not inv:
-        return
-    gap = _f(inv["total"]) - _f(inv["amount_paid"])
-    to_cover = min(credit, gap)
-    if to_cover < 0.01:
-        return
-
-    # Walk payments oldest-first, allocating their unallocated portion.
-    pmts = db.execute(
-        """SELECT p.id, p.amount, COALESCE(SUM(pa.amount),0) AS allocated
-           FROM payments p
-           LEFT JOIN payment_allocations pa ON pa.payment_id = p.id
-           WHERE p.client_id = ?
-           GROUP BY p.id
-           HAVING p.amount - COALESCE(SUM(pa.amount),0) > 0.001
-           ORDER BY p.created_at ASC, p.id ASC""",
-        (client_id,),
-    ).fetchall()
-    covered = 0.0
-    for pmt in pmts:
-        if covered >= to_cover - 0.001:
-            break
-        avail = _f(pmt["amount"]) - _f(pmt["allocated"])
-        take  = min(avail, to_cover - covered)
-        if take < 0.001:
-            continue
-        db.execute(
-            "INSERT INTO payment_allocations (payment_id, invoice_id, amount) VALUES (?,?,?)",
-            (pmt["id"], invoice_id, take),
-        )
-        covered += take
-    if covered > 0.001:
-        _refresh_invoice_paid(db, invoice_id)
-
-
 def _deduct_production_fifo(db, product_id, sub_product_id, qty_needed):
     rows = db.execute(
         """SELECT poi.id, poi.quantity, poi.qty_dispatched
@@ -1027,7 +943,8 @@ def create_invoice():
             )
     db.commit()
     if not is_draft:
-        _apply_client_credit(db, client_id, invoice_id)
+        from ..services.payment_service import apply_client_credit
+        apply_client_credit(db, int(client_id), invoice_id)
         db.commit()
 
     return jsonify({"result": (
@@ -1040,6 +957,10 @@ def create_invoice():
 @bp.route("/invoices/<int:invoice_id>/status", methods=["PUT"])
 @require_auth
 def update_invoice_status(invoice_id):
+    """Same rules as the web screens (invoice_service.update_invoice_status): any
+    live status on a draft issues it (stock check, real INV serial, stock taken,
+    payments counted); nothing goes back to draft; cancelling returns the stock."""
+    from ..services import invoice_service
     data = _jb()
     status = data.get("status", "")
     valid = {"draft", "issued", "sent", "partial", "paid", "cancelled"}
@@ -1047,97 +968,40 @@ def update_invoice_status(invoice_id):
         return jsonify({"error": f"Invalid status. Must be one of: {', '.join(sorted(valid))}"}), 400
     db = get_db()
     inv = db.execute(
-        "SELECT invoice_number, status, client_id, company_id, issue_date FROM invoices WHERE id=?",
-        (invoice_id,),
+        "SELECT invoice_number, status FROM invoices WHERE id=?", (invoice_id,),
     ).fetchone()
     if not inv:
         return jsonify({"error": f"Invoice ID {invoice_id} not found."}), 404
     prev = inv["status"]
 
-    # Draft → Issued: check client lock, then warehouse stock
-    if prev == "draft" and status == "issued":
-        from ..services.client_service import get_client_lock_status
-        lock = get_client_lock_status(inv["client_id"])
-        if lock["locked"]:
+    ok, errors = invoice_service.update_invoice_status(invoice_id, status)
+    if not ok:
+        e = errors[0]
+        if e.get("type") == "locked":
             return jsonify({"error": (
-                "Cannot issue — client is locked (" + "; ".join(lock["reasons"]) + "). "
+                "Cannot issue — client is locked (" + "; ".join(e["reasons"]) + "). "
                 "The invoice stays a draft until the lock clears."
             )}), 423
-        items = db.execute(
-            """SELECT ii.description, ii.quantity, ii.product_id, ii.sub_product_id,
-                      p.name AS product_name, sp.name AS sub_name
-               FROM invoice_items ii
-               LEFT JOIN products p ON ii.product_id = p.id
-               LEFT JOIN sub_products sp ON ii.sub_product_id = sp.id
-               WHERE ii.invoice_id = ?""",
-            (invoice_id,),
-        ).fetchall()
-        short = []
-        for it in items:
-            pid = it["product_id"]; spid = it["sub_product_id"]
-            if not pid and not spid:
-                continue
-            tbl = "sub_products" if spid else "products"
-            pk = spid if spid else pid
-            row = db.execute(f"SELECT stock_qty FROM {tbl} WHERE id=?", (pk,)).fetchone()
-            available = _f(row["stock_qty"] or 0) if row else 0.0
-            required = _f(it["quantity"])
-            name = it["sub_name"] or it["product_name"] or it["description"]
-            if available < required:
-                short.append(f"  '{name}': need {required:.0f}, have {available:.0f}")
-        if short:
-            return jsonify({"error": "Cannot issue — insufficient warehouse stock:\n" + "\n".join(short)}), 400
-        # Assign the real serial now (replaces a D-### draft number) so issued
-        # invoices are numbered in true issue order.
-        new_number = (_next_invoice_number(db)
-                      if str(inv["invoice_number"]).startswith("D-")
-                      else inv["invoice_number"])
-        # Apply stock deductions
-        for it in items:
-            pid = it["product_id"]; spid = it["sub_product_id"]
-            if not pid and not spid:
-                continue
-            tbl = "sub_products" if spid else "products"
-            pk = spid if spid else pid
-            qty = _f(it["quantity"])
-            db.execute(f"UPDATE {tbl} SET stock_qty=stock_qty-? WHERE id=?", (qty, pk))
-            db.execute(
-                "INSERT INTO stock_movements "
-                "(product_id, sub_product_id, movement_type, quantity, notes, invoice_id) "
-                "VALUES (?,?,?,?,?,?)",
-                (it["product_id"], it["sub_product_id"], "sale", qty,
-                 f"Invoice {new_number}", invoice_id),
-            )
-        db.execute(
-            "UPDATE invoices SET status=?, invoice_number=?, issued_at=CURRENT_TIMESTAMP WHERE id=?",
-            (status, new_number, invoice_id),
-        )
-        db.commit()
-        _apply_client_credit(db, inv["client_id"], invoice_id)
-        db.commit()
-        return jsonify({"result": f"✓ Invoice {new_number} issued. Stock deducted and ledger updated."})
+        if e.get("type") == "undraft":
+            return jsonify({"error": (
+                f"{e['number']} is already issued, so it cannot go back to draft "
+                "(its serial and stock are taken). Cancel it instead."
+            )}), 400
+        short = [f"  '{s['name']}': need {s['required']:.0f}, have {s['available']:.0f}" for s in errors]
+        return jsonify({"error": "Cannot issue — insufficient warehouse stock:\n" + "\n".join(short)}), 400
 
-    db.execute("UPDATE invoices SET status=? WHERE id=?", (status, invoice_id))
-    # Restore stock when cancelling a previously-issued invoice (draft never held stock)
-    if status == "cancelled" and prev not in ("cancelled", "draft"):
-        rows = db.execute(
-            "SELECT product_id, sub_product_id, quantity FROM invoice_items WHERE invoice_id=?",
-            (invoice_id,),
-        ).fetchall()
-        for r in rows:
-            if r["product_id"] or r["sub_product_id"]:
-                tbl = "sub_products" if r["sub_product_id"] else "products"
-                pk = r["sub_product_id"] if r["sub_product_id"] else r["product_id"]
-                db.execute(f"UPDATE {tbl} SET stock_qty=stock_qty+? WHERE id=?", (r["quantity"], pk))
-                db.execute(
-                    "INSERT INTO stock_movements "
-                    "(product_id, sub_product_id, movement_type, quantity, notes, invoice_id) "
-                    "VALUES (?,?,?,?,?,?)",
-                    (r["product_id"], r["sub_product_id"], "sale_cancelled", r["quantity"],
-                     f"Cancelled: {inv['invoice_number']}", invoice_id),
-                )
-    db.commit()
-    return jsonify({"result": f"✓ Invoice {inv['invoice_number']} status changed: {prev} → {status}."})
+    after = db.execute(
+        "SELECT invoice_number, status, amount_paid FROM invoices WHERE id=?", (invoice_id,),
+    ).fetchone()
+    if prev in ("draft", "cancelled") and after["status"] in invoice_service.LIVE_STATUSES:
+        paid_note = ""
+        if after["amount_paid"] and after["amount_paid"] > 0.005:
+            paid_note = f" {_inr(after['amount_paid'])} already received counts against it ({after['status']})."
+        return jsonify({"result": (
+            f"✓ Invoice {after['invoice_number']} issued (was {inv['invoice_number']}). "
+            "Stock deducted and ledger updated." + paid_note
+        )})
+    return jsonify({"result": f"✓ Invoice {after['invoice_number']} status changed: {prev} → {after['status']}."})
 
 
 @bp.route("/invoices/<int:invoice_id>", methods=["DELETE"])

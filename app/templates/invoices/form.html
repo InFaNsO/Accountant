@@ -62,11 +62,23 @@
 
         <div class="form-group">
           <label for="status">Status</label>
+          {# An invoice that is out never goes back to draft (its serial and stock are
+             taken), and a draft only leaves draft by being issued. #}
+          {% set cur_status = invoice.get('status') or '' %}
           <select id="status" name="status">
-            <option value="draft"     {{ 'selected' if invoice.get('status') == 'draft' }}>Draft</option>
-            <option value="issued"    {{ 'selected' if invoice.get('status','issued') in ('issued','sent','') or not invoice.get('status') }}>Issued</option>
-            <option value="paid"      {{ 'selected' if invoice.get('status') == 'paid' }}>Paid</option>
-            <option value="cancelled" {{ 'selected' if invoice.get('status') == 'cancelled' }}>Cancelled</option>
+            {% if action == 'new' or cur_status == 'draft' %}
+            <option value="draft"     {{ 'selected' if cur_status == 'draft' }}>Draft</option>
+            <option value="issued"    {{ 'selected' if cur_status in ('issued','sent','') }}>{{ 'Issue now' if action == 'edit' else 'Issued' }}</option>
+            {% if action == 'new' %}
+            <option value="paid"      {{ 'selected' if cur_status == 'paid' }}>Paid</option>
+            {% endif %}
+            <option value="cancelled" {{ 'selected' if cur_status == 'cancelled' }}>Cancelled</option>
+            {% else %}
+            <option value="issued"    {{ 'selected' if cur_status in ('issued','sent','') }}>Issued</option>
+            {% if cur_status == 'partial' %}<option value="partial" selected>Partial</option>{% endif %}
+            <option value="paid"      {{ 'selected' if cur_status == 'paid' }}>Paid</option>
+            <option value="cancelled" {{ 'selected' if cur_status == 'cancelled' }}>Cancelled</option>
+            {% endif %}
           </select>
         </div>
 

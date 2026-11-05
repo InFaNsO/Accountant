@@ -5,6 +5,22 @@
   <a href="{{ url_for('production.detail', po_id=po_id) }}" class="btn btn-secondary">Cancel</a>
 {% endblock %}
 {% block content %}
+{% if po.get('status') == 'draft' %}
+<div class="card" style="margin-bottom:16px;border-left:3px solid var(--accent)">
+  <div class="card-body" style="padding:12px 18px;font-size:13px;color:var(--text-muted)">
+    This order is still a <strong style="color:var(--accent)">draft</strong> — it holds no production
+    stock, so adding, changing or removing lines here only rewrites the order. Quantities go into
+    production when you activate it.
+  </div>
+</div>
+{% elif po.get('status') %}
+<div class="card" style="margin-bottom:16px;border-left:3px solid var(--warning)">
+  <div class="card-body" style="padding:12px 18px;font-size:13px;color:var(--text-muted)">
+    This order is <strong style="color:var(--warning)">live</strong>: line changes apply to production
+    stock straight away. A line can only be removed while nothing has been dispatched from it.
+  </div>
+</div>
+{% endif %}
 <div class="card">
   <div class="card-header"><span class="card-title">Edit Production Order</span></div>
   <div class="card-body">
@@ -29,7 +45,7 @@
         </div>
         <div class="form-group">
           <label>Notes</label>
-          <input type="text" name="notes" value="{{ po.get('notes','') }}" oninput="markFormDirty()">
+          <input type="text" name="notes" value="{{ po.get('notes') or '' }}" oninput="markFormDirty()">
         </div>
       </div>
 
@@ -39,7 +55,7 @@
       <div class="table-wrap" style="margin-bottom:24px">
         <table style="table-layout:fixed;width:100%">
           <colgroup>
-            <col style="width:34%"><col style="width:18%"><col style="width:16%"><col style="width:16%"><col style="width:16%">
+            <col style="width:31%"><col style="width:17%"><col style="width:15%"><col style="width:15%"><col style="width:15%"><col style="width:7%">
           </colgroup>
           <thead>
             <tr>
@@ -48,6 +64,7 @@
               <th style="text-align:right">Dispatched (min)</th>
               <th style="text-align:right">Price (₹)</th>
               <th style="text-align:center">Eco Switch</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -75,6 +92,15 @@
               <td style="text-align:center;vertical-align:middle">
                 <button type="button" class="btn btn-secondary btn-sm"
                         onclick="openSwitch(this, '{{ key }}', 'eq_{{ it.id }}')">Switch</button>
+              </td>
+              <td style="text-align:center;vertical-align:middle">
+                {% if dispatched > 0 %}
+                <span title="Already dispatched from — cannot be removed" style="font-size:12px;color:var(--text-muted)">🔒</span>
+                {% else %}
+                <input type="hidden" name="remove_{{ it.id }}" value="" class="remove-flag">
+                <button type="button" class="remove-btn" onclick="toggleRemove(this)" title="Remove this line"
+                        style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:18px;padding:0 6px">×</button>
+                {% endif %}
               </td>
             </tr>
             {% endfor %}
@@ -170,7 +196,7 @@ function cbRender(inp, matches) {
 // are excluded from the dropdown so a product can't be added twice.
 function _selectedKeys(excludeInput) {
   const keys = new Set();
-  document.querySelectorAll('tr[data-pid]').forEach(tr => {
+  document.querySelectorAll('tr[data-pid]:not(.line-removed)').forEach(tr => {
     const pid = tr.dataset.pid || '', sid = tr.dataset.sid || '';
     if (pid || sid) keys.add(pid + ':' + sid);
   });
@@ -292,6 +318,21 @@ function removeRow(i) {
   if (row) row.remove();
 }
 
+// Mark an existing line for removal on save (click again to undo).
+function toggleRemove(btn) {
+  const row  = btn.closest('tr');
+  const flag = row.querySelector('.remove-flag');
+  const on   = !flag.value;
+  flag.value = on ? '1' : '';
+  row.classList.toggle('line-removed', on);
+  btn.textContent = on ? '↶' : '×';
+  btn.title = on ? 'Keep this line' : 'Remove this line';
+  btn.style.color = on ? 'var(--accent)' : 'var(--danger)';
+  row.querySelectorAll('input[type="number"], button[onclick^="openSwitch"]')
+     .forEach(el => { el.disabled = on; });
+  markFormDirty();
+}
+
 /* ── Eco switch ───────────────────────────────────────────────────────────── */
 const ECO_MAP = {{ eco_map | tojson }};
 let _swKey = null, _swSrcId = null;
@@ -353,7 +394,7 @@ function closeSwitch() { _swPop.style.display = 'none'; _swKey = null; _swSrcId 
 // Existing line-item rows carry data-pid/data-sid; find the one matching a counterpart.
 function _matchExistingRow(pid, sid) {
   let found = null;
-  document.querySelectorAll('tr[data-pid]').forEach(tr => {
+  document.querySelectorAll('tr[data-pid]:not(.line-removed)').forEach(tr => {
     if (!found && (tr.dataset.pid || '') == (pid || '') && (tr.dataset.sid || '') == (sid || '')) found = tr;
   });
   return found;
@@ -423,5 +464,8 @@ document.getElementById('poForm').addEventListener('submit', () => { _formDirty 
 .cb-option { padding:10px 14px; cursor:pointer; border-bottom:1px solid var(--border); }
 .cb-option:last-child { border-bottom:none; }
 .cb-option:hover, .cb-option.cb-active { background:var(--bg-alt); }
+tr.line-removed td { opacity:.45; }
+tr.line-removed td:first-child { text-decoration:line-through; }
+tr.line-removed td:last-child { opacity:1; }
 </style>
 {% endblock %}

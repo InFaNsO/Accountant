@@ -13,7 +13,7 @@
   <div class="card" style="margin-bottom:16px;border-left:3px solid var(--accent)">
     <div class="card-body" style="padding:12px 18px;font-size:13px;color:var(--text-muted)">
       This dispatch is still a <strong style="color:var(--accent)">draft</strong> — it holds no stock,
-      so changes here only rewrite the lines. Stock moves when you activate it.
+      so you can add, change and remove lines freely. Stock moves when you activate it.
     </div>
   </div>
   {% elif dispatch.skip_production %}
@@ -105,6 +105,7 @@
             <th style="text-align:right;width:110px">Price (₹)</th>
             <th style="text-align:right;width:90px">CBM</th>
             <th style="text-align:right;width:110px">Gross Wt</th>
+            {% if dispatch.status == 'draft' %}<th style="width:40px"></th>{% endif %}
           </tr>
         </thead>
         <tbody>
@@ -150,12 +151,48 @@
               <input type="number" name="gross_weight_{{ it.id }}" value="{{ it.gross_weight if it.gross_weight is not none else '' }}"
                      step="0.01" min="0" style="width:95px;text-align:right">
             </td>
+            {% if dispatch.status == 'draft' %}
+            <td style="text-align:center">
+              <input type="hidden" name="remove_{{ it.id }}" value="" class="remove-flag">
+              <button type="button" onclick="toggleRemove(this)" title="Remove this line"
+                      style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:18px;padding:0 6px">×</button>
+            </td>
+            {% endif %}
           </tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
   </div>
+
+  {% if dispatch.status == 'draft' %}
+  {# ── New lines (draft only) ─────────────────────────────────────────────── #}
+  <div class="card" style="margin-top:16px">
+    <div class="card-header"><span class="card-title">Add Products</span></div>
+    <div class="table-wrap">
+      <table style="table-layout:fixed;width:100%">
+        <colgroup>
+          <col style="width:34%"><col style="width:12%"><col style="width:14%"><col style="width:12%"><col style="width:12%"><col style="width:12%"><col style="width:40px">
+        </colgroup>
+        <thead>
+          <tr>
+            <th>Product / Sub-product</th>
+            <th style="text-align:center">In Production</th>
+            <th>Quantity *</th>
+            <th>Price (₹)</th>
+            <th>CBM</th>
+            <th>Gross Wt (kg)</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="newItemsBody"></tbody>
+      </table>
+    </div>
+    <div class="card-body" style="padding:12px 18px">
+      <button type="button" class="btn btn-secondary btn-sm" onclick="addNewRow()">+ Add Product</button>
+    </div>
+  </div>
+  {% endif %}
 
   <div style="display:flex;gap:10px;margin-top:16px">
     <button type="submit" class="btn btn-primary">Save Changes</button>
@@ -231,14 +268,139 @@ document.addEventListener('DOMContentLoaded', function () {
   });
 });
 
+{% if dispatch.status == 'draft' %}
+/* ── Draft only: remove existing lines, add new ones ───────────────────────── */
+/* Mark an existing line for removal on save (click again to undo). */
+function toggleRemove(btn) {
+  var row  = btn.closest('tr');
+  var flag = row.querySelector('.remove-flag');
+  var on   = !flag.value;
+  flag.value = on ? '1' : '';
+  row.classList.toggle('line-removed', on);
+  btn.textContent = on ? '↶' : '×';
+  btn.title = on ? 'Keep this line' : 'Remove this line';
+  btn.style.color = on ? 'var(--accent)' : 'var(--danger)';
+  row.querySelectorAll('input[type="number"], button[onclick^="switchRange"]')
+     .forEach(function (el) { el.disabled = on; });
+}
+
+const CATALOG = {{ products | tojson }};
+let newRowCount = 0;
+let _cbInput = null;
+const _cbDD = (function () {
+  var el = document.createElement('div');
+  el.style.cssText =
+    'display:none;position:fixed;z-index:9500;background:var(--bg);' +
+    'border:1px solid var(--border);border-radius:var(--radius-sm);' +
+    'box-shadow:0 8px 32px rgba(0,0,0,.22);overflow-y:auto;max-height:310px;min-width:380px';
+  el._cursor = -1; el._matches = [];
+  document.body.appendChild(el);
+  return el;
+})();
+function _cbPos(inp) {
+  var r = inp.getBoundingClientRect();
+  _cbDD.style.top = (r.bottom + 3) + 'px';
+  _cbDD.style.left = r.left + 'px';
+  _cbDD.style.width = Math.max(r.width, 400) + 'px';
+}
+window.addEventListener('scroll', function () { if (_cbInput) _cbPos(_cbInput); }, true);
+
+/* Products already on the dispatch (kept lines and other new rows) are not offered again. */
+function _availableCatalog(excludeInput) {
+  var keys = new Set();
+  document.querySelectorAll('.line-row:not(.line-removed)').forEach(function (tr) { keys.add(tr.dataset.key); });
+  document.querySelectorAll('#newItemsBody tr').forEach(function (tr) {
+    if (tr.querySelector('.cb-inp') === excludeInput) return;
+    var pid = tr.querySelector('[name^="new_product_id_"]').value;
+    var sid = tr.querySelector('[name^="new_sub_product_id_"]').value;
+    if (pid || sid) keys.add(pid + ':' + sid);
+  });
+  return CATALOG.filter(function (p) { return !keys.has(p.product_id + ':' + (p.sub_product_id || '')); });
+}
+function _esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+function cbRender(inp, matches) {
+  _cbInput = inp; _cbDD._matches = matches; _cbDD._cursor = -1;
+  _cbDD.innerHTML = matches.length ? matches.map(function (p, i) {
+    var sku  = (p.label.match(/\[([^\]]+)\]/) || ['', ''])[1];
+    var name = p.label.replace(/\s*\[[^\]]+\]/, '');
+    return '<div class="cb-option" data-idx="' + i + '" onmousedown="cbSelect(event,this)">' +
+      '<div style="font-weight:600;font-size:13px">' + _esc(name) + '</div>' +
+      '<div style="font-size:11px;color:var(--text-muted);display:flex;gap:8px;margin-top:2px">' +
+      (sku ? '<span style="font-family:monospace">' + _esc(sku) + '</span>' : '') +
+      (p.production_qty > 0 ? '<span style="color:var(--warning);font-weight:600">In production: ' + p.production_qty + '</span>' : '') +
+      '</div></div>';
+  }).join('') : '<div style="padding:10px 14px;color:var(--text-muted);font-size:13px;font-style:italic">No products found</div>';
+  _cbPos(inp);
+  _cbDD.style.display = '';
+}
+function cbFilter(inp) {
+  var q = inp.value.toLowerCase();
+  cbRender(inp, _availableCatalog(inp).filter(function (p) { return p.label.toLowerCase().indexOf(q) !== -1; }));
+}
+function cbOpen(inp) { cbRender(inp, _availableCatalog(inp)); }
+function cbBlur(inp) { setTimeout(function () { if (_cbInput === inp) { _cbDD.style.display = 'none'; _cbInput = null; } }, 180); }
+function cbSelect(e, optEl) {
+  e.preventDefault();
+  var p = _cbDD._matches[parseInt(optEl.dataset.idx, 10)];
+  if (!p || !_cbInput) return;
+  var row = _cbInput.closest('tr');
+  _cbInput.value = p.label.replace(/\s*\[[^\]]+\]/, '');
+  row.querySelector('[name^="new_product_id_"]').value = p.product_id || '';
+  row.querySelector('[name^="new_sub_product_id_"]').value = p.sub_product_id || '';
+  row.querySelector('.prod-qty-cell').textContent = p.production_qty > 0 ? p.production_qty : '—';
+  _cbDD.style.display = 'none'; _cbInput = null;
+}
+function cbKey(e, inp) {
+  if (e.key === 'Escape') { _cbDD.style.display = 'none'; _cbInput = null; return; }
+  if (_cbDD.style.display === 'none' || _cbInput !== inp) { if (e.key === 'ArrowDown') { e.preventDefault(); cbOpen(inp); } return; }
+  var opts = _cbDD.querySelectorAll('.cb-option');
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    _cbDD._cursor = e.key === 'ArrowDown' ? Math.min(_cbDD._cursor + 1, opts.length - 1) : Math.max(_cbDD._cursor - 1, 0);
+    opts.forEach(function (o, i) { o.classList.toggle('cb-active', i === _cbDD._cursor); });
+    if (opts[_cbDD._cursor]) opts[_cbDD._cursor].scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    var o = opts[_cbDD._cursor >= 0 ? _cbDD._cursor : 0];
+    if (o) cbSelect(e, o);
+  }
+}
+function addNewRow() {
+  var i = newRowCount++;
+  var row = document.createElement('tr');
+  row.innerHTML =
+    '<td><input class="cb-inp" type="text" placeholder="Type product name or SKU…" autocomplete="off" style="width:100%"' +
+    ' oninput="cbFilter(this)" onfocus="cbOpen(this)" onblur="cbBlur(this)" onkeydown="cbKey(event,this)">' +
+    '<input type="hidden" name="new_product_id_' + i + '" value="">' +
+    '<input type="hidden" name="new_sub_product_id_' + i + '" value=""></td>' +
+    '<td class="prod-qty-cell" style="text-align:center;font-weight:700;color:var(--warning)">—</td>' +
+    '<td><input type="number" name="new_quantity_' + i + '" step="0.01" min="0.01" placeholder="0" style="width:100%"></td>' +
+    '<td><input type="number" name="new_price_' + i + '" step="0.01" min="0" placeholder="opt." style="width:100%"></td>' +
+    '<td><input type="number" name="new_cbm_' + i + '" step="0.001" min="0" placeholder="opt." style="width:100%"></td>' +
+    '<td><input type="number" name="new_gross_weight_' + i + '" step="0.01" min="0" placeholder="opt." style="width:100%"></td>' +
+    '<td style="text-align:center"><button type="button" onclick="this.closest(\'tr\').remove()" title="Remove"' +
+    ' style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:18px;padding:0 6px">×</button></td>';
+  document.getElementById('newItemsBody').appendChild(row);
+  row.querySelector('.cb-inp').focus();
+}
+{% endif %}
+
 window.__dirtyCheck = function () {
   var form = document.getElementById('editForm');
   var dirty = Array.from(form.querySelectorAll('input, select, textarea'))
     .some(function (el) {
       if (el.type === 'checkbox') return el.checked !== el.defaultChecked;
       return el.type !== 'hidden' && el.value !== el.defaultValue;
-    });
+    }) || !!form.querySelector('.line-removed, #newItemsBody tr');
   return { isDirty: dirty, save: dirty ? function () { form.submit(); } : null };
 };
 </script>
+<style>
+.cb-option { padding:10px 14px; cursor:pointer; border-bottom:1px solid var(--border); }
+.cb-option:last-child { border-bottom:none; }
+.cb-option:hover, .cb-option.cb-active { background:var(--bg-alt); }
+tr.line-removed td { opacity:.45; }
+tr.line-removed td:first-child { text-decoration:line-through; }
+tr.line-removed td:last-child { opacity:1; }
+</style>
 {% endblock %}
