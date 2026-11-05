@@ -14,7 +14,6 @@ MODULES = [
     "production",
     "transit",
     "palm_purchase",
-    "leads",
 ]
 
 # Clients on payment terms shorter than this many days pay on the invoice day or
