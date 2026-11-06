@@ -348,9 +348,8 @@ def get_stock_movements(product_id=None, sub_id=None, limit=50):
     ).fetchall()
 
 
-def get_stock_history(product_id=None, sub_id=None, movement_types=None, limit=100):
-    """Return enriched stock movement history joined with dispatches/invoices/clients."""
-    db = get_db()
+def _stock_history_filter(product_id, sub_id, movement_types):
+    """WHERE clause + params, shared by a history page and its count so they agree."""
     where_parts = []
     params = []
     if sub_id:
@@ -364,8 +363,24 @@ def get_stock_history(product_id=None, sub_id=None, movement_types=None, limit=1
         where_parts.append(f"sm.movement_type IN ({placeholders})")
         params.extend(movement_types)
     where_clause = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
-    params.append(limit)
-    rows = db.execute(
+    return where_clause, params
+
+
+def count_stock_history(product_id=None, sub_id=None, movement_types=None):
+    """How many movements get_stock_history can page through."""
+    where_clause, params = _stock_history_filter(product_id, sub_id, movement_types)
+    return get_db().execute(
+        f"SELECT COUNT(*) FROM stock_movements sm {where_clause}", params
+    ).fetchone()[0]
+
+
+def get_stock_history(product_id=None, sub_id=None, movement_types=None, limit=100, offset=0):
+    """Return enriched stock movement history joined with dispatches/invoices/clients,
+    newest first. Ordered by id as well as time because an invoice writes several
+    movements in the same second, and without it those could repeat or go missing
+    between pages."""
+    where_clause, params = _stock_history_filter(product_id, sub_id, movement_types)
+    rows = get_db().execute(
         f"""SELECT sm.*,
                    d.name  AS dispatch_name,
                    i.invoice_number,
@@ -375,9 +390,9 @@ def get_stock_history(product_id=None, sub_id=None, movement_types=None, limit=1
             LEFT JOIN invoices   i  ON sm.invoice_id  = i.id
             LEFT JOIN clients    c  ON i.client_id    = c.id
             {where_clause}
-            ORDER BY sm.created_at DESC
-            LIMIT ?""",
-        params,
+            ORDER BY sm.created_at DESC, sm.id DESC
+            LIMIT ? OFFSET ?""",
+        params + [limit, offset],
     ).fetchall()
     return [dict(r) for r in rows]
 

@@ -67,6 +67,9 @@ Each of these three can be **saved as a draft** (no stock side-effects) and late
 - **Routes:** `POST /production/<id>/activate`, `POST /transit/<id>/activate`, `POST /palm-purchase/<id>/activate` — all gated on the module's `edit` permission. The transit create route skips its qty-vs-production validation for drafts (re-checked on activate).
 - **UI:** every form has a secondary **Save as Draft** submit button (`name="status" value="draft"` vs the primary active value). Detail pages show a draft banner + **Activate** button and hide stock actions (transit hides the Receive UI for drafts). List pages carry a **Draft** filter chip and badge (palm list gained the full tick/cross chip system + an inline Activate button).
 
+## Stock history pages
+Product and sub-product pages share `products/_stock_history.html`. `routes/products.py:_stock_history` reads `?tab=&page=&per_page=` (25/50/100/200, default 50) and pages the open tab through every movement; other tabs start on their newest. There is no cap on how far back it goes. Order is `created_at DESC, id DESC`, because an invoice writes several movements in one second and paging needs a stable order.
+
 ## Stock history API
 `GET /api/products/<product_id>/stock-history` — chronological `stock_movements` for a product. Query params:
 - `sub_product_id` (optional) — restrict to a variant.

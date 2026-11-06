@@ -16,6 +16,56 @@ PRODUCTION_MOVEMENTS = ["production", "production_add", "production_deduct",
 TRANSIT_MOVEMENTS = ["dispatch", "transit_dispatch", "dispatch_add", "dispatch_deduct",
                      "dispatch_correction_out", "dispatch_correction_in"]
 
+HISTORY_TABS = (
+    ("warehouse",  "🏭", "Warehouse",  WAREHOUSE_MOVEMENTS),
+    ("production", "⚙️", "Production", PRODUCTION_MOVEMENTS),
+    ("transit",    "🚢", "Transit",    TRANSIT_MOVEMENTS),
+)
+HISTORY_PER_PAGE_OPTIONS = (25, 50, 100, 200)
+HISTORY_DEFAULT_PER_PAGE = 50
+
+
+def _page_numbers(page, pages):
+    """Page links around the current page, e.g. [1, None, 6, 7, 8, None, 33].
+    None marks a gap."""
+    wanted = sorted({1, pages, *range(max(1, page - 2), min(pages, page + 2) + 1)})
+    numbers = []
+    for n in wanted:
+        if numbers and n - numbers[-1] > 1:
+            numbers.append(None)
+        numbers.append(n)
+    return numbers
+
+
+def _stock_history(product_id=None, sub_id=None):
+    """Every tab of the stock history, read from ?tab=&page=&per_page=. Bad or
+    out-of-range values fall back to something showable rather than an error."""
+    active = request.args.get("tab")
+    if active not in [name for name, *_ in HISTORY_TABS]:
+        active = HISTORY_TABS[0][0]
+    per_page = request.args.get("per_page", type=int)
+    if per_page not in HISTORY_PER_PAGE_OPTIONS:
+        per_page = HISTORY_DEFAULT_PER_PAGE
+
+    tabs = []
+    for name, icon, label, movement_types in HISTORY_TABS:
+        total = product_service.count_stock_history(product_id, sub_id, movement_types)
+        pages = max(1, -(-total // per_page))
+        page = request.args.get("page", 1, type=int) if name == active else 1
+        page = max(1, min(page, pages))
+        offset = (page - 1) * per_page
+        rows = product_service.get_stock_history(
+            product_id, sub_id, movement_types, limit=per_page, offset=offset)
+        tabs.append({
+            "name": name, "icon": icon, "label": label, "rows": rows,
+            "total": total, "page": page, "pages": pages,
+            "first": offset + 1 if rows else 0, "last": offset + len(rows),
+            "numbers": _page_numbers(page, pages),
+        })
+    return {"active": active, "per_page": per_page,
+            "per_page_options": HISTORY_PER_PAGE_OPTIONS,
+            "tabs": tabs, "by_name": {t["name"]: t for t in tabs}}
+
 
 # ── Categories ────────────────────────────────────────────────────────────────
 
@@ -116,14 +166,7 @@ def product_detail(product_id):
         product["in_transit_qty"] = sum(s["in_transit_qty"] or 0 for s in subs)
 
     # Only load stock history for leaf products (no sub-products)
-    warehouse_history = production_history = transit_history = []
-    if not subs:
-        warehouse_history  = product_service.get_stock_history(
-            product_id=product_id, movement_types=WAREHOUSE_MOVEMENTS)
-        production_history = product_service.get_stock_history(
-            product_id=product_id, movement_types=PRODUCTION_MOVEMENTS)
-        transit_history    = product_service.get_stock_history(
-            product_id=product_id, movement_types=TRANSIT_MOVEMENTS)
+    history = _stock_history(product_id=product_id) if not subs else None
 
     # Eco range: load linked eco product (if main) or main product (if eco)
     eco_product = None
@@ -160,9 +203,7 @@ def product_detail(product_id):
                     "eco_name":   eco_row["name"]}
 
     return render_template("products/detail.html", product=product, subs=subs,
-                           warehouse_history=warehouse_history,
-                           production_history=production_history,
-                           transit_history=transit_history,
+                           history=history,
                            eco_product=eco_product,
                            main_product=main_product,
                            eco_pairs=eco_pairs,
@@ -415,17 +456,9 @@ def sub_detail(product_id, sub_id):
     if not product or not sub:
         flash("Not found.", "error")
         return redirect(url_for("products.list_products"))
-    warehouse_history  = product_service.get_stock_history(
-        sub_id=sub_id, movement_types=WAREHOUSE_MOVEMENTS)
-    production_history = product_service.get_stock_history(
-        sub_id=sub_id, movement_types=PRODUCTION_MOVEMENTS)
-    transit_history    = product_service.get_stock_history(
-        sub_id=sub_id, movement_types=TRANSIT_MOVEMENTS)
     return render_template("products/sub_detail.html",
                            product=product, sub=sub,
-                           warehouse_history=warehouse_history,
-                           production_history=production_history,
-                           transit_history=transit_history)
+                           history=_stock_history(sub_id=sub_id))
 
 
 # ── Inline sub-product save ───────────────────────────────────────────────────
